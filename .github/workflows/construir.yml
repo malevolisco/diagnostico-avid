@@ -1,0 +1,74 @@
+name: Construir y probar DiagnosticoAvid
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Código
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dependencias
+        run: pip install --only-binary :all: pyavb openpyxl pyinstaller
+
+      - name: ffmpeg (build de BtbN)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffx
+          New-Item -ItemType Directory -Force bin | Out-Null
+          Get-ChildItem ffx -Recurse -Include ffmpeg.exe, ffprobe.exe | Copy-Item -Destination bin
+          Remove-Item bin/PONER_AQUI_ffmpeg.txt -ErrorAction SilentlyContinue
+          & bin/ffmpeg.exe -version | Select-Object -First 1
+
+      - name: Construir ejecutable
+        run: pyinstaller --noconfirm --clean --noconsole --onedir --name DiagnosticoAvid --add-data "bin;bin" diagnostico_avid.py
+
+      - name: Disco de prueba simulado
+        run: python tests/crear_disco_prueba.py disco_prueba --ffmpeg bin/ffmpeg.exe --ffprobe bin/ffprobe.exe
+
+      - name: Probar el .exe (análisis + brutos) en Windows
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--origen disco_prueba --destino salida --brutos brutos --sin-gui --no-abrir" -PassThru -Wait -NoNewWindow
+          if ($p.ExitCode -ne 0) { Get-Content salida/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
+          Get-Content salida/*/diagnostico.log | Select-Object -Last 15
+
+      - name: Comprobar resultado
+        run: python tests/comprobar_resultado.py salida brutos --ffprobe bin/ffprobe.exe
+
+      - name: Empaquetar portable
+        shell: pwsh
+        run: |
+          Copy-Item INSTRUCCIONES.txt dist/DiagnosticoAvid/
+          Compress-Archive -Path dist/DiagnosticoAvid -DestinationPath DiagnosticoAvid_portable.zip -CompressionLevel Optimal
+          Compress-Archive -Path salida/* -DestinationPath informe_prueba.zip -CompressionLevel Optimal
+
+      - name: Guardar informe de la prueba
+        uses: actions/upload-artifact@v4
+        with:
+          name: informe_prueba
+          path: informe_prueba.zip
+
+      - name: Publicar release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: DiagnosticoAvid build ${{ github.run_number }}
+          body: |
+            Portable para Windows: descomprimir y hacer doble clic en `DiagnosticoAvid.exe`.
+            Construido y probado automáticamente a partir de `${{ github.sha }}`.
+          files: DiagnosticoAvid_portable.zip

@@ -1,0 +1,13 @@
+# ffmpeg no se guarda en el repo: lo descarga construir_exe.bat o GitHub Actions
+bin/*.exe
+# salidas de PyInstaller
+build/
+dist/
+*.spec
+DiagnosticoAvid_portable.zip
+# pruebas locales
+disco_prueba/
+salida/
+brutos/
+__pycache__/
+*.pyc

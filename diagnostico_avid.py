@@ -1,0 +1,998 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+DIAGNÓSTICO DE DISCO AVID — Fase 1 (análisis) + Fase 2 (brutos)
+=================================================================
+
+Analiza un disco de edición Avid Media Composer completo y genera un informe
+que explica qué contiene: proyectos, bins, clips, secuencias, ficheros MXF,
+códecs, duraciones, huérfanos y avisos. Opcionalmente exporta un MXF por
+proyecto con todos sus clips encadenados (ver exportar_brutos.py).
+No escribe nada en el disco de origen.
+
+Salida: una carpeta  Diagnostico_<disco>_<fecha>/  en el destino elegido, con
+    informe.html        informe visual (se abre solo al terminar)
+    resumen.json        totales y avisos
+    proyectos.json      proyectos y sus bins
+    bins.json           contenido de cada bin (clips y secuencias)
+    mxf.json            metadatos de cada fichero MXF (ffprobe)
+    clips.json          clips reconstruidos (MXF agrupados por identificador)
+    cruce.json          relación proyecto <-> clips <-> MXF, huérfanos, offline
+    inventario.csv      todos los ficheros del disco (ruta, tamaño, fecha)
+    miniaturas/         un JPG por clip de vídeo
+    diagnostico.log     registro detallado
+y un ZIP con todo lo anterior, listo para enviar.
+
+Uso con ventana:      python diagnostico_avid.py
+Uso sin ventana:      python diagnostico_avid.py --origen F:\\ --destino D:\\salida --sin-gui
+Con brutos (fase 2):  añade  --brutos E:\\BRUTOS   (un MXF por proyecto, ver exportar_brutos.py)
+
+Requisitos: Python 3.9+, pyavb y openpyxl (pip install pyavb openpyxl), ffmpeg y ffprobe
+(en la carpeta bin/ junto a este fichero, o en el PATH del sistema).
+"""
+
+import argparse
+import csv
+import datetime as dt
+import json
+import logging
+import os
+import queue
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import traceback
+import uuid
+import webbrowser
+import zipfile
+from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # para encontrar exportar_brutos.py junto al programa
+try:
+    import exportar_brutos
+    EXPORT_OK = True
+except Exception:  # pragma: no cover
+    exportar_brutos = None
+    EXPORT_OK = False
+
+try:
+    import avb  # pyavb
+    PYAVB_OK = True
+except Exception:  # pragma: no cover
+    avb = None
+    PYAVB_OK = False
+
+VERSION = "1.0"
+LOG = logging.getLogger("diagnostico")
+
+# ---------------------------------------------------------------------------
+# Constantes
+# ---------------------------------------------------------------------------
+
+EXT_MEDIA = {".mxf", ".omf"}
+CARPETAS_MEDIA = {"avid mediafiles", "omfi mediafiles"}
+CARPETAS_CACHE = {"searchdata", "statistics", "waveformcache", "creating"}
+CARPETAS_SISTEMA = {"$recycle.bin", "system volume information", ".spotlight-v100",
+                    ".fseventsd", ".trashes", "found.000"}
+NUM_HILOS = 4
+MINIATURA_ANCHO = 320
+
+
+# ---------------------------------------------------------------------------
+# Utilidades
+# ---------------------------------------------------------------------------
+
+def ahora_txt():
+    return dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def gb(n_bytes):
+    return round(n_bytes / (1024 ** 3), 2)
+
+
+def fmt_duracion(segundos):
+    if segundos is None:
+        return "—"
+    segundos = int(round(segundos))
+    h, r = divmod(segundos, 3600)
+    m, s = divmod(r, 60)
+    return "%d:%02d:%02d" % (h, m, s)
+
+
+def nombre_seguro(texto, maximo=80):
+    texto = re.sub(r'[\\/:*?"<>|]+', "_", str(texto)).strip()
+    return (texto or "sin_nombre")[:maximo]
+
+
+def flags_subproceso():
+    if os.name == "nt":
+        return {"creationflags": 0x08000000}  # CREATE_NO_WINDOW
+    return {}
+
+
+def carpeta_base():
+    """Carpeta donde vive el programa (o el ejecutable congelado)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parent
+
+
+def localizar_ffmpeg():
+    """Devuelve (ffmpeg, ffprobe) buscando primero en bin/ y luego en el PATH."""
+    exe = ".exe" if os.name == "nt" else ""
+    base = carpeta_base()
+    candidatos = [base / "bin", base]
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        candidatos.insert(0, Path(sys._MEIPASS) / "bin")
+    for c in candidatos:
+        ff, fp = c / ("ffmpeg" + exe), c / ("ffprobe" + exe)
+        if ff.exists() and fp.exists():
+            return str(ff), str(fp)
+    ff, fp = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    if ff and fp:
+        return ff, fp
+    return None, None
+
+
+# ---------------------------------------------------------------------------
+# Paso 1: inventario del disco
+# ---------------------------------------------------------------------------
+
+def inventariar(origen, progreso):
+    """Recorre todo el disco. Devuelve lista de dicts con cada fichero."""
+    origen = Path(origen)
+    ficheros = []
+    n = 0
+    for raiz, dirs, nombres in os.walk(origen, onerror=lambda e: LOG.warning("No se puede leer: %s", e)):
+        dirs[:] = [d for d in dirs if d.lower() not in CARPETAS_SISTEMA]
+        for nombre in nombres:
+            ruta = Path(raiz) / nombre
+            try:
+                st = ruta.stat()
+            except OSError as e:
+                LOG.warning("No se puede leer %s: %s", ruta, e)
+                continue
+            rel = ruta.relative_to(origen)
+            ficheros.append({
+                "ruta": str(rel),
+                "carpeta": str(rel.parent),
+                "nombre": nombre,
+                "ext": ruta.suffix.lower(),
+                "bytes": st.st_size,
+                "modificado": dt.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+            })
+            n += 1
+            if n % 500 == 0:
+                progreso("Inventario: %d ficheros..." % n)
+    LOG.info("Inventario: %d ficheros, %.2f GB", len(ficheros), gb(sum(f["bytes"] for f in ficheros)))
+    return ficheros
+
+
+def escribir_inventario_csv(ficheros, destino):
+    with open(destino / "inventario.csv", "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=["ruta", "carpeta", "nombre", "ext", "bytes", "modificado"], delimiter=";")
+        w.writeheader()
+        w.writerows(ficheros)
+
+
+# ---------------------------------------------------------------------------
+# Paso 2: proyectos y bins
+# ---------------------------------------------------------------------------
+
+def es_ruta_media(partes):
+    return any(p.lower() in CARPETAS_MEDIA for p in partes)
+
+
+def detectar_proyectos(ficheros):
+    """Un proyecto es una carpeta que contiene un .avp. Sus bins son los .avb
+    de esa carpeta y subcarpetas (los de Trash se marcan como papelera)."""
+    carpetas_avp = {}
+    for f in ficheros:
+        if f["ext"] == ".avp":
+            carpetas_avp.setdefault(f["carpeta"], []).append(f["nombre"])
+
+    proyectos = []
+    bins_asignados = set()
+    for carpeta in sorted(carpetas_avp):
+        partes = Path(carpeta).parts
+        nombre = partes[-1] if partes and carpeta != "." else "(raíz del disco)"
+        bins = []
+        for f in ficheros:
+            if f["ext"] != ".avb":
+                continue
+            fc = f["carpeta"]
+            dentro = fc == carpeta or (carpeta != "." and fc.startswith(carpeta + os.sep))
+            if carpeta == ".":
+                dentro = fc == "."
+            if not dentro:
+                continue
+            en_papelera = any(p.lower() == "trash" for p in Path(fc).parts)
+            bins.append({"ruta": f["ruta"], "nombre": f["nombre"], "bytes": f["bytes"],
+                         "modificado": f["modificado"], "papelera": en_papelera})
+            bins_asignados.add(f["ruta"])
+        proyectos.append({
+            "nombre": nombre,
+            "carpeta": carpeta,
+            "ficheros_avp": carpetas_avp[carpeta],
+            "bins": bins,
+            "num_bins": len(bins),
+        })
+
+    sueltos = [{"ruta": f["ruta"], "nombre": f["nombre"], "bytes": f["bytes"], "modificado": f["modificado"], "papelera": False}
+               for f in ficheros if f["ext"] == ".avb" and f["ruta"] not in bins_asignados]
+    if sueltos:
+        proyectos.append({"nombre": "(bins sin proyecto)", "carpeta": "", "ficheros_avp": [],
+                          "bins": sueltos, "num_bins": len(sueltos)})
+    LOG.info("Proyectos detectados: %d", len(proyectos))
+    return proyectos
+
+
+def mobid_claves(mob_id):
+    """Devuelve las representaciones posibles de un MobID de pyavb como UMID
+    hexadecimal (32 bytes), para cruzar con ffprobe. Se prueban dos
+    codificaciones del UUID porque el orden de bytes puede variar."""
+    try:
+        raw = bytes(mob_id.bytes_le)
+        a = raw.hex().upper()
+        u = uuid.UUID(bytes_le=raw[16:])
+        b = (raw[:16] + u.bytes).hex().upper()
+        return {"le": a, "be": b}
+    except Exception:
+        return {}
+
+
+def edit_rate_de(mob):
+    try:
+        for t in mob.tracks:
+            comp = getattr(t, "component", None)
+            er = getattr(comp, "edit_rate", None)
+            if er:
+                return float(er)
+    except Exception:
+        pass
+    return None
+
+
+def tipos_pista(mob):
+    tipos = Counter()
+    try:
+        for t in mob.tracks:
+            mk = getattr(t, "media_kind", None)
+            tipos[str(mk) if mk else "?"] += 1
+    except Exception:
+        pass
+    return dict(tipos)
+
+
+def leer_bin(ruta_abs):
+    """Lee un bin con pyavb. Devuelve dict con clips y secuencias o error."""
+    res = {"ok": False, "error": None, "clips": [], "secuencias": [], "otros": 0}
+    if not PYAVB_OK:
+        res["error"] = "pyavb no está instalado"
+        return res
+    try:
+        with avb.open(str(ruta_abs)) as f:
+            for mob in f.content.mobs:
+                try:
+                    tipo = mob.mob_type
+                    er = edit_rate_de(mob) or 25.0
+                    length = int(getattr(mob, "length", 0) or 0)
+                    item = {
+                        "nombre": mob.name or "",
+                        "tipo": tipo,
+                        "uso": getattr(mob, "usage", None),
+                        "uso_codigo": getattr(mob, "usage_code", None),
+                        "frames": length,
+                        "edit_rate": er,
+                        "segundos": round(length / er, 2) if er else None,
+                        "creado": str(getattr(mob, "creation_time", "") or ""),
+                        "modificado": str(getattr(mob, "last_modified", "") or ""),
+                        "mob_id": mobid_claves(mob.mob_id),
+                        "pistas": tipos_pista(mob),
+                    }
+                    if tipo == "MasterMob":
+                        res["clips"].append(item)
+                    elif tipo == "CompositionMob":
+                        res["secuencias"].append(item)
+                    else:
+                        res["otros"] += 1
+                except Exception as e:  # un mob corrupto no debe tumbar el bin
+                    LOG.warning("Mob ilegible en %s: %s", ruta_abs, e)
+        res["ok"] = True
+    except Exception as e:
+        res["error"] = "%s: %s" % (type(e).__name__, e)
+        LOG.error("Bin ilegible %s: %s", ruta_abs, res["error"])
+    return res
+
+
+def leer_bins(proyectos, origen, progreso):
+    bins_out = []
+    total = sum(p["num_bins"] for p in proyectos)
+    i = 0
+    for p in proyectos:
+        for b in p["bins"]:
+            i += 1
+            progreso("Bins: %d/%d  %s" % (i, total, b["nombre"]))
+            r = leer_bin(Path(origen) / b["ruta"])
+            r.update({"proyecto": p["nombre"], "ruta": b["ruta"], "nombre": b["nombre"], "papelera": b["papelera"]})
+            bins_out.append(r)
+    LOG.info("Bins leídos: %d (%d con error)", len(bins_out), sum(1 for b in bins_out if not b["ok"]))
+    return bins_out
+
+
+# ---------------------------------------------------------------------------
+# Paso 3: ffprobe de cada MXF
+# ---------------------------------------------------------------------------
+
+def ffprobe_json(ffprobe, ruta):
+    cmd = [ffprobe, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(ruta)]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=120, encoding="utf-8",
+                             errors="replace", **flags_subproceso())
+        if out.returncode != 0:
+            return None, (out.stderr or "ffprobe devolvió error").strip()[:300]
+        return json.loads(out.stdout), None
+    except subprocess.TimeoutExpired:
+        return None, "ffprobe: tiempo agotado"
+    except Exception as e:
+        return None, "ffprobe: %s" % e
+
+
+def resumir_mxf(datos):
+    fmt = datos.get("format", {})
+    tags = fmt.get("tags", {}) or {}
+    pistas = []
+    for s in datos.get("streams", []):
+        st = s.get("tags", {}) or {}
+        pistas.append({
+            "tipo": s.get("codec_type"),
+            "codec": s.get("codec_name"),
+            "perfil": s.get("profile"),
+            "ancho": s.get("width"),
+            "alto": s.get("height"),
+            "fps": s.get("r_frame_rate"),
+            "pix_fmt": s.get("pix_fmt"),
+            "field_order": s.get("field_order"),
+            "muestreo": s.get("sample_rate"),
+            "canales": s.get("channels"),
+            "bits": s.get("bits_per_raw_sample"),
+            "duracion": float(s["duration"]) if s.get("duration") else None,
+            "file_package_umid": (st.get("file_package_umid") or "").upper().replace("0X", ""),
+            "file_package_name": st.get("file_package_name"),
+        })
+    umid = (tags.get("material_package_umid") or "").upper().replace("0X", "")
+    comentarios = {k[len("comment_"):]: v for k, v in tags.items() if k.startswith("comment_")}
+    return {
+        "duracion": float(fmt["duration"]) if fmt.get("duration") else None,
+        "formato": fmt.get("format_long_name"),
+        "umid": umid,
+        "nombre_clip": tags.get("material_package_name") or "",
+        "timecode": tags.get("timecode"),
+        "op": tags.get("operational_pattern_ul"),
+        "producto": " ".join(x for x in [tags.get("company_name"), tags.get("product_name"), tags.get("product_version")] if x),
+        "comentarios": comentarios,
+        "pistas": pistas,
+    }
+
+
+def analizar_mxf(ficheros, origen, ffprobe, progreso):
+    objetivo = [f for f in ficheros if f["ext"] == ".mxf"]
+    resultados = []
+    total = len(objetivo)
+    hechos = 0
+
+    def trabajo(f):
+        datos, err = ffprobe_json(ffprobe, Path(origen) / f["ruta"])
+        partes = [p.lower() for p in Path(f["ruta"]).parts]
+        base = {"ruta": f["ruta"], "nombre": f["nombre"], "bytes": f["bytes"], "modificado": f["modificado"],
+                "en_cuarentena": "quarantined files" in partes, "en_creating": "creating" in partes,
+                "en_media": es_ruta_media(partes), "error": err}
+        if datos:
+            base.update(resumir_mxf(datos))
+        return base
+
+    with ThreadPoolExecutor(max_workers=NUM_HILOS) as ex:
+        futuros = [ex.submit(trabajo, f) for f in objetivo]
+        for fut in as_completed(futuros):
+            resultados.append(fut.result())
+            hechos += 1
+            if hechos % 25 == 0 or hechos == total:
+                progreso("MXF: %d/%d analizados" % (hechos, total))
+    resultados.sort(key=lambda r: r["ruta"])
+    LOG.info("MXF analizados: %d (%d con error)", len(resultados), sum(1 for r in resultados if r["error"]))
+    return resultados
+
+
+# ---------------------------------------------------------------------------
+# Paso 4: agrupar MXF por clip y cruzar con bins
+# ---------------------------------------------------------------------------
+
+def agrupar_clips(mxf):
+    """Los MXF OP-Atom llevan una pista por fichero; los que comparten UMID
+    son el mismo clip. Los que no tienen UMID se agrupan por nombre."""
+    grupos = defaultdict(list)
+    for m in mxf:
+        if m.get("error"):
+            continue
+        clave = m.get("umid") or ("NOMBRE:" + (m.get("nombre_clip") or m["nombre"]))
+        grupos[clave].append(m)
+
+    clips = []
+    for clave, fichs in grupos.items():
+        video = [f for f in fichs if any(p["tipo"] == "video" for p in f["pistas"])]
+        audio = [f for f in fichs if any(p["tipo"] == "audio" for p in f["pistas"])]
+        pv = next((p for f in video for p in f["pistas"] if p["tipo"] == "video"), None)
+        dur = max((f["duracion"] or 0) for f in fichs) if fichs else None
+        clips.append({
+            "clave": clave,
+            "nombre": next((f["nombre_clip"] for f in fichs if f.get("nombre_clip")), fichs[0]["nombre"]),
+            "ficheros": [f["ruta"] for f in fichs],
+            "fichero_video": video[0]["ruta"] if video else None,
+            "num_video": len(video),
+            "num_audio": len(audio),
+            "duracion": dur,
+            "bytes": sum(f["bytes"] for f in fichs),
+            "codec_video": pv["codec"] if pv else None,
+            "resolucion": ("%sx%s" % (pv["ancho"], pv["alto"])) if pv else None,
+            "fps": pv["fps"] if pv else None,
+            "timecode": next((f.get("timecode") for f in fichs if f.get("timecode")), None),
+            "comentarios": next((f["comentarios"] for f in fichs if f.get("comentarios")), {}),
+            "en_cuarentena": any(f["en_cuarentena"] for f in fichs),
+            "proyectos": [],
+        })
+    clips.sort(key=lambda c: c["nombre"])
+    LOG.info("Clips reconstruidos: %d", len(clips))
+    return clips
+
+
+def cruzar(proyectos, bins, clips):
+    """Relaciona clips de bin (MobID) con clips físicos (UMID)."""
+    por_le = {c["clave"]: c for c in clips}
+    coincidencias = Counter()
+    por_proyecto = defaultdict(lambda: {"clips_bin": 0, "online": 0, "offline": 0,
+                                        "claves": set(), "offline_nombres": [], "secuencias": 0})
+    for b in bins:
+        if not b["ok"]:
+            continue
+        pr = por_proyecto[b["proyecto"]]
+        pr["secuencias"] += len(b["secuencias"])
+        for clip in b["clips"]:
+            pr["clips_bin"] += 1
+            ids = clip.get("mob_id") or {}
+            fisico, modo = None, None
+            for k in ("le", "be"):
+                if ids.get(k) in por_le:
+                    fisico, modo = por_le[ids[k]], k
+                    break
+            if fisico:
+                coincidencias[modo] += 1
+                pr["online"] += 1
+                pr["claves"].add(fisico["clave"])
+                if b["proyecto"] not in fisico["proyectos"]:
+                    fisico["proyectos"].append(b["proyecto"])
+            else:
+                pr["offline"] += 1
+                if len(pr["offline_nombres"]) < 50:
+                    pr["offline_nombres"].append(clip["nombre"])
+
+    huerfanos = [c for c in clips if not c["proyectos"]]
+    resumen_proy = []
+    for p in proyectos:
+        pr = por_proyecto.get(p["nombre"], {"clips_bin": 0, "online": 0, "offline": 0, "claves": set(),
+                                             "offline_nombres": [], "secuencias": 0})
+        cs = [por_le[k] for k in pr["claves"]]
+        codecs = Counter((c["codec_video"], c["resolucion"], c["fps"]) for c in cs if c["codec_video"])
+        resumen_proy.append({
+            "proyecto": p["nombre"],
+            "bins": p["num_bins"],
+            "bins_ilegibles": sum(1 for b in bins if b["proyecto"] == p["nombre"] and not b["ok"]),
+            "clips_en_bin": pr["clips_bin"],
+            "secuencias": pr["secuencias"],
+            "clips_online": pr["online"],
+            "clips_offline": pr["offline"],
+            "clips_fisicos": len(cs),
+            "segundos": round(sum(c["duracion"] or 0 for c in cs), 1),
+            "bytes": sum(c["bytes"] for c in cs),
+            "formatos": [{"codec": k[0], "resolucion": k[1], "fps": k[2], "clips": v} for k, v in codecs.most_common()],
+            "mezcla_formatos": len(codecs) > 1,
+            "offline_nombres": pr["offline_nombres"],
+        })
+    LOG.info("Cruce: coincidencias por codificación %s; huérfanos %d", dict(coincidencias), len(huerfanos))
+    return {
+        "modo_coincidencia": dict(coincidencias),
+        "por_proyecto": resumen_proy,
+        "huerfanos": [{"nombre": c["nombre"], "clave": c["clave"], "ficheros": c["ficheros"], "duracion": c["duracion"], "bytes": c["bytes"]}
+                      for c in huerfanos],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Paso 5: miniaturas
+# ---------------------------------------------------------------------------
+
+def miniaturas(clips, origen, ffmpeg, destino, progreso, maximo=0):
+    carpeta = destino / "miniaturas"
+    carpeta.mkdir(exist_ok=True)
+    con_video = [c for c in clips if c["fichero_video"]]
+    if maximo:
+        con_video = con_video[:maximo]
+    total, hechos, fallos = len(con_video), 0, 0
+
+    def trabajo(idx, c):
+        salida = carpeta / ("%05d_%s.jpg" % (idx, nombre_seguro(c["nombre"], 40)))
+        pos = max(0.0, (c["duracion"] or 0) * 0.10)
+        cmd = [ffmpeg, "-v", "error", "-y", "-ss", "%.2f" % pos, "-i", str(Path(origen) / c["fichero_video"]),
+               "-frames:v", "1", "-vf", "scale=%d:-2" % MINIATURA_ANCHO, "-q:v", "4", str(salida)]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, **flags_subproceso())
+            if r.returncode == 0 and salida.exists():
+                return c, "miniaturas/" + salida.name
+            # segundo intento desde el principio (clips muy cortos)
+            cmd[4] = "0"
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, **flags_subproceso())
+            if r.returncode == 0 and salida.exists():
+                return c, "miniaturas/" + salida.name
+            LOG.warning("Sin miniatura %s: %s", c["nombre"], (r.stderr or "").strip()[:200])
+        except Exception as e:
+            LOG.warning("Sin miniatura %s: %s", c["nombre"], e)
+        return c, None
+
+    with ThreadPoolExecutor(max_workers=NUM_HILOS) as ex:
+        futuros = [ex.submit(trabajo, i, c) for i, c in enumerate(con_video)]
+        for fut in as_completed(futuros):
+            c, ruta = fut.result()
+            c["miniatura"] = ruta
+            hechos += 1
+            fallos += 0 if ruta else 1
+            if hechos % 25 == 0 or hechos == total:
+                progreso("Miniaturas: %d/%d" % (hechos, total))
+    LOG.info("Miniaturas: %d generadas, %d fallidas", total - fallos, fallos)
+
+
+# ---------------------------------------------------------------------------
+# Paso 6: resumen y avisos
+# ---------------------------------------------------------------------------
+
+def construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmpeg_ok):
+    bytes_total = sum(f["bytes"] for f in ficheros)
+    bytes_media = sum(f["bytes"] for f in ficheros if f["ext"] in EXT_MEDIA)
+    exts = Counter(f["ext"] or "(sin ext)" for f in ficheros)
+    codecs = Counter((c["codec_video"], c["resolucion"], c["fps"]) for c in clips if c["codec_video"])
+    tags_comentario = Counter(k for c in clips for k in c["comentarios"])
+    avisos = []
+
+    if not PYAVB_OK:
+        avisos.append(("error", "pyavb no está instalado: no se han podido leer los bins."))
+    if not ffmpeg_ok:
+        avisos.append(("error", "ffmpeg/ffprobe no encontrados: no se han analizado los MXF ni generado miniaturas."))
+    ilegibles = [b for b in bins if not b["ok"]]
+    if ilegibles:
+        avisos.append(("aviso", "%d bins no se han podido leer (ver bins.json). Candidatos a abrirlos en Avid." % len(ilegibles)))
+    errores_mxf = [m for m in mxf if m["error"]]
+    if errores_mxf:
+        avisos.append(("aviso", "%d ficheros MXF dan error al leerse: posible corrupción o copia incompleta." % len(errores_mxf)))
+    cuar = [m for m in mxf if m["en_cuarentena"]]
+    if cuar:
+        avisos.append(("aviso", "%d MXF en carpetas 'Quarantined Files' (%.2f GB): Avid los apartó al indexar; revisar antes de descartar."
+                       % (len(cuar), gb(sum(m["bytes"] for m in cuar)))))
+    creating = [m for m in mxf if m["en_creating"]]
+    if creating:
+        avisos.append(("aviso", "%d MXF en carpetas 'Creating': capturas o importaciones interrumpidas." % len(creating)))
+    omf = sum(1 for f in ficheros if f["ext"] == ".omf")
+    if omf:
+        avisos.append(("info", "%d ficheros OMF (media de Avid antigua). No se analizan en esta fase." % omf))
+    if cruce["huerfanos"]:
+        avisos.append(("aviso", "%d clips físicos no aparecen en ningún bin (huérfanos, %.2f GB). Pueden ser de bins borrados o de otro disco."
+                       % (len(cruce["huerfanos"]), gb(sum(h["bytes"] for h in cruce["huerfanos"])))))
+    offline = sum(p["clips_offline"] for p in cruce["por_proyecto"])
+    if offline:
+        avisos.append(("aviso", "%d clips de bin no tienen media en este disco (offline)." % offline))
+    mezcla = [p["proyecto"] for p in cruce["por_proyecto"] if p["mezcla_formatos"]]
+    if mezcla:
+        avisos.append(("info", "Proyectos con mezcla de formatos (habrá que convertir al unir el bruto): " + ", ".join(mezcla)))
+    sin_audio = sum(1 for c in clips if c["num_video"] and not c["num_audio"])
+    if sin_audio:
+        avisos.append(("info", "%d clips de vídeo sin pista de audio." % sin_audio))
+    solo_audio = sum(1 for c in clips if not c["num_video"])
+    if solo_audio:
+        avisos.append(("info", "%d grupos de ficheros solo con audio (sin vídeo con el mismo identificador)." % solo_audio))
+    if clips and not cruce["modo_coincidencia"] and bins and any(b["ok"] and b["clips"] for b in bins):
+        avisos.append(("error", "Ningún clip de bin ha coincidido con ningún MXF. El cruce por identificador no funciona con estos ficheros; revisar con Adrián."))
+    if tags_comentario:
+        avisos.append(("info", "Metadatos de usuario encontrados dentro de los MXF: " + ", ".join(sorted(tags_comentario))))
+
+    return {
+        "version": VERSION,
+        "fecha": ahora_txt(),
+        "origen": str(origen),
+        "ficheros": len(ficheros),
+        "bytes_total": bytes_total,
+        "gb_total": gb(bytes_total),
+        "gb_media": gb(bytes_media),
+        "proyectos": len([p for p in proyectos if p["ficheros_avp"]]),
+        "bins": len(bins),
+        "bins_ilegibles": len(ilegibles),
+        "clips_en_bins": sum(len(b["clips"]) for b in bins if b["ok"]),
+        "secuencias_en_bins": sum(len(b["secuencias"]) for b in bins if b["ok"]),
+        "mxf": len(mxf),
+        "mxf_error": len(errores_mxf),
+        "clips_fisicos": len(clips),
+        "segundos_media": round(sum(c["duracion"] or 0 for c in clips), 1),
+        "huerfanos": len(cruce["huerfanos"]),
+        "offline": offline,
+        "modo_coincidencia": cruce["modo_coincidencia"],
+        "extensiones": dict(exts.most_common(30)),
+        "formatos": [{"codec": k[0], "resolucion": k[1], "fps": k[2], "clips": v} for k, v in codecs.most_common()],
+        "productos": dict(Counter(m.get("producto") for m in mxf if m.get("producto")).most_common(10)),
+        "comentarios_mxf": dict(tags_comentario),
+        "avisos": [{"nivel": n, "texto": t} for n, t in avisos],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Paso 7: informe HTML
+# ---------------------------------------------------------------------------
+
+def esc(t):
+    return (str(t) if t is not None else "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+CSS = """
+:root{--bg:#f5f6f8;--card:#fff;--ink:#1d2330;--muted:#6b7280;--line:#e3e6eb;--ok:#1a7f4b;--warn:#b7791f;--err:#b42318;--acc:#1f4e9c}
+*{box-sizing:border-box}body{margin:0;font:15px/1.45 system-ui,Segoe UI,Roboto,sans-serif;color:var(--ink);background:var(--bg)}
+header{background:#101828;color:#fff;padding:28px 36px}header h1{margin:0 0 4px;font-size:24px;font-weight:600}header p{margin:0;color:#aab2c0}
+main{max-width:1280px;margin:0 auto;padding:24px 36px 60px}h2{font-size:18px;margin:34px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}.kpi{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
+.kpi b{display:block;font-size:26px;font-weight:600}.kpi span{color:var(--muted);font-size:13px}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:14px}
+th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{background:#eef1f5;font-weight:600}td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+.aviso{padding:10px 14px;border-radius:6px;margin:6px 0;border-left:4px solid}.error{background:#fef3f2;border-color:var(--err)}.aviso.aviso{background:#fffaeb;border-color:var(--warn)}.info{background:#eff6ff;border-color:var(--acc)}
+.tag{display:inline-block;background:#eef1f5;border-radius:4px;padding:1px 7px;font-size:12px;margin:1px 2px 1px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}.clip{background:var(--card);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.clip img{width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#222}.clip .sin{aspect-ratio:16/9;background:#2a2f3a;color:#9aa3b2;display:flex;align-items:center;justify-content:center;font-size:12px}
+.clip div.t{padding:6px 8px;font-size:12px}.clip b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.clip span{color:var(--muted)}
+details{margin:8px 0}summary{cursor:pointer;font-weight:600;padding:8px 0}.muted{color:var(--muted)}footer{color:var(--muted);font-size:12px;margin-top:40px}
+"""
+
+
+def tarjeta_clip(c):
+    if c.get("miniatura"):
+        img = "<img loading='lazy' src='%s' alt=''>" % esc(c["miniatura"])
+    elif not c["num_video"]:
+        img = "<div class='sin'>solo audio</div>"
+    else:
+        img = "<div class='sin'>sin miniatura</div>"
+    return ("<div class='clip'>%s<div class='t'><b title='%s'>%s</b><span>%s &middot; %s &middot; %dV/%dA</span></div></div>"
+            % (img, esc(c["nombre"]), esc(c["nombre"]), fmt_duracion(c["duracion"]), esc(c["timecode"] or "sin TC"), c["num_video"], c["num_audio"]))
+
+
+def informe_html(resumen, proyectos, bins, clips, cruce, destino):
+    r = resumen
+    h = []
+    h.append("<!doctype html><html lang='es'><head><meta charset='utf-8'><title>Diagnóstico disco Avid</title><style>%s</style></head><body>" % CSS)
+    h.append("<header><h1>Diagnóstico del disco de edición Avid</h1><p>%s &middot; analizado el %s &middot; versión %s</p></header><main>"
+             % (esc(r["origen"]), esc(r["fecha"]), VERSION))
+
+    h.append("<div class='kpis'>")
+    for v, k in [(r["proyectos"], "proyectos"), (r["clips_fisicos"], "clips con media"), (fmt_duracion(r["segundos_media"]), "duración total"),
+                 ("%.1f GB" % r["gb_media"], "de media"), (r["secuencias_en_bins"], "secuencias (piezas)"), (r["mxf"], "ficheros MXF"),
+                 (r["huerfanos"], "clips huérfanos"), (r["offline"], "clips offline")]:
+        h.append("<div class='kpi'><b>%s</b><span>%s</span></div>" % (esc(v), esc(k)))
+    h.append("</div>")
+
+    h.append("<h2>Avisos</h2>")
+    if not r["avisos"]:
+        h.append("<div class='aviso info'>Sin incidencias destacables.</div>")
+    for a in r["avisos"]:
+        h.append("<div class='aviso %s'>%s</div>" % (a["nivel"], esc(a["texto"])))
+
+    h.append("<h2>Proyectos</h2><table><tr><th>Proyecto</th><th class='n'>Bins</th><th class='n'>Clips en bin</th><th class='n'>Con media</th><th class='n'>Offline</th><th class='n'>Secuencias</th><th class='n'>Duración</th><th class='n'>GB</th><th>Formatos</th></tr>")
+    for p in cruce["por_proyecto"]:
+        fm = " ".join("<span class='tag'>%s %s %s (%d)</span>" % (esc(f["codec"]), esc(f["resolucion"]), esc(f["fps"]), f["clips"]) for f in p["formatos"])
+        extra = " <span class='tag' style='background:#fef3f2'>%d bins ilegibles</span>" % p["bins_ilegibles"] if p["bins_ilegibles"] else ""
+        h.append("<tr><td>%s%s</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%s</td><td class='n'>%.2f</td><td>%s</td></tr>"
+                 % (esc(p["proyecto"]), extra, p["bins"], p["clips_en_bin"], p["clips_fisicos"], p["clips_offline"], p["secuencias"], fmt_duracion(p["segundos"]), gb(p["bytes"]), fm))
+    h.append("</table>")
+
+    h.append("<h2>Formatos de vídeo en el disco</h2><table><tr><th>Códec</th><th>Resolución</th><th>fps</th><th class='n'>Clips</th></tr>")
+    for f in r["formatos"]:
+        h.append("<tr><td>%s</td><td>%s</td><td>%s</td><td class='n'>%d</td></tr>" % (esc(f["codec"]), esc(f["resolucion"]), esc(f["fps"]), f["clips"]))
+    h.append("</table>")
+    if r["productos"]:
+        h.append("<p class='muted'>Escrito por: %s</p>" % esc("; ".join("%s (%d)" % kv for kv in r["productos"].items())))
+
+    h.append("<h2>Contenido por proyecto</h2>")
+    por_proy = defaultdict(list)
+    for c in clips:
+        for p in c["proyectos"]:
+            por_proy[p].append(c)
+    for p in cruce["por_proyecto"]:
+        cs = sorted(por_proy.get(p["proyecto"], []), key=lambda c: c["nombre"])
+        h.append("<details><summary>%s &middot; %d clips &middot; %s</summary>" % (esc(p["proyecto"]), len(cs), fmt_duracion(p["segundos"])))
+        bs = [b for b in bins if b["proyecto"] == p["proyecto"]]
+        h.append("<table><tr><th>Bin</th><th class='n'>Clips</th><th class='n'>Secuencias</th><th>Estado</th></tr>")
+        for b in bs:
+            estado = "OK" if b["ok"] else "ERROR: " + esc(b["error"])
+            if b["papelera"]:
+                estado += " (papelera)"
+            h.append("<tr><td>%s</td><td class='n'>%d</td><td class='n'>%d</td><td>%s</td></tr>" % (esc(b["nombre"]), len(b["clips"]), len(b["secuencias"]), estado))
+        h.append("</table>")
+        secs = [s for b in bs if b["ok"] for s in b["secuencias"]]
+        if secs:
+            h.append("<p><b>Secuencias:</b> " + " ".join("<span class='tag'>%s (%s)</span>" % (esc(s["nombre"]), fmt_duracion(s["segundos"])) for s in secs[:60]) + "</p>")
+        if p["offline_nombres"]:
+            h.append("<p class='muted'><b>Offline:</b> %s</p>" % esc(", ".join(p["offline_nombres"][:30])))
+        h.append("<div class='grid'>")
+        for c in cs:
+            h.append(tarjeta_clip(c))
+        h.append("</div></details>")
+
+    if cruce["huerfanos"]:
+        hs = [c for c in clips if not c["proyectos"]]
+        h.append("<details><summary>Clips huérfanos (sin bin) &middot; %d</summary><div class='grid'>" % len(hs))
+        for c in sorted(hs, key=lambda c: c["nombre"]):
+            h.append(tarjeta_clip(c))
+        h.append("</div></details>")
+
+    if resumen.get("brutos") is not None:
+        h.append("<h2>Brutos exportados</h2><p class='muted'>Carpeta: %s</p>" % esc(resumen.get("brutos_carpeta")))
+        h.append("<table><tr><th>Proyecto</th><th>Fichero</th><th class='n'>Clips</th><th class='n'>Incluidos</th><th class='n'>Fallidos</th><th>Modo</th><th class='n'>Audio</th><th class='n'>Duración</th><th class='n'>GB</th><th>Estado</th></tr>")
+        for b in resumen["brutos"]:
+            color = "" if b["estado"].startswith("OK") else " style='background:#fef3f2'"
+            h.append("<tr%s><td>%s</td><td>%s</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td>%s</td><td class='n'>%d</td><td class='n'>%s</td><td class='n'>%.2f</td><td>%s</td></tr>"
+                     % (color, esc(b["proyecto"]), esc(b["fichero"] or "—"), b["clips"], b["incluidos"], b["fallidos"], esc(b["modo"]), b["pistas_audio"],
+                        fmt_duracion(b["segundos"]), gb(b["bytes"]), esc(b["estado"])))
+        h.append("</table><p class='muted'>Junto a cada bruto hay un shotlist Excel con el timecode de cada clip y una hoja de contactos HTML.</p>")
+
+    h.append("<footer>Generado por diagnostico_avid.py v%s. No se ha modificado nada en el disco de origen.</footer></main></body></html>" % VERSION)
+    (destino / "informe.html").write_text("\n".join(h), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Orquestación
+# ---------------------------------------------------------------------------
+
+def guardar_json(destino, nombre, datos):
+    with open(destino / nombre, "w", encoding="utf-8") as f:
+        json.dump(datos, f, ensure_ascii=False, indent=1, default=str)
+
+
+def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_miniaturas=0, abrir=True, brutos=None):
+    origen = Path(origen)
+    if not origen.exists():
+        raise FileNotFoundError("No existe la carpeta de origen: %s" % origen)
+    etiqueta = nombre_seguro(origen.name or origen.drive.rstrip(":\\/") or "disco", 30)
+    destino = Path(destino_base) / ("Diagnostico_%s_%s" % (etiqueta, dt.datetime.now().strftime("%Y%m%d_%H%M")))
+    destino.mkdir(parents=True, exist_ok=True)
+    if destino.resolve().is_relative_to(origen.resolve()):
+        raise ValueError("El destino no puede estar dentro del disco de origen (este programa no escribe en él).")
+    if brutos:
+        brutos = Path(brutos)
+        if brutos.resolve().is_relative_to(origen.resolve()):
+            raise ValueError("La carpeta de brutos no puede estar dentro del disco de origen.")
+        if not EXPORT_OK:
+            raise RuntimeError("Falta el módulo exportar_brutos.py junto al programa.")
+
+    fh = logging.FileHandler(destino / "diagnostico.log", encoding="utf-8")
+    fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    LOG.addHandler(fh)
+    LOG.setLevel(logging.INFO)
+    LOG.info("Diagnóstico v%s. Origen=%s Destino=%s Python=%s pyavb=%s", VERSION, origen, destino, sys.version.split()[0], PYAVB_OK)
+
+    ffmpeg, ffprobe = localizar_ffmpeg()
+    ffmpeg_ok = bool(ffmpeg)
+    LOG.info("ffmpeg=%s ffprobe=%s", ffmpeg, ffprobe)
+    progreso("Inicio. Destino: %s" % destino)
+
+    progreso("1/6 Inventariando el disco...")
+    ficheros = inventariar(origen, progreso)
+    escribir_inventario_csv(ficheros, destino)
+
+    progreso("2/6 Detectando proyectos y leyendo bins...")
+    proyectos = detectar_proyectos(ficheros)
+    bins = leer_bins(proyectos, origen, progreso)
+    guardar_json(destino, "proyectos.json", proyectos)
+    guardar_json(destino, "bins.json", bins)
+
+    progreso("3/6 Analizando ficheros MXF...")
+    mxf = analizar_mxf(ficheros, origen, ffprobe, progreso) if ffmpeg_ok else []
+    guardar_json(destino, "mxf.json", mxf)
+
+    progreso("4/6 Reconstruyendo clips y cruzando con los bins...")
+    clips = agrupar_clips(mxf)
+    cruce = cruzar(proyectos, bins, clips)
+
+    if hacer_miniaturas and ffmpeg_ok:
+        progreso("5/6 Generando miniaturas...")
+        miniaturas(clips, origen, ffmpeg, destino, progreso, max_miniaturas)
+    else:
+        progreso("5/6 Miniaturas omitidas.")
+    guardar_json(destino, "clips.json", clips)
+    guardar_json(destino, "cruce.json", cruce)
+
+    resultados_brutos = None
+    if brutos:
+        if not ffmpeg_ok:
+            progreso("Brutos: omitidos, no hay ffmpeg.")
+        else:
+            progreso("Brutos: exportando un MXF por proyecto en %s" % brutos)
+            cfg = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json")
+            resultados_brutos = exportar_brutos.exportar_todo(clips, cruce, mxf, origen, brutos, ffmpeg, ffprobe, progreso, cfg,
+                                                              miniaturas_dir=destino / "miniaturas" if hacer_miniaturas else None)
+
+    progreso("6/6 Escribiendo resumen e informe...")
+    resumen = construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmpeg_ok)
+    if resultados_brutos is not None:
+        resumen["brutos"] = resultados_brutos
+        resumen["brutos_carpeta"] = str(brutos)
+        fallos = [b for b in resultados_brutos if not b["estado"].startswith("OK")]
+        if fallos:
+            resumen["avisos"].append({"nivel": "error", "texto": "%d brutos con problemas: %s" % (len(fallos), ", ".join(b["proyecto"] for b in fallos))})
+    guardar_json(destino, "resumen.json", resumen)
+    informe_html(resumen, proyectos, bins, clips, cruce, destino)
+
+    zip_path = destino.with_suffix(".zip")
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in destino.rglob("*"):
+            if f.is_file():
+                z.write(f, f.relative_to(destino.parent))
+    LOG.info("ZIP: %s (%.1f MB)", zip_path, zip_path.stat().st_size / 1e6)
+    LOG.removeHandler(fh)
+    fh.close()
+
+    progreso("Terminado. Informe: %s" % (destino / "informe.html"))
+    progreso("ZIP para enviar: %s" % zip_path)
+    if abrir:
+        try:
+            webbrowser.open((destino / "informe.html").as_uri())
+        except Exception:
+            pass
+    return destino, zip_path, resumen
+
+
+# ---------------------------------------------------------------------------
+# Ventana (tkinter)
+# ---------------------------------------------------------------------------
+
+def lanzar_gui():
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, ttk
+
+    raiz = tk.Tk()
+    raiz.title("Diagnóstico de disco Avid — v%s" % VERSION)
+    raiz.geometry("780x600")
+    raiz.minsize(640, 420)
+
+    origen = tk.StringVar()
+    destino = tk.StringVar(value=str(Path.home() / "Desktop"))
+    minis = tk.BooleanVar(value=True)
+    hacer_brutos = tk.BooleanVar(value=False)
+    brutos = tk.StringVar()
+    cola = queue.Queue()
+    estado = {"ocupado": False}
+
+    marco = ttk.Frame(raiz, padding=14)
+    marco.pack(fill="both", expand=True)
+    ttk.Label(marco, text="1. Disco o carpeta de Avid que quieres analizar (solo se lee, no se modifica):").grid(row=0, column=0, columnspan=2, sticky="w")
+    ttk.Entry(marco, textvariable=origen).grid(row=1, column=0, sticky="ew", pady=(2, 10))
+    ttk.Button(marco, text="Elegir...", command=lambda: origen.set(filedialog.askdirectory(title="Disco de Avid") or origen.get())).grid(row=1, column=1, padx=(8, 0))
+    ttk.Label(marco, text="2. Dónde guardar el informe (otro disco o el escritorio):").grid(row=2, column=0, columnspan=2, sticky="w")
+    ttk.Entry(marco, textvariable=destino).grid(row=3, column=0, sticky="ew", pady=(2, 10))
+    ttk.Button(marco, text="Elegir...", command=lambda: destino.set(filedialog.askdirectory(title="Carpeta de salida") or destino.get())).grid(row=3, column=1, padx=(8, 0))
+    ttk.Checkbutton(marco, text="Generar miniaturas de cada clip (más lento, pero el informe queda completo)", variable=minis).grid(row=4, column=0, columnspan=2, sticky="w")
+    ttk.Checkbutton(marco, text="3. Exportar además un MXF por proyecto (brutos). Tarda mucho y necesita un disco con espacio:",
+                    variable=hacer_brutos).grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 0))
+    ttk.Entry(marco, textvariable=brutos).grid(row=6, column=0, sticky="ew", pady=(2, 10))
+    ttk.Button(marco, text="Elegir...", command=lambda: brutos.set(filedialog.askdirectory(title="Carpeta para los brutos") or brutos.get())).grid(row=6, column=1, padx=(8, 0))
+
+    boton = ttk.Button(marco, text="Analizar disco")
+    boton.grid(row=7, column=0, columnspan=2, pady=12)
+    barra = ttk.Progressbar(marco, mode="indeterminate")
+    barra.grid(row=8, column=0, columnspan=2, sticky="ew")
+    registro = tk.Text(marco, height=14, wrap="word", state="disabled", font=("Consolas", 10))
+    registro.grid(row=9, column=0, columnspan=2, sticky="nsew", pady=(8, 0))
+    marco.columnconfigure(0, weight=1)
+    marco.rowconfigure(9, weight=1)
+
+    def escribe(txt):
+        registro.configure(state="normal")
+        registro.insert("end", txt + "\n")
+        registro.see("end")
+        registro.configure(state="disabled")
+
+    def vaciar_cola():
+        try:
+            while True:
+                tipo, msg = cola.get_nowait()
+                if tipo == "log":
+                    escribe(msg)
+                elif tipo == "fin":
+                    barra.stop()
+                    boton.configure(state="normal")
+                    estado["ocupado"] = False
+                    messagebox.showinfo("Terminado", "Diagnóstico terminado.\n\nInforme: %s\n\nZIP para enviar: %s" % msg)
+                elif tipo == "error":
+                    barra.stop()
+                    boton.configure(state="normal")
+                    estado["ocupado"] = False
+                    messagebox.showerror("Error", msg)
+        except queue.Empty:
+            pass
+        raiz.after(200, vaciar_cola)
+
+    def hilo():
+        try:
+            d, z, _ = ejecutar(origen.get(), destino.get(), progreso=lambda m: cola.put(("log", m)), hacer_miniaturas=minis.get(),
+                               brutos=brutos.get() if hacer_brutos.get() else None)
+            cola.put(("fin", (str(d / "informe.html"), str(z))))
+        except Exception as e:
+            LOG.error("Fallo: %s\n%s", e, traceback.format_exc())
+            cola.put(("error", "%s\n\nDetalle en diagnostico.log (si llegó a crearse)." % e))
+
+    def iniciar():
+        if estado["ocupado"]:
+            return
+        if not origen.get() or not Path(origen.get()).exists():
+            messagebox.showwarning("Falta el origen", "Elige el disco o la carpeta de Avid que quieres analizar.")
+            return
+        if not destino.get():
+            messagebox.showwarning("Falta el destino", "Elige dónde guardar el informe.")
+            return
+        if hacer_brutos.get() and not brutos.get():
+            messagebox.showwarning("Falta la carpeta de brutos", "Has marcado exportar brutos: elige la carpeta donde guardarlos (un disco con espacio).")
+            return
+        ff, _ = localizar_ffmpeg()
+        if hacer_brutos.get() and not ff:
+            messagebox.showerror("Sin ffmpeg", "Para exportar brutos hace falta ffmpeg (carpeta bin o PATH).")
+            return
+        if not ff and not messagebox.askyesno("Sin ffmpeg", "No se encuentra ffmpeg/ffprobe (carpeta bin o PATH).\nSe analizarán los bins pero no los ficheros de vídeo.\n¿Continuar igualmente?"):
+            return
+        estado["ocupado"] = True
+        boton.configure(state="disabled")
+        barra.start(12)
+        escribe("— %s —" % ahora_txt())
+        threading.Thread(target=hilo, daemon=True).start()
+
+    boton.configure(command=iniciar)
+    escribe("Programa de diagnóstico de discos Avid (solo lectura). pyavb: %s. ffmpeg: %s."
+            % ("OK" if PYAVB_OK else "NO INSTALADO", "OK" if localizar_ffmpeg()[0] else "no encontrado"))
+    raiz.after(200, vaciar_cola)
+    raiz.mainloop()
+
+
+# ---------------------------------------------------------------------------
+# Entrada
+# ---------------------------------------------------------------------------
+
+def main():
+    ap = argparse.ArgumentParser(description="Diagnóstico de disco Avid (solo lectura).")
+    ap.add_argument("--origen", help="Disco o carpeta de Avid a analizar")
+    ap.add_argument("--destino", help="Carpeta donde dejar el informe")
+    ap.add_argument("--sin-gui", action="store_true", help="No abrir ventana; requiere --origen y --destino")
+    ap.add_argument("--sin-miniaturas", action="store_true", help="No generar miniaturas")
+    ap.add_argument("--max-miniaturas", type=int, default=0, help="Limitar el número de miniaturas (0 = todas)")
+    ap.add_argument("--no-abrir", action="store_true", help="No abrir el informe en el navegador al terminar")
+    ap.add_argument("--brutos", help="Carpeta donde exportar un MXF por proyecto (fase 2)")
+    args = ap.parse_args()
+
+    if sys.stderr is not None:  # en el .exe sin consola no hay salida estándar
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    if args.sin_gui or (args.origen and args.destino):
+        if not (args.origen and args.destino):
+            ap.error("--sin-gui requiere --origen y --destino")
+        ejecutar(args.origen, args.destino, hacer_miniaturas=not args.sin_miniaturas,
+                 max_miniaturas=args.max_miniaturas, abrir=not args.no_abrir, brutos=args.brutos)
+        return
+    try:
+        lanzar_gui()
+    except ImportError:
+        print("No hay tkinter disponible. Usa: --origen RUTA --destino RUTA --sin-gui")
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

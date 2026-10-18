@@ -1,0 +1,58 @@
+DIAGNÓSTICO Y EXPORTACIÓN DE DISCOS AVID — Instrucciones de uso
+================================================================
+
+Qué hace
+--------
+1. ANALIZA un disco de edición Avid completo y genera un informe con lo que
+   contiene: proyectos, clips, piezas montadas, duraciones, formatos,
+   incidencias y una miniatura de cada clip.
+2. Si se marca la opción, EXPORTA un bruto por proyecto: un único fichero
+   MXF con todos los clips de ese proyecto encadenados, listo para archivar,
+   acompañado de un Excel (shotlist) con el timecode de cada clip dentro del
+   bruto y una hoja de contactos con miniaturas.
+NO modifica nada en el disco de Avid: solo lo lee. No hay que instalar nada.
+
+Antes de empezar
+----------------
+1. Descomprime DiagnosticoAvid_portable.zip donde quieras (por ejemplo en el
+   escritorio). Queda una carpeta "DiagnosticoAvid".
+2. Conecta el disco de Avid al ordenador y mira qué letra tiene (por ejemplo F:).
+3. Si vas a exportar brutos, ten a mano otro disco con espacio libre: como
+   mínimo tanto como ocupa el disco de Avid.
+4. Si el disco está dañado o hace ruidos, no sigas: avisa antes de usarlo.
+
+Pasos
+-----
+1. Entra en la carpeta "DiagnosticoAvid" y haz doble clic en DiagnosticoAvid.exe
+   Si Windows muestra un aviso azul "Windows protegió su PC", pulsa
+   "Más información" y luego "Ejecutar de todas formas". Es normal en
+   programas que no están firmados por una empresa.
+2. Casilla 1: pulsa "Elegir..." y selecciona el disco de Avid (la letra del
+   disco, no una carpeta dentro de él).
+3. Casilla 2: dónde guardar el informe. Deja el escritorio o elige otra
+   carpeta. Nunca el propio disco de Avid.
+4. Opción 3 (solo si quieres los brutos): marca la casilla y elige la carpeta
+   del disco con espacio donde dejarlos.
+5. Pulsa "Analizar disco". En el recuadro de abajo irá apareciendo lo que hace.
+   Solo el análisis: de minutos a una hora según el número de ficheros.
+   Con brutos: puede ser de varias horas a una noche entera. No cierres la
+   ventana ni dejes que el ordenador se suspenda.
+6. Al terminar se abre el informe en el navegador y aparece un mensaje con dos
+   rutas. En la carpeta de destino habrá:
+   - una carpeta  Diagnostico_<disco>_<fecha>  con el informe (informe.html)
+   - un fichero   Diagnostico_<disco>_<fecha>.zip
+   Y si se marcó la opción 3, en la carpeta de brutos, por cada proyecto:
+   - BRUTO_<PROYECTO>.mxf                 el vídeo, todo el proyecto en un fichero
+   - BRUTO_<PROYECTO>_shotlist.xlsx       lista de clips con su timecode dentro del bruto
+   - BRUTO_<PROYECTO>_contactos.html      miniaturas de los clips
+   Los clips que no pertenecen a ningún proyecto van a BRUTO_SIN_PROYECTO.
+7. Envía el fichero .zip del informe. Es pequeño (texto y miniaturas, sin vídeo).
+   Al final del informe hay una tabla "Brutos exportados" con el estado de cada uno.
+
+Si algo falla
+-------------
+- Envía el fichero diagnostico.log que está dentro de la carpeta
+  Diagnostico_<disco>_<fecha>, junto con una captura del mensaje de error.
+- Si la ventana no llega a abrirse, envía una captura de lo que aparezca.
+- Si un bruto sale marcado en rojo en el informe, no lo archives: envía el
+  informe y se revisa.

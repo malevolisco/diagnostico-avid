@@ -1,0 +1,1 @@
+Copia aqui ffmpeg.exe y ffprobe.exe (ver LEEME_tecnico.md).

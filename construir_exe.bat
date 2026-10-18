@@ -8,6 +8,8 @@ rem ============================================================
 setlocal
 cd /d "%~dp0"
 echo.
+echo Carpeta de trabajo: %CD%
+echo.
 echo [1/5] Comprobando Python...
 where py >nul 2>nul
 if %errorlevel%==0 (set PY=py -3) else (set PY=python)
@@ -28,30 +30,31 @@ if not %errorlevel%==0 (
 )
 
 echo.
-echo [3/5] Descargando ffmpeg (unos 100 MB, puede tardar)...
+echo [3/5] ffmpeg...
 if exist "bin\ffmpeg.exe" if exist "bin\ffprobe.exe" (
-  echo   Ya hay ffmpeg en bin\, se reutiliza.
+  echo   Ya existen bin\ffmpeg.exe y bin\ffprobe.exe, se reutilizan.
   goto :ffmpeg_listo
 )
-if not exist bin mkdir bin
-curl -L --fail --progress-bar -o "%TEMP%\ffmpeg_win64.zip" "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+echo   Descargando ffmpeg (unos 100 MB) y copiando ffmpeg.exe y ffprobe.exe a:
+echo   %CD%\bin
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $z=Join-Path $env:TEMP 'ffmpeg_win64.zip'; $x=Join-Path $env:TEMP 'ffmpeg_extraido'; Write-Host '  descargando...'; Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile $z; Write-Host ('  descargado: ' + [math]::Round((Get-Item $z).Length/1MB) + ' MB'); if (Test-Path $x) { Remove-Item $x -Recurse -Force }; Write-Host '  descomprimiendo...'; Expand-Archive -Path $z -DestinationPath $x -Force; New-Item -ItemType Directory -Force -Path 'bin' | Out-Null; $n=0; Get-ChildItem -Path $x -Recurse -Include ffmpeg.exe,ffprobe.exe | ForEach-Object { Copy-Item $_.FullName -Destination 'bin' -Force; Write-Host ('  copiado ' + $_.Name + ' -> bin\'); $n++ }; Remove-Item $z -Force; Remove-Item $x -Recurse -Force; if ($n -lt 2) { throw 'no se encontraron ffmpeg.exe y ffprobe.exe dentro del zip' } }"
 if not %errorlevel%==0 (
-  echo   No se ha podido descargar ffmpeg. Descargalo a mano desde
-  echo   https://github.com/BtbN/FFmpeg-Builds/releases  (ffmpeg-master-latest-win64-gpl.zip)
-  echo   copia ffmpeg.exe y ffprobe.exe a la carpeta bin\ y vuelve a ejecutar este fichero.
-  pause & exit /b 1
-)
-if exist "%TEMP%\ffmpeg_extraido" rmdir /s /q "%TEMP%\ffmpeg_extraido"
-mkdir "%TEMP%\ffmpeg_extraido"
-tar -xf "%TEMP%\ffmpeg_win64.zip" -C "%TEMP%\ffmpeg_extraido"
-for /r "%TEMP%\ffmpeg_extraido" %%f in (ffmpeg.exe ffprobe.exe) do copy /y "%%f" bin\ >nul
-del "%TEMP%\ffmpeg_win64.zip"
-rmdir /s /q "%TEMP%\ffmpeg_extraido"
-if not exist "bin\ffprobe.exe" (
-  echo   ffmpeg descargado pero no se encontraron los .exe dentro. Avisa a Adrian.
+  echo.
+  echo   No se ha podido descargar o extraer ffmpeg. Hazlo a mano:
+  echo   1. Descarga ffmpeg-master-latest-win64-gpl.zip de https://github.com/BtbN/FFmpeg-Builds/releases
+  echo   2. Descomprimelo; dentro hay una carpeta bin con ffmpeg.exe y ffprobe.exe
+  echo   3. Copia esos dos ficheros a:  %CD%\bin
+  echo   4. Vuelve a ejecutar este fichero.
   pause & exit /b 1
 )
 :ffmpeg_listo
+echo   Comprobando que ffprobe arranca...
+"bin\ffprobe.exe" -version | findstr /i "ffprobe version"
+if not %errorlevel%==0 (
+  echo   bin\ffprobe.exe no arranca. Borra la carpeta bin y vuelve a ejecutar este fichero.
+  pause & exit /b 1
+)
+echo   ffmpeg listo en: %CD%\bin
 
 echo.
 echo [4/5] Construyendo el ejecutable (1-3 minutos)...
@@ -63,15 +66,17 @@ if not %errorlevel%==0 (
   pause & exit /b 1
 )
 copy /y INSTRUCCIONES.txt "dist\DiagnosticoAvid\" >nul
+echo   Ejecutable en: %CD%\dist\DiagnosticoAvid\DiagnosticoAvid.exe
+echo   (ffmpeg va dentro, en dist\DiagnosticoAvid\_internal\bin; no hace falta tocarlo)
 
 echo.
 echo [5/5] Empaquetando DiagnosticoAvid_portable.zip ...
 if exist DiagnosticoAvid_portable.zip del DiagnosticoAvid_portable.zip
-powershell -NoProfile -Command "Compress-Archive -Path 'dist\DiagnosticoAvid' -DestinationPath 'DiagnosticoAvid_portable.zip' -CompressionLevel Optimal"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path 'dist\DiagnosticoAvid' -DestinationPath 'DiagnosticoAvid_portable.zip' -CompressionLevel Optimal"
 if exist DiagnosticoAvid_portable.zip (
   echo.
-  echo   LISTO: DiagnosticoAvid_portable.zip
-  echo   Pruebalo antes de enviarlo: entra en dist\DiagnosticoAvid y abre DiagnosticoAvid.exe
+  echo   LISTO: %CD%\DiagnosticoAvid_portable.zip
+  echo   Pruebalo antes de enviarlo: abre dist\DiagnosticoAvid\DiagnosticoAvid.exe
 ) else (
   echo   No se ha creado el zip. Comprime a mano la carpeta dist\DiagnosticoAvid.
 )

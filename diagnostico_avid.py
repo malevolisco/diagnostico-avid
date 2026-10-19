@@ -245,6 +245,71 @@ def mobid_claves(mob_id):
         return {}
 
 
+def material(umid_hex):
+    """Número de material de un UMID (los 16 últimos bytes). Avid puede
+    reescribir la cabecera del UMID al guardar el MXF; el material no cambia."""
+    return (umid_hex or "")[-32:]
+
+
+def fuentes_de(mob, f, profundidad=4):
+    """Sigue las pistas de un master clip hasta sus source mobs (ficheros de
+    media, y de ahí al fichero importado o la cinta de origen) y devuelve sus
+    identificadores, el volumen donde Avid vio la media por última vez y la
+    ruta del fichero original importado, si la hay. Sigue la cadena de
+    referencias hasta 'profundidad' niveles."""
+    out, vistos = [], set()
+
+    def clips_de(comp):
+        """SourceClips contenidos en un componente (directo o dentro de una secuencia)."""
+        if comp is None:
+            return
+        sid = getattr(comp, "mob_id", None)
+        if sid is not None:
+            yield comp
+        for sub in getattr(comp, "components", None) or []:
+            yield from clips_de(sub)
+
+    def visitar(m, nivel):
+        if m is None or nivel > profundidad:
+            return
+        try:
+            pistas = list(m.tracks)
+        except Exception:
+            return
+        for t in pistas:
+            for sc in clips_de(getattr(t, "component", None)):
+                sid = sc.mob_id
+                try:
+                    if int(sid) == 0 or sid in vistos:
+                        continue
+                except Exception:
+                    continue
+                vistos.add(sid)
+                src = f.content.find_by_mob_id(sid)
+                info = {"mob_id": mobid_claves(sid), "pista": str(getattr(sc, "media_kind", "") or ""), "nivel": nivel,
+                        "volumen": None, "fichero_origen": None, "descriptor": None}
+                desc = getattr(src, "descriptor", None) if src is not None else None
+                if desc is not None:
+                    info["descriptor"] = type(desc).__name__
+                    loc = getattr(desc, "locator", None)
+                    for l in (loc if isinstance(loc, list) else [loc]) if loc else []:
+                        vol = getattr(l, "last_known_volume_utf8", None) or getattr(l, "last_known_volume", None)
+                        ruta = getattr(l, "path_utf8", None) or getattr(l, "path", None)
+                        if vol:
+                            info["volumen"] = str(vol)
+                        if ruta:
+                            info["fichero_origen"] = str(ruta)
+                out.append(info)
+                if src is not None:
+                    visitar(src, nivel + 1)
+
+    try:
+        visitar(mob, 1)
+    except Exception as e:
+        LOG.debug("fuentes_de %s: %s", getattr(mob, "name", "?"), e)
+    return out
+
+
 def edit_rate_de(mob):
     try:
         for t in mob.tracks:
@@ -295,6 +360,10 @@ def leer_bin(ruta_abs):
                         "pistas": tipos_pista(mob),
                     }
                     if tipo == "MasterMob":
+                        item["render"] = getattr(mob, "usage", None) == "precompute"  # efectos renderizados, no material
+                        item["fuentes"] = fuentes_de(mob, f)
+                        item["volumenes"] = sorted({x["volumen"] for x in item["fuentes"] if x["volumen"]})
+                        item["fichero_origen"] = next((x["fichero_origen"] for x in item["fuentes"] if x["fichero_origen"]), None)
                         res["clips"].append(item)
                     elif tipo == "CompositionMob":
                         res["secuencias"].append(item)
@@ -443,70 +512,115 @@ def agrupar_clips(mxf):
             "comentarios": next((f["comentarios"] for f in fichs if f.get("comentarios")), {}),
             "en_cuarentena": any(f["en_cuarentena"] for f in fichs),
             "proyectos": [],
+            "render": False,
         })
     clips.sort(key=lambda c: c["nombre"])
     LOG.info("Clips reconstruidos: %d", len(clips))
     return clips
 
 
-def cruzar(proyectos, bins, clips):
-    """Relaciona clips de bin (MobID) con clips físicos (UMID)."""
-    por_le = {c["clave"]: c for c in clips}
+def cruzar(proyectos, bins, clips, mxf=()):
+    """Relaciona clips de bin (MobID) con clips físicos (UMID de los MXF).
+
+    Vía principal: número de material del master clip == material del
+    material_package_umid del MXF (se prueban dos codificaciones del UUID).
+    Vía secundaria: los source mobs del clip == file_package_umid de los MXF.
+    Los clips 'precompute' (renders de efectos) se marcan y no cuentan como
+    material. Un clip físico puede pertenecer a varios proyectos."""
+    por_clave = {c["clave"]: c for c in clips}
+    por_material = {material(c["clave"]): c for c in clips if c["clave"] and not c["clave"].startswith("NOMBRE:")}
+    por_fichero_pkg = {}
+    for m in mxf:
+        for p in m.get("pistas", []):
+            if p.get("file_package_umid"):
+                por_fichero_pkg[material(p["file_package_umid"])] = m["ruta"]
+    ruta_a_clip = {r: c for c in clips for r in c["ficheros"]}
+
     coincidencias = Counter()
-    por_proyecto = defaultdict(lambda: {"clips_bin": 0, "online": 0, "offline": 0,
-                                        "claves": set(), "offline_nombres": [], "secuencias": 0})
+    por_proyecto = defaultdict(lambda: {"clips_bin": 0, "online": 0, "offline": 0, "renders": 0, "claves": set(),
+                                        "offline_detalle": [], "secuencias": 0, "volumenes": Counter()})
     for b in bins:
         if not b["ok"]:
             continue
         pr = por_proyecto[b["proyecto"]]
-        pr["secuencias"] += len(b["secuencias"])
+        pr["secuencias"] += sum(1 for s in b["secuencias"] if not s.get("uso"))
         for clip in b["clips"]:
-            pr["clips_bin"] += 1
             ids = clip.get("mob_id") or {}
             fisico, modo = None, None
             for k in ("le", "be"):
-                if ids.get(k) in por_le:
-                    fisico, modo = por_le[ids[k]], k
+                if material(ids.get(k)) in por_material:
+                    fisico, modo = por_material[material(ids[k])], k
                     break
+            if not fisico:
+                for fu in clip.get("fuentes", []):
+                    for k in ("le", "be"):
+                        ruta = por_fichero_pkg.get(material((fu.get("mob_id") or {}).get(k)))
+                        if ruta and ruta in ruta_a_clip:
+                            fisico, modo = ruta_a_clip[ruta], "fuente_" + k
+                            break
+                    if fisico:
+                        break
+            for v in clip.get("volumenes", []):
+                pr["volumenes"][v] += 1
+            if clip.get("render"):
+                pr["renders"] += 1
+                if fisico:
+                    fisico["render"] = True
+                    coincidencias[modo] += 1
+                continue
+            pr["clips_bin"] += 1
             if fisico:
                 coincidencias[modo] += 1
                 pr["online"] += 1
                 pr["claves"].add(fisico["clave"])
+                if clip.get("fichero_origen") and not fisico.get("fichero_origen"):
+                    fisico["fichero_origen"] = clip["fichero_origen"]
+                if clip.get("volumenes") and not fisico.get("volumenes"):
+                    fisico["volumenes"] = clip["volumenes"]
                 if b["proyecto"] not in fisico["proyectos"]:
                     fisico["proyectos"].append(b["proyecto"])
             else:
                 pr["offline"] += 1
-                if len(pr["offline_nombres"]) < 50:
-                    pr["offline_nombres"].append(clip["nombre"])
+                if len(pr["offline_detalle"]) < 200:
+                    pr["offline_detalle"].append({"nombre": clip["nombre"], "volumenes": clip.get("volumenes", []),
+                                                  "segundos": clip.get("segundos"), "bin": b["nombre"],
+                                                  "fichero_origen": clip.get("fichero_origen")})
 
-    huerfanos = [c for c in clips if not c["proyectos"]]
+    huerfanos = [c for c in clips if not c["proyectos"] and not c.get("render")]
+    renders = [c for c in clips if c.get("render")]
+    compartidos = [c for c in clips if len(c["proyectos"]) > 1]
     resumen_proy = []
     for p in proyectos:
-        pr = por_proyecto.get(p["nombre"], {"clips_bin": 0, "online": 0, "offline": 0, "claves": set(),
-                                             "offline_nombres": [], "secuencias": 0})
-        cs = [por_le[k] for k in pr["claves"]]
+        pr = por_proyecto.get(p["nombre"], {"clips_bin": 0, "online": 0, "offline": 0, "renders": 0, "claves": set(),
+                                             "offline_detalle": [], "secuencias": 0, "volumenes": Counter()})
+        cs = [por_clave[k] for k in pr["claves"]]
         codecs = Counter((c["codec_video"], c["resolucion"], c["fps"]) for c in cs if c["codec_video"])
         resumen_proy.append({
             "proyecto": p["nombre"],
             "bins": p["num_bins"],
             "bins_ilegibles": sum(1 for b in bins if b["proyecto"] == p["nombre"] and not b["ok"]),
             "clips_en_bin": pr["clips_bin"],
+            "renders": pr["renders"],
             "secuencias": pr["secuencias"],
             "clips_online": pr["online"],
             "clips_offline": pr["offline"],
             "clips_fisicos": len(cs),
+            "clips_compartidos": sum(1 for c in cs if len(c["proyectos"]) > 1),
             "segundos": round(sum(c["duracion"] or 0 for c in cs), 1),
             "bytes": sum(c["bytes"] for c in cs),
             "formatos": [{"codec": k[0], "resolucion": k[1], "fps": k[2], "clips": v} for k, v in codecs.most_common()],
             "mezcla_formatos": len(codecs) > 1,
-            "offline_nombres": pr["offline_nombres"],
+            "volumenes": dict(pr["volumenes"].most_common()),
+            "offline_detalle": pr["offline_detalle"],
         })
-    LOG.info("Cruce: coincidencias por codificación %s; huérfanos %d", dict(coincidencias), len(huerfanos))
+    LOG.info("Cruce: coincidencias %s; huérfanos %d; renders %d; compartidos %d", dict(coincidencias), len(huerfanos), len(renders), len(compartidos))
     return {
         "modo_coincidencia": dict(coincidencias),
         "por_proyecto": resumen_proy,
         "huerfanos": [{"nombre": c["nombre"], "clave": c["clave"], "ficheros": c["ficheros"], "duracion": c["duracion"], "bytes": c["bytes"]}
                       for c in huerfanos],
+        "renders": len(renders),
+        "compartidos": [{"nombre": c["nombre"], "proyectos": c["proyectos"], "duracion": c["duracion"]} for c in compartidos],
     }
 
 
@@ -590,7 +704,17 @@ def construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmp
                        % (len(cruce["huerfanos"]), gb(sum(h["bytes"] for h in cruce["huerfanos"])))))
     offline = sum(p["clips_offline"] for p in cruce["por_proyecto"])
     if offline:
-        avisos.append(("aviso", "%d clips de bin no tienen media en este disco (offline)." % offline))
+        vols = Counter()
+        for p in cruce["por_proyecto"]:
+            for o in p["offline_detalle"]:
+                for v in o["volumenes"]:
+                    vols[v] += 1
+        donde = ("; según los bins estaban en: " + ", ".join("%s (%d)" % kv for kv in vols.most_common(6))) if vols else ""
+        avisos.append(("aviso", "%d clips de bin no tienen media en este disco (offline)%s." % (offline, donde)))
+    if cruce.get("renders"):
+        avisos.append(("info", "%d clips físicos son renders de efectos (títulos, fundidos). Se excluyen de los brutos." % cruce["renders"]))
+    if cruce.get("compartidos"):
+        avisos.append(("info", "%d clips aparecen en los bins de más de un proyecto. En los brutos cada uno va solo al primero (configurable)." % len(cruce["compartidos"])))
     mezcla = [p["proyecto"] for p in cruce["por_proyecto"] if p["mezcla_formatos"]]
     if mezcla:
         avisos.append(("info", "Proyectos con mezcla de formatos (habrá que convertir al unir el bruto): " + ", ".join(mezcla)))
@@ -616,8 +740,10 @@ def construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmp
         "proyectos": len([p for p in proyectos if p["ficheros_avp"]]),
         "bins": len(bins),
         "bins_ilegibles": len(ilegibles),
-        "clips_en_bins": sum(len(b["clips"]) for b in bins if b["ok"]),
-        "secuencias_en_bins": sum(len(b["secuencias"]) for b in bins if b["ok"]),
+        "clips_en_bins": sum(1 for b in bins if b["ok"] for c in b["clips"] if not c.get("render")),
+        "renders_en_bins": sum(1 for b in bins if b["ok"] for c in b["clips"] if c.get("render")),
+        "clips_compartidos": len(cruce.get("compartidos", [])),
+        "secuencias_en_bins": sum(1 for b in bins if b["ok"] for s in b["secuencias"] if not s.get("uso")),
         "mxf": len(mxf),
         "mxf_error": len(errores_mxf),
         "clips_fisicos": len(clips),
@@ -666,8 +792,9 @@ def tarjeta_clip(c):
         img = "<div class='sin'>solo audio</div>"
     else:
         img = "<div class='sin'>sin miniatura</div>"
-    return ("<div class='clip'>%s<div class='t'><b title='%s'>%s</b><span>%s &middot; %s &middot; %dV/%dA</span></div></div>"
-            % (img, esc(c["nombre"]), esc(c["nombre"]), fmt_duracion(c["duracion"]), esc(c["timecode"] or "sin TC"), c["num_video"], c["num_audio"]))
+    extra = " &middot; <span title='%s'>en %d proyectos</span>" % (esc(", ".join(c["proyectos"])), len(c["proyectos"])) if len(c.get("proyectos", [])) > 1 else ""
+    return ("<div class='clip'>%s<div class='t'><b title='%s'>%s</b><span>%s &middot; %s &middot; %dV/%dA%s</span></div></div>"
+            % (img, esc(c["nombre"]), esc(c["nombre"]), fmt_duracion(c["duracion"]), esc(c["timecode"] or "sin TC"), c["num_video"], c["num_audio"], extra))
 
 
 def informe_html(resumen, proyectos, bins, clips, cruce, destino):
@@ -690,12 +817,12 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
     for a in r["avisos"]:
         h.append("<div class='aviso %s'>%s</div>" % (a["nivel"], esc(a["texto"])))
 
-    h.append("<h2>Proyectos</h2><table><tr><th>Proyecto</th><th class='n'>Bins</th><th class='n'>Clips en bin</th><th class='n'>Con media</th><th class='n'>Offline</th><th class='n'>Secuencias</th><th class='n'>Duración</th><th class='n'>GB</th><th>Formatos</th></tr>")
+    h.append("<h2>Proyectos</h2><table><tr><th>Proyecto</th><th class='n'>Bins</th><th class='n'>Clips en bin</th><th class='n'>Con media</th><th class='n'>Offline</th><th class='n'>Compartidos</th><th class='n'>Secuencias</th><th class='n'>Duración</th><th class='n'>GB</th><th>Formatos</th></tr>")
     for p in cruce["por_proyecto"]:
         fm = " ".join("<span class='tag'>%s %s %s (%d)</span>" % (esc(f["codec"]), esc(f["resolucion"]), esc(f["fps"]), f["clips"]) for f in p["formatos"])
         extra = " <span class='tag' style='background:#fef3f2'>%d bins ilegibles</span>" % p["bins_ilegibles"] if p["bins_ilegibles"] else ""
-        h.append("<tr><td>%s%s</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%s</td><td class='n'>%.2f</td><td>%s</td></tr>"
-                 % (esc(p["proyecto"]), extra, p["bins"], p["clips_en_bin"], p["clips_fisicos"], p["clips_offline"], p["secuencias"], fmt_duracion(p["segundos"]), gb(p["bytes"]), fm))
+        h.append("<tr><td>%s%s</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%s</td><td class='n'>%.2f</td><td>%s</td></tr>"
+                 % (esc(p["proyecto"]), extra, p["bins"], p["clips_en_bin"], p["clips_fisicos"], p["clips_offline"], p["clips_compartidos"], p["secuencias"], fmt_duracion(p["segundos"]), gb(p["bytes"]), fm))
     h.append("</table>")
 
     h.append("<h2>Formatos de vídeo en el disco</h2><table><tr><th>Códec</th><th>Resolución</th><th>fps</th><th class='n'>Clips</th></tr>")
@@ -711,21 +838,33 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
         for p in c["proyectos"]:
             por_proy[p].append(c)
     for p in cruce["por_proyecto"]:
-        cs = sorted(por_proy.get(p["proyecto"], []), key=lambda c: c["nombre"])
+        cs = sorted((c for c in por_proy.get(p["proyecto"], []) if not c.get("render")), key=lambda c: c["nombre"])
         h.append("<details><summary>%s &middot; %d clips &middot; %s</summary>" % (esc(p["proyecto"]), len(cs), fmt_duracion(p["segundos"])))
         bs = [b for b in bins if b["proyecto"] == p["proyecto"]]
-        h.append("<table><tr><th>Bin</th><th class='n'>Clips</th><th class='n'>Secuencias</th><th>Estado</th></tr>")
+        h.append("<table><tr><th>Bin</th><th class='n'>Clips</th><th class='n'>Renders</th><th class='n'>Secuencias</th><th>Estado</th></tr>")
         for b in bs:
             estado = "OK" if b["ok"] else "ERROR: " + esc(b["error"])
             if b["papelera"]:
                 estado += " (papelera)"
-            h.append("<tr><td>%s</td><td class='n'>%d</td><td class='n'>%d</td><td>%s</td></tr>" % (esc(b["nombre"]), len(b["clips"]), len(b["secuencias"]), estado))
+            nr = sum(1 for c in b["clips"] if c.get("render"))
+            h.append("<tr><td>%s</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td>%s</td></tr>" % (esc(b["nombre"]), len(b["clips"]) - nr, nr, len(b["secuencias"]), estado))
         h.append("</table>")
-        secs = [s for b in bs if b["ok"] for s in b["secuencias"]]
+        secs = [s for b in bs if b["ok"] for s in b["secuencias"] if not s.get("uso")]  # sin los contenedores de efectos
         if secs:
             h.append("<p><b>Secuencias:</b> " + " ".join("<span class='tag'>%s (%s)</span>" % (esc(s["nombre"]), fmt_duracion(s["segundos"])) for s in secs[:60]) + "</p>")
-        if p["offline_nombres"]:
-            h.append("<p class='muted'><b>Offline:</b> %s</p>" % esc(", ".join(p["offline_nombres"][:30])))
+        if p.get("volumenes"):
+            h.append("<p class='muted'><b>Discos donde los bins vieron la media:</b> %s</p>"
+                     % " ".join("<span class='tag'>%s (%d clips)</span>" % (esc(v), n) for v, n in p["volumenes"].items()))
+        if p["offline_detalle"]:
+            od = p["offline_detalle"]
+            h.append("<details><summary>Offline: %d clips sin media en este disco</summary><table><tr><th>Clip</th><th>Bin</th><th class='n'>Duración</th><th>Último disco conocido</th><th>Fichero importado</th></tr>" % p["clips_offline"])
+            for o in od[:200]:
+                fo = o.get("fichero_origen") or ""
+                h.append("<tr><td>%s</td><td>%s</td><td class='n'>%s</td><td>%s</td><td title='%s'>%s</td></tr>"
+                         % (esc(o["nombre"]), esc(o["bin"]), fmt_duracion(o["segundos"]), esc(", ".join(o["volumenes"]) or "—"), esc(fo), esc(fo.replace("\\", "/").rsplit("/", 1)[-1])))
+            if p["clips_offline"] > len(od):
+                h.append("<tr><td colspan='5' class='muted'>… y %d más (ver cruce.json)</td></tr>" % (p["clips_offline"] - len(od)))
+            h.append("</table></details>")
         h.append("<div class='grid'>")
         for c in cs:
             h.append(tarjeta_clip(c))
@@ -804,7 +943,7 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
 
     progreso("4/6 Reconstruyendo clips y cruzando con los bins...")
     clips = agrupar_clips(mxf)
-    cruce = cruzar(proyectos, bins, clips)
+    cruce = cruzar(proyectos, bins, clips, mxf)
 
     if hacer_miniaturas and ffmpeg_ok:
         progreso("5/6 Generando miniaturas...")

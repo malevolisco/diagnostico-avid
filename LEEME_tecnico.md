@@ -57,12 +57,17 @@ Lo que no hace: reconstruir las piezas montadas (secuencias con efectos o rótul
 
 Se crea con valores por defecto al primer uso. Claves: `modo` (`auto` | `copia` | `convertir`), `pistas_audio` (`max` | número | 0), `timecode_inicio`, `incluir_huerfanos`, `prefijo_fichero`, y `convertir` (`codec`, `ancho`, `alto`, `fps`, `bitrate`, `desentrelazar`). Si el archivo pide otro formato de ingesta, se cambia aquí sin tocar código.
 
-## Qué NO está verificado con datos reales
+## Verificado con datos reales (bins del proyecto 15 SEPT CENTROAMERICA, Media Composer 23.12.6)
 
-Probado con discos simulados (bins creados con pyavb y MXF OP-Atom DNxHD creados con ffmpeg, con V y A compartiendo UMID como hace Avid) y en Linux; el `.exe` se construye en tu Windows. Quedan por confirmar con el primer disco real:
+- pyavb lee los bins reales, incluido uno de 10 MB con 1.100 clips, en segundos.
+- Los bins guardan para cada clip el **disco donde Avid vio la media por última vez** ("DISCO 1 (E:)", "PORTATIL JULIO 2021 (H:)") y la **ruta del fichero importado** (los MP4 de "Mis vídeos" o "Downloads"). El programa sigue la cadena clip → fichero de media → origen y lo saca en el informe (tabla de offline) y en el shotlist.
+- Hay master clips que son **renders de efectos** (`usage = precompute`: títulos, fundidos de audio) y composiciones que son contenedores de efectos. Se cuentan aparte y no entran en los brutos.
+- Los bins se copian entre proyectos: `Bin1.avb` (2018) vive dentro de un proyecto de 2021. Un clip puede estar en varios proyectos; el informe lo cuenta y `config_brutos.json → clips_compartidos` decide si va a un bruto o a todos.
+- El proyecto es NTSC 29,97 con material SD 720×486 y HD. Por eso el formato de conversión por defecto es ahora "auto" (el mayoritario del proyecto), no 1080p25.
 
-- que pyavb lea bins guardados por Media Composer 2019+ (si falla, "bins ilegibles" en el informe y el resto sigue);
-- qué codificación del UMID coincide (`modo_coincidencia`);
-- si Avid escribe el nombre del proyecto dentro del MXF;
-- que el códec real del disco sea copiable (si es DNxHD o XDCAM, lo es);
-- tiempos reales: la copia va a la velocidad del disco; la conversión, a unos 2-4× tiempo real por clip según el PC.
+## Qué sigue sin verificar
+
+- El cruce bin ↔ MXF con ficheros MXF reales de Avid (el disco de media). Se compara el número de material del UMID (16 últimos bytes) en dos codificaciones, y como vía secundaria los source mobs contra el `file_package_umid` de cada MXF. `resumen.json → modo_coincidencia` dirá cuál ha funcionado.
+- Que el códec real de los MXF sea copiable (DNxHD, DV, IMX/MPEG-2 lo son).
+- Tiempos reales con miles de ficheros.
+- Timecode de los shotlists en proyectos 29,97: se calcula sin drop-frame (30 fps nominales); desviación de ~3,6 s por hora respecto al TC drop-frame de Avid.

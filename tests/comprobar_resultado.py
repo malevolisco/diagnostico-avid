@@ -37,7 +37,7 @@ def main():
         if not (carpeta / f).exists():
             fallo("falta %s" % f)
     r = json.loads((carpeta / "resumen.json").read_text(encoding="utf-8"))
-    esperado = {"proyectos": 2, "bins": 4, "bins_ilegibles": 1, "offline": 1}
+    esperado = {"proyectos": 2, "bins": 4, "bins_ilegibles": 1, "offline": 1, "renders_en_bins": 1, "clips_compartidos": 1}
     for k, v in esperado.items():
         if r.get(k) != v:
             fallo("resumen.%s = %r, esperado %r" % (k, r.get(k), v))

@@ -41,15 +41,19 @@ CONFIG_DEFECTO = {
     "timecode_inicio": "00:00:00:00",
     "incluir_huerfanos": True,
     "_incluir_huerfanos": "Los clips que no están en ningún bin van a un bruto llamado SIN_PROYECTO",
+    "incluir_renders": False,
+    "_incluir_renders": "Los renders de efectos (títulos, fundidos) no son material; false = no entran en los brutos",
+    "clips_compartidos": "primero",
+    "_clips_compartidos": "Un clip que está en varios proyectos: primero = solo en el bruto del primer proyecto (orden alfabético) | todos = en cada bruto",
     "prefijo_fichero": "BRUTO_",
     "convertir": {
         "codec": "mpeg2video",
-        "ancho": 1920,
-        "alto": 1080,
-        "fps": 25,
+        "ancho": "auto",
+        "alto": "auto",
+        "fps": "auto",
         "bitrate": "50M",
         "desentrelazar": "auto",
-        "_nota": "Por defecto MPEG-2 4:2:2 50 Mb/s 1080p25 (tipo XDCAM HD422). desentrelazar: auto | si | no"
+        "_nota": "Solo se usa cuando un proyecto mezcla formatos. auto = el formato mayoritario del proyecto (no cambia NTSC a PAL ni SD a HD). Códec MPEG-2 4:2:2 (tipo XDCAM/IMX). desentrelazar: auto = solo si hay que reescalar | si | no"
     },
     "verificar_decodificando": False,
     "_verificar_decodificando": "true = tras unir, decodifica el bruto entero para comprobarlo (lento, muy seguro)"
@@ -161,11 +165,19 @@ def plan_proyecto(clips, mxf_por_ruta, cfg):
     else:
         pistas = max(0, min(MAX_PISTAS, int(pa)))
 
+    mayoritaria = firmas.most_common(1)[0][0] if firmas else (None, 1920, 1080, "25/1", None)
+    cv = cfg["convertir"]
+    destino = {
+        "ancho": int(cv["ancho"]) if str(cv.get("ancho", "auto")) != "auto" else int(mayoritaria[1] or 1920),
+        "alto": int(cv["alto"]) if str(cv.get("alto", "auto")) != "auto" else int(mayoritaria[2] or 1080),
+        "fps_txt": str(cv["fps"]) if str(cv.get("fps", "auto")) != "auto" else str(mayoritaria[3] or "25"),
+    }
     if modo == "copia":
-        fps = fps_num(next(iter(firmas))[3]) if firmas else 25.0
+        fps = fps_num(mayoritaria[3]) if firmas else 25.0
     else:
-        fps = float(cfg["convertir"].get("fps", 25))
-    return {"modo": modo, "pistas_audio": pistas, "fps": fps, "firmas": [{"codec": k[0], "resolucion": "%sx%s" % (k[1], k[2]), "fps": k[3], "clips": v} for k, v in firmas.items()],
+        fps = fps_num(destino["fps_txt"])
+    return {"modo": modo, "pistas_audio": pistas, "fps": fps, "destino": destino,
+            "firmas": [{"codec": k[0], "resolucion": "%sx%s" % (k[1], k[2]), "fps": k[3], "clips": v} for k, v in firmas.items()],
             "clips_video": len(con_video), "clips_solo_audio": len(clips) - len(con_video)}
 
 
@@ -173,13 +185,15 @@ def args_video(plan, mxf_video, cfg):
     if plan["modo"] == "copia":
         return ["-c:v", "copy"]
     cv = cfg["convertir"]
+    d = plan["destino"]
     pv = next((p for p in mxf_video.get("pistas", []) if p["tipo"] == "video"), {})
     filtros = []
     des = cv.get("desentrelazar", "auto")
     entrelazado = (pv.get("field_order") or "progressive") not in ("progressive", "unknown", None)
-    if des == "si" or (des == "auto" and entrelazado):
+    reescala = (pv.get("ancho"), pv.get("alto")) != (d["ancho"], d["alto"])
+    if des == "si" or (des == "auto" and entrelazado and reescala):
         filtros.append("bwdif=mode=0")
-    filtros += ["scale=%d:%d:flags=lanczos" % (cv["ancho"], cv["alto"]), "fps=%s" % cv["fps"], "setsar=1"]
+    filtros += ["scale=%d:%d:flags=lanczos" % (d["ancho"], d["alto"]), "fps=%s" % d["fps_txt"], "setsar=1"]
     args = ["-vf", ",".join(filtros)]
     if cv["codec"] == "mpeg2video":
         br = str(cv["bitrate"])
@@ -257,14 +271,14 @@ def escribir_shotlist(ruta, proyecto, filas):
     ws = wb.active
     ws.title = "Shotlist"
     cab = ["Nº", "Proyecto", "Clip", "TC inicio (bruto)", "TC fin (bruto)", "Duración", "TC original", "Fecha fichero",
-           "Códec origen", "Resolución origen", "Pistas audio", "Estado", "Ficheros origen"]
+           "Códec origen", "Resolución origen", "Pistas audio", "Estado", "Ficheros origen", "Fichero importado (según bin)", "Disco de origen (según bin)"]
     ws.append(cab)
     for c in ws[1]:
         c.font = Font(bold=True)
     for fila in filas:
         ws.append([fila.get(k) for k in ["n", "proyecto", "clip", "tc_in", "tc_out", "duracion", "tc_original", "fecha",
-                                          "codec", "resolucion", "pistas", "estado", "ficheros"]])
-    anchos = [5, 24, 34, 14, 14, 11, 14, 18, 12, 14, 8, 14, 60]
+                                          "codec", "resolucion", "pistas", "estado", "ficheros", "fichero_origen", "volumenes"]])
+    anchos = [5, 24, 34, 14, 14, 11, 14, 18, 12, 14, 8, 14, 60, 50, 24]
     for i, a in enumerate(anchos):
         ws.column_dimensions[chr(65 + i)].width = a
     ws.freeze_panes = "A2"
@@ -307,11 +321,17 @@ def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso,
     pref = cfg.get("prefijo_fichero", "BRUTO_")
 
     grupos = {}
+    politica = cfg.get("clips_compartidos", "primero")
     for c in clips:
-        for p in c.get("proyectos", []):
+        if c.get("render") and not cfg.get("incluir_renders", False):
+            continue
+        proys = sorted(c.get("proyectos", []))
+        if politica == "primero" and proys:
+            proys = proys[:1]
+        for p in proys:
             grupos.setdefault(p, []).append(c)
     if cfg.get("incluir_huerfanos", True):
-        huer = [c for c in clips if not c.get("proyectos")]
+        huer = [c for c in clips if not c.get("proyectos") and not (c.get("render") and not cfg.get("incluir_renders", False))]
         if huer:
             grupos["SIN_PROYECTO"] = huer
 
@@ -348,7 +368,8 @@ def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso,
             fila = {"n": i, "proyecto": proyecto, "clip": c["nombre"], "tc_original": c.get("timecode"),
                     "fecha": mxf_por_ruta.get(c.get("fichero_video") or c["ficheros"][0], {}).get("modificado"),
                     "codec": c.get("codec_video"), "resolucion": c.get("resolucion"), "pistas": c.get("num_audio"),
-                    "ficheros": "; ".join(c["ficheros"]), "miniatura": c.get("miniatura"), "tc_in": None, "tc_out": None, "duracion": None}
+                    "ficheros": "; ".join(c["ficheros"]), "miniatura": c.get("miniatura"), "tc_in": None, "tc_out": None, "duracion": None,
+                    "fichero_origen": c.get("fichero_origen"), "volumenes": ", ".join(c.get("volumenes") or [])}
             if not c.get("fichero_video"):
                 fila["estado"] = "solo audio, no incluido"
                 filas.append(fila)

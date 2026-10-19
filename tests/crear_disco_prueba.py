@@ -68,12 +68,19 @@ def main():
             mka(nombre, M / ("%sA0%d.%s%d.mxf" % (nombre, i + 1, suf, i)), dur, 440 * (i + 1), u)
         return u
 
-    def bin_con(path, clips, secs=()):
+    def bin_con(path, clips, secs=(), renders=()):
         f = avb.file.AVBFile()
         for nombre, u in clips:
             m = f.create.Composition(mob_type="MasterMob")
             m.name = nombre
             m.length = 75
+            m.mob_id = avb.mobid.MobID(bytes_le=bytes.fromhex(u))
+            f.content.add_mob(m)
+        for nombre, u in renders:  # precompute = render de efecto (título, fundido)
+            m = f.create.Composition(mob_type="MasterMob")
+            m.name = nombre
+            m.length = 75
+            m.usage_code = 1
             m.mob_id = avb.mobid.MobID(bytes_le=bytes.fromhex(u))
             f.content.add_mob(m)
         for s in secs:
@@ -84,10 +91,12 @@ def main():
         path.parent.mkdir(parents=True, exist_ok=True)
         f.write(str(path))
 
-    # Proyecto uniforme (1080p DNxHD): copia directa. Un clip sin audio y uno offline.
+    # Proyecto uniforme (1080p DNxHD): copia directa. Un clip sin audio, uno offline
+    # y un render de título (precompute) con media física, que no debe ir al bruto.
     u1 = clip("2017 07 21", "5C0095C009487", 3)
     u2 = clip("2017 07 13", "5C0095C00948C", 2)
     u3 = clip("2017 07 21", "5C0095C009517", 2, audios=0)
+    ur = clip("Title: 1", "5C0095C00TITL", 1, audios=0)
     P = D / "15 SEPT CENTROAMERICA"
     P.mkdir()
     (P / "15 SEPT CENTROAMERICA.avp").write_bytes(b"avp")
@@ -95,7 +104,7 @@ def main():
     bin_con(P / "15 SEPT CENTROAMERICA Bin.avb",
             [("2017 07 21", u1), ("2017 07 13", u2), ("2017 07 21", u3),
              ("CLIP OFFLINE", "060A2B340101010501010D00130000000000000000000000000000000000FFFF")],
-            ["PIEZA 15 SEPT"])
+            ["PIEZA 15 SEPT"], renders=[("Title: 1", ur)])
     bin_con(P / "Trash" / "viejo.avb", [("2017 07 21", u1)])
 
     # Proyecto con mezcla 720p/1080p: conversión. Un bin corrupto.
@@ -104,7 +113,8 @@ def main():
     P = D / "ABORTO"
     P.mkdir()
     (P / "ABORTO.avp").write_bytes(b"avp")
-    bin_con(P / "EDICION.avb", [("2018-10-30T013549Z", u4), ("2018_21043491-c", u5)], ["ABORTO PIEZA", "ABORTO TOTAL"])
+    # u2 también está aquí: clip compartido entre dos proyectos.
+    bin_con(P / "EDICION.avb", [("2018-10-30T013549Z", u4), ("2018_21043491-c", u5), ("2017 07 13", u2)], ["ABORTO PIEZA", "ABORTO TOTAL"])
     (P / "Bin corrupto.avb").write_bytes(b"Domain\x00basura" * 40)
 
     # Huérfano con vídeo, solo-audio huérfano y fichero en cuarentena.

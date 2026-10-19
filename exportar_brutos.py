@@ -271,14 +271,14 @@ def escribir_shotlist(ruta, proyecto, filas):
     ws = wb.active
     ws.title = "Shotlist"
     cab = ["Nº", "Proyecto", "Clip", "TC inicio (bruto)", "TC fin (bruto)", "Duración", "TC original", "Fecha fichero",
-           "Códec origen", "Resolución origen", "Pistas audio", "Estado", "Ficheros origen", "Fichero importado (según bin)", "Disco de origen (según bin)"]
+           "Códec origen", "Resolución origen", "Pistas audio", "Estado", "Ficheros origen", "Fichero importado (según bin)", "Disco de origen (según bin)", "Origen", "Referencia agencia", "Slug"]
     ws.append(cab)
     for c in ws[1]:
         c.font = Font(bold=True)
     for fila in filas:
         ws.append([fila.get(k) for k in ["n", "proyecto", "clip", "tc_in", "tc_out", "duracion", "tc_original", "fecha",
-                                          "codec", "resolucion", "pistas", "estado", "ficheros", "fichero_origen", "volumenes"]])
-    anchos = [5, 24, 34, 14, 14, 11, 14, 18, 12, 14, 8, 14, 60, 50, 24]
+                                          "codec", "resolucion", "pistas", "estado", "ficheros", "fichero_origen", "volumenes", "origen", "ref_agencia", "slug"]])
+    anchos = [5, 24, 34, 14, 14, 11, 14, 18, 12, 14, 8, 14, 60, 50, 24, 20, 18, 40]
     for i, a in enumerate(anchos):
         ws.column_dimensions[chr(65 + i)].width = a
     ws.freeze_panes = "A2"
@@ -369,7 +369,8 @@ def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso,
                     "fecha": mxf_por_ruta.get(c.get("fichero_video") or c["ficheros"][0], {}).get("modificado"),
                     "codec": c.get("codec_video"), "resolucion": c.get("resolucion"), "pistas": c.get("num_audio"),
                     "ficheros": "; ".join(c["ficheros"]), "miniatura": c.get("miniatura"), "tc_in": None, "tc_out": None, "duracion": None,
-                    "fichero_origen": c.get("fichero_origen"), "volumenes": ", ".join(c.get("volumenes") or [])}
+                    "fichero_origen": c.get("fichero_origen"), "volumenes": ", ".join(c.get("volumenes") or []),
+                    "origen": c.get("origen"), "ref_agencia": (c.get("origen_detalle") or {}).get("id"), "slug": (c.get("origen_detalle") or {}).get("slug")}
             if not c.get("fichero_video"):
                 fila["estado"] = "solo audio, no incluido"
                 filas.append(fila)

@@ -139,6 +139,59 @@ def localizar_ffmpeg():
 
 
 # ---------------------------------------------------------------------------
+# Origen del material (según el fichero importado que recuerda el bin)
+# ---------------------------------------------------------------------------
+
+PATRONES_ORIGEN_DEFECTO = {
+    "_comentario": "Reglas para clasificar el origen de un clip a partir del nombre del fichero importado (según el bin) o del nombre del clip. "
+                   "Se aplican en orden; la primera que coincide gana. 'campo': fichero_origen | nombre. 'grupos' nombra los grupos capturados de la expresión regular.",
+    "reglas": [
+        {"origen": "Agencia Reuters", "campo": "fichero_origen",
+         "regex": r"(?P<fecha>\d{4}-\d{2}-\d{2})T(?P<hora>\d{6})Z_\d+_(?P<id>[A-Z0-9]+)_RTR[A-Z0-9]*_[A-Z]_(?P<num>\d+)-(?P<slug>[^/\\]+?)\.(?:MP4|MXF|MOV|M4V)$",
+         "grupos": ["id", "slug", "fecha"]},
+        {"origen": "Cámara (tarjeta P2)", "campo": "nombre", "regex": r"^\d{4}[A-Z0-9]{2}(\.new)?(\.\d+)?$", "grupos": []},
+        {"origen": "Fichero importado", "campo": "fichero_origen", "regex": r"\.(?:MP4|MOV|MXF|M4V|AVI|MTS|M2T)$", "grupos": []}
+    ]
+}
+
+
+def cargar_patrones_origen():
+    ruta = carpeta_base() / "config_origen.json"
+    try:
+        if not ruta.exists():
+            with open(ruta, "w", encoding="utf-8") as f:
+                json.dump(PATRONES_ORIGEN_DEFECTO, f, ensure_ascii=False, indent=2)
+            datos = PATRONES_ORIGEN_DEFECTO
+        else:
+            with open(ruta, encoding="utf-8") as f:
+                datos = json.load(f)
+    except Exception as e:
+        LOG.error("config_origen.json ilegible (%s); se usan las reglas por defecto", e)
+        datos = PATRONES_ORIGEN_DEFECTO
+    reglas = []
+    for r in datos.get("reglas", []):
+        try:
+            reglas.append((r["origen"], r.get("campo", "fichero_origen"), re.compile(r["regex"], re.IGNORECASE), r.get("grupos", [])))
+        except Exception as e:
+            LOG.error("Regla de origen inválida %s: %s", r, e)
+    return reglas
+
+
+def clasificar_origen(reglas, nombre, fichero_origen):
+    """Devuelve (origen, detalle). detalle = grupos capturados (id, slug...)."""
+    base = (fichero_origen or "").replace("\\", "/").rsplit("/", 1)[-1]
+    for origen, campo, rx, grupos in reglas:
+        texto = base if campo == "fichero_origen" else (nombre or "")
+        if not texto:
+            continue
+        m = rx.search(texto)
+        if m:
+            detalle = {g: m.group(g) for g in grupos if g in m.groupdict() and m.group(g)}
+            return origen, detalle
+    return "Sin determinar", {}
+
+
+# ---------------------------------------------------------------------------
 # Paso 1: inventario del disco
 # ---------------------------------------------------------------------------
 
@@ -333,7 +386,7 @@ def tipos_pista(mob):
     return dict(tipos)
 
 
-def leer_bin(ruta_abs):
+def leer_bin(ruta_abs, reglas_origen=()):
     """Lee un bin con pyavb. Devuelve dict con clips y secuencias o error."""
     res = {"ok": False, "error": None, "clips": [], "secuencias": [], "otros": 0}
     if not PYAVB_OK:
@@ -364,6 +417,7 @@ def leer_bin(ruta_abs):
                         item["fuentes"] = fuentes_de(mob, f)
                         item["volumenes"] = sorted({x["volumen"] for x in item["fuentes"] if x["volumen"]})
                         item["fichero_origen"] = next((x["fichero_origen"] for x in item["fuentes"] if x["fichero_origen"]), None)
+                        item["origen"], item["origen_detalle"] = clasificar_origen(reglas_origen, item["nombre"], item["fichero_origen"])
                         res["clips"].append(item)
                     elif tipo == "CompositionMob":
                         res["secuencias"].append(item)
@@ -380,13 +434,14 @@ def leer_bin(ruta_abs):
 
 def leer_bins(proyectos, origen, progreso):
     bins_out = []
+    reglas = cargar_patrones_origen()
     total = sum(p["num_bins"] for p in proyectos)
     i = 0
     for p in proyectos:
         for b in p["bins"]:
             i += 1
             progreso("Bins: %d/%d  %s" % (i, total, b["nombre"]))
-            r = leer_bin(Path(origen) / b["ruta"])
+            r = leer_bin(Path(origen) / b["ruta"], reglas)
             r.update({"proyecto": p["nombre"], "ruta": b["ruta"], "nombre": b["nombre"], "papelera": b["papelera"]})
             bins_out.append(r)
     LOG.info("Bins leídos: %d (%d con error)", len(bins_out), sum(1 for b in bins_out if not b["ok"]))
@@ -513,6 +568,8 @@ def agrupar_clips(mxf):
             "en_cuarentena": any(f["en_cuarentena"] for f in fichs),
             "proyectos": [],
             "render": False,
+            "origen": "Sin determinar",
+            "origen_detalle": {},
         })
     clips.sort(key=lambda c: c["nombre"])
     LOG.info("Clips reconstruidos: %d", len(clips))
@@ -538,7 +595,7 @@ def cruzar(proyectos, bins, clips, mxf=()):
 
     coincidencias = Counter()
     por_proyecto = defaultdict(lambda: {"clips_bin": 0, "online": 0, "offline": 0, "renders": 0, "claves": set(),
-                                        "offline_detalle": [], "secuencias": 0, "volumenes": Counter()})
+                                        "offline_detalle": [], "secuencias": 0, "volumenes": Counter(), "origenes": Counter()})
     for b in bins:
         if not b["ok"]:
             continue
@@ -575,6 +632,8 @@ def cruzar(proyectos, bins, clips, mxf=()):
                 pr["claves"].add(fisico["clave"])
                 if clip.get("fichero_origen") and not fisico.get("fichero_origen"):
                     fisico["fichero_origen"] = clip["fichero_origen"]
+                if clip.get("origen") and (not fisico.get("origen") or fisico["origen"] == "Sin determinar"):
+                    fisico["origen"], fisico["origen_detalle"] = clip["origen"], clip.get("origen_detalle", {})
                 if clip.get("volumenes") and not fisico.get("volumenes"):
                     fisico["volumenes"] = clip["volumenes"]
                 if b["proyecto"] not in fisico["proyectos"]:
@@ -584,7 +643,8 @@ def cruzar(proyectos, bins, clips, mxf=()):
                 if len(pr["offline_detalle"]) < 200:
                     pr["offline_detalle"].append({"nombre": clip["nombre"], "volumenes": clip.get("volumenes", []),
                                                   "segundos": clip.get("segundos"), "bin": b["nombre"],
-                                                  "fichero_origen": clip.get("fichero_origen")})
+                                                  "fichero_origen": clip.get("fichero_origen"), "origen": clip.get("origen")})
+            pr["origenes"][clip.get("origen") or "Sin determinar"] += 1
 
     huerfanos = [c for c in clips if not c["proyectos"] and not c.get("render")]
     renders = [c for c in clips if c.get("render")]
@@ -592,7 +652,7 @@ def cruzar(proyectos, bins, clips, mxf=()):
     resumen_proy = []
     for p in proyectos:
         pr = por_proyecto.get(p["nombre"], {"clips_bin": 0, "online": 0, "offline": 0, "renders": 0, "claves": set(),
-                                             "offline_detalle": [], "secuencias": 0, "volumenes": Counter()})
+                                             "offline_detalle": [], "secuencias": 0, "volumenes": Counter(), "origenes": Counter()})
         cs = [por_clave[k] for k in pr["claves"]]
         codecs = Counter((c["codec_video"], c["resolucion"], c["fps"]) for c in cs if c["codec_video"])
         resumen_proy.append({
@@ -611,6 +671,7 @@ def cruzar(proyectos, bins, clips, mxf=()):
             "formatos": [{"codec": k[0], "resolucion": k[1], "fps": k[2], "clips": v} for k, v in codecs.most_common()],
             "mezcla_formatos": len(codecs) > 1,
             "volumenes": dict(pr["volumenes"].most_common()),
+            "origenes": dict(pr["origenes"].most_common()),
             "offline_detalle": pr["offline_detalle"],
         })
     LOG.info("Cruce: coincidencias %s; huérfanos %d; renders %d; compartidos %d", dict(coincidencias), len(huerfanos), len(renders), len(compartidos))
@@ -728,6 +789,10 @@ def construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmp
         avisos.append(("error", "Ningún clip de bin ha coincidido con ningún MXF. El cruce por identificador no funciona con estos ficheros; revisar con Adrián."))
     if tags_comentario:
         avisos.append(("info", "Metadatos de usuario encontrados dentro de los MXF: " + ", ".join(sorted(tags_comentario))))
+    origenes_tot = sum((Counter(p.get("origenes", {})) for p in cruce["por_proyecto"]), Counter())
+    if origenes_tot:
+        avisos.append(("info", "Origen del material según los bins: " + ", ".join("%s %d" % (o, n) for o, n in origenes_tot.most_common())
+                       + ". Reglas en config_origen.json."))
 
     return {
         "version": VERSION,
@@ -743,6 +808,7 @@ def construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmp
         "clips_en_bins": sum(1 for b in bins if b["ok"] for c in b["clips"] if not c.get("render")),
         "renders_en_bins": sum(1 for b in bins if b["ok"] for c in b["clips"] if c.get("render")),
         "clips_compartidos": len(cruce.get("compartidos", [])),
+        "origenes": dict(sum((Counter(p.get("origenes", {})) for p in cruce["por_proyecto"]), Counter()).most_common()),
         "secuencias_en_bins": sum(1 for b in bins if b["ok"] for s in b["secuencias"] if not s.get("uso")),
         "mxf": len(mxf),
         "mxf_error": len(errores_mxf),
@@ -852,18 +918,21 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
         secs = [s for b in bs if b["ok"] for s in b["secuencias"] if not s.get("uso")]  # sin los contenedores de efectos
         if secs:
             h.append("<p><b>Secuencias:</b> " + " ".join("<span class='tag'>%s (%s)</span>" % (esc(s["nombre"]), fmt_duracion(s["segundos"])) for s in secs[:60]) + "</p>")
+        if p.get("origenes"):
+            h.append("<p class='muted'><b>Origen del material (según los bins):</b> %s</p>"
+                     % " ".join("<span class='tag'>%s (%d)</span>" % (esc(o), n) for o, n in p["origenes"].items()))
         if p.get("volumenes"):
             h.append("<p class='muted'><b>Discos donde los bins vieron la media:</b> %s</p>"
                      % " ".join("<span class='tag'>%s (%d clips)</span>" % (esc(v), n) for v, n in p["volumenes"].items()))
         if p["offline_detalle"]:
             od = p["offline_detalle"]
-            h.append("<details><summary>Offline: %d clips sin media en este disco</summary><table><tr><th>Clip</th><th>Bin</th><th class='n'>Duración</th><th>Último disco conocido</th><th>Fichero importado</th></tr>" % p["clips_offline"])
+            h.append("<details><summary>Offline: %d clips sin media en este disco</summary><table><tr><th>Clip</th><th>Bin</th><th class='n'>Duración</th><th>Origen</th><th>Último disco conocido</th><th>Fichero importado</th></tr>" % p["clips_offline"])
             for o in od[:200]:
                 fo = o.get("fichero_origen") or ""
-                h.append("<tr><td>%s</td><td>%s</td><td class='n'>%s</td><td>%s</td><td title='%s'>%s</td></tr>"
-                         % (esc(o["nombre"]), esc(o["bin"]), fmt_duracion(o["segundos"]), esc(", ".join(o["volumenes"]) or "—"), esc(fo), esc(fo.replace("\\", "/").rsplit("/", 1)[-1])))
+                h.append("<tr><td>%s</td><td>%s</td><td class='n'>%s</td><td>%s</td><td>%s</td><td title='%s'>%s</td></tr>"
+                         % (esc(o["nombre"]), esc(o["bin"]), fmt_duracion(o["segundos"]), esc(o.get("origen") or ""), esc(", ".join(o["volumenes"]) or "—"), esc(fo), esc(fo.replace("\\", "/").rsplit("/", 1)[-1])))
             if p["clips_offline"] > len(od):
-                h.append("<tr><td colspan='5' class='muted'>… y %d más (ver cruce.json)</td></tr>" % (p["clips_offline"] - len(od)))
+                h.append("<tr><td colspan='6' class='muted'>… y %d más (ver cruce.json)</td></tr>" % (p["clips_offline"] - len(od)))
             h.append("</table></details>")
         h.append("<div class='grid'>")
         for c in cs:

@@ -37,11 +37,11 @@ if exist "bin\ffmpeg.exe" if exist "bin\ffprobe.exe" (
 )
 echo   Descargando ffmpeg (unos 100 MB) y copiando ffmpeg.exe y ffprobe.exe a:
 echo   %CD%\bin
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $z=Join-Path $env:TEMP 'ffmpeg_win64.zip'; $x=Join-Path $env:TEMP 'ffmpeg_extraido'; Write-Host '  descargando...'; Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile $z; Write-Host ('  descargado: ' + [math]::Round((Get-Item $z).Length/1MB) + ' MB'); if (Test-Path $x) { Remove-Item $x -Recurse -Force }; Write-Host '  descomprimiendo...'; Expand-Archive -Path $z -DestinationPath $x -Force; New-Item -ItemType Directory -Force -Path 'bin' | Out-Null; $n=0; Get-ChildItem -Path $x -Recurse -Include ffmpeg.exe,ffprobe.exe | ForEach-Object { Copy-Item $_.FullName -Destination 'bin' -Force; Write-Host ('  copiado ' + $_.Name + ' -> bin\'); $n++ }; Remove-Item $z -Force; Remove-Item $x -Recurse -Force; if ($n -lt 2) { throw 'no se encontraron ffmpeg.exe y ffprobe.exe dentro del zip' } }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $z=Join-Path $env:TEMP 'ffmpeg_win64.zip'; $x=Join-Path $env:TEMP 'ffmpeg_extraido'; Write-Host '  descargando...'; Invoke-WebRequest -Uri 'https://github.com/GyanD/codexffmpeg/releases/download/7.1.1/ffmpeg-7.1.1-essentials_build.zip' -OutFile $z; Write-Host ('  descargado: ' + [math]::Round((Get-Item $z).Length/1MB) + ' MB'); if (Test-Path $x) { Remove-Item $x -Recurse -Force }; Write-Host '  descomprimiendo...'; Expand-Archive -Path $z -DestinationPath $x -Force; New-Item -ItemType Directory -Force -Path 'bin' | Out-Null; $n=0; Get-ChildItem -Path $x -Recurse -Include ffmpeg.exe,ffprobe.exe | ForEach-Object { Copy-Item $_.FullName -Destination 'bin' -Force; Write-Host ('  copiado ' + $_.Name + ' -> bin\'); $n++ }; Remove-Item $z -Force; Remove-Item $x -Recurse -Force; if ($n -lt 2) { throw 'no se encontraron ffmpeg.exe y ffprobe.exe dentro del zip' } }"
 if not %errorlevel%==0 (
   echo.
   echo   No se ha podido descargar o extraer ffmpeg. Hazlo a mano:
-  echo   1. Descarga ffmpeg-master-latest-win64-gpl.zip de https://github.com/BtbN/FFmpeg-Builds/releases
+  echo   1. Descarga ffmpeg-7.1.1-essentials_build.zip de https://github.com/GyanD/codexffmpeg/releases/tag/7.1.1
   echo   2. Descomprimelo; dentro hay una carpeta bin con ffmpeg.exe y ffprobe.exe
   echo   3. Copia esos dos ficheros a:  %CD%\bin
   echo   4. Vuelve a ejecutar este fichero.

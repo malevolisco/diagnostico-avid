@@ -138,6 +138,24 @@ def localizar_ffmpeg():
     return None, None
 
 
+def leer_build():
+    """Identificador de la build (build.txt lo escribe GitHub Actions); "local" si no existe."""
+    candidatos = [carpeta_base() / "build.txt"]
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        candidatos.insert(0, Path(sys._MEIPASS) / "build.txt")
+    for c in candidatos:
+        try:
+            texto = c.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if texto:
+            return texto
+    return "local"
+
+
+BUILD = leer_build()
+
+
 # ---------------------------------------------------------------------------
 # Origen del material (según el fichero importado que recuerda el bin)
 # ---------------------------------------------------------------------------
@@ -796,6 +814,7 @@ def construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmp
 
     return {
         "version": VERSION,
+        "build": BUILD,
         "fecha": ahora_txt(),
         "origen": str(origen),
         "ficheros": len(ficheros),
@@ -867,8 +886,8 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
     r = resumen
     h = []
     h.append("<!doctype html><html lang='es'><head><meta charset='utf-8'><title>Diagnóstico disco Avid</title><style>%s</style></head><body>" % CSS)
-    h.append("<header><h1>Diagnóstico del disco de edición Avid</h1><p>%s &middot; analizado el %s &middot; versión %s</p></header><main>"
-             % (esc(r["origen"]), esc(r["fecha"]), VERSION))
+    h.append("<header><h1>Diagnóstico del disco de edición Avid</h1><p>%s &middot; analizado el %s &middot; versión %s (%s)</p></header><main>"
+             % (esc(r["origen"]), esc(r["fecha"]), VERSION, esc(BUILD)))
 
     h.append("<div class='kpis'>")
     for v, k in [(r["proyectos"], "proyectos"), (r["clips_fisicos"], "clips con media"), (fmt_duracion(r["segundos_media"]), "duración total"),
@@ -956,7 +975,7 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
                         fmt_duracion(b["segundos"]), gb(b["bytes"]), esc(b["estado"])))
         h.append("</table><p class='muted'>Junto a cada bruto hay un shotlist Excel con el timecode de cada clip y una hoja de contactos HTML.</p>")
 
-    h.append("<footer>Generado por diagnostico_avid.py v%s. No se ha modificado nada en el disco de origen.</footer></main></body></html>" % VERSION)
+    h.append("<footer>Generado por diagnostico_avid.py v%s, %s. No se ha modificado nada en el disco de origen.</footer></main></body></html>" % (VERSION, esc(BUILD)))
     (destino / "informe.html").write_text("\n".join(h), encoding="utf-8")
 
 
@@ -989,7 +1008,7 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
     fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     LOG.addHandler(fh)
     LOG.setLevel(logging.INFO)
-    LOG.info("Diagnóstico v%s. Origen=%s Destino=%s Python=%s pyavb=%s", VERSION, origen, destino, sys.version.split()[0], PYAVB_OK)
+    LOG.info("Diagnóstico v%s (%s). Origen=%s Destino=%s Python=%s pyavb=%s", VERSION, BUILD, origen, destino, sys.version.split()[0], PYAVB_OK)
 
     ffmpeg, ffprobe = localizar_ffmpeg()
     ffmpeg_ok = bool(ffmpeg)
@@ -1071,7 +1090,7 @@ def lanzar_gui():
     from tkinter import filedialog, messagebox, ttk
 
     raiz = tk.Tk()
-    raiz.title("Diagnóstico de disco Avid — v%s" % VERSION)
+    raiz.title("Diagnóstico de disco Avid — v%s (%s)" % (VERSION, BUILD))
     raiz.geometry("780x600")
     raiz.minsize(640, 420)
 

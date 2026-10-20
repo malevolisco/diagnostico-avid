@@ -8,10 +8,10 @@ genera por cada proyecto UN solo fichero MXF OP1a con todos sus clips
 encadenados, más un shotlist Excel (timecode de cada clip dentro del bruto)
 y una hoja de contactos HTML con las miniaturas.
 
-Reparto: cada proyecto se parte en un bruto por tarjeta de cámara (carpeta de la
-tarjeta según el bin, cámara P2 y saltos de fecha de la media). El material de
-agencias va siempre a un bruto _AGENCIAS y las piezas renderizadas y los renders
-de efectos a un bruto _PIEZAS, ambos por proyecto.
+Reparto: el material de cámara de cada proyecto se parte en un bruto por tarjeta,
+por tandas de volcado (fecha en que Avid escribió la media). Aparte, por proyecto:
+_AGENCIAS (origen de agencia según el bin), _IMPORTADOS (ficheros importados que
+no son de tarjeta) y _PIEZAS (piezas renderizadas y renders de efectos).
 
 Modo de trabajo por bruto:
   - "copia":     todos los clips comparten códec, resolución, fps y formato
@@ -58,7 +58,11 @@ CONFIG_DEFECTO = {
     "partir_por_tarjeta": True,
     "_partir_por_tarjeta": "true = un bruto por tarjeta de cámara dentro de cada proyecto (_T01, _T02...) | false = un bruto por proyecto",
     "tarjeta_hueco_horas": 2,
-    "_tarjeta_hueco_horas": "Dentro de una misma carpeta de tarjeta y cámara, un salto de más de estas horas entre clips (fecha de la media) se considera otra tarjeta",
+    "_tarjeta_hueco_horas": "Un salto de más de estas horas entre clips (fecha en que se escribió la media en el disco de Avid) se considera otra tarjeta",
+    "tarjeta_minimo_minutos": 5,
+    "_tarjeta_minimo_minutos": "Una tanda con menos de estos minutos de material se junta con la tanda más cercana del mismo origen (si está a menos de 24 h). 0 = no juntar",
+    "importados_aparte": True,
+    "_importados_aparte": "Los ficheros importados (MP4 de descargas, móvil, agencias no reconocidas...: el bin guarda su ruta y no es una tarjeta) van al bruto _IMPORTADOS del proyecto",
     "agencias_aparte": True,
     "origenes_agencia": ["Agencia"],
     "_origenes_agencia": "Clips cuyo origen (según config_origen.json) empieza por alguno de estos textos van al bruto _AGENCIAS del proyecto",
@@ -233,9 +237,10 @@ def duracion_ffprobe(ffprobe, ruta):
 # Reparto en brutos: tarjetas, agencias y piezas
 # ---------------------------------------------------------------------------
 
-# Carpetas que cuelgan de la raíz de una tarjeta de cámara (P2, XDCAM/XAVC, AVCHD, foto/vídeo genérico)
+# Carpetas que cuelgan de la raíz de una tarjeta de cámara (P2, XDCAM/XAVC, AVCHD, foto/vídeo genérico).
+# El nombre de un clip P2 (0016Q3) NO sirve para saber la tarjeta: en el disco real de México, clips
+# grabados con segundos de diferencia se llaman 00016R, 0002CI, 000328.
 MARCAS_TARJETA = {"CONTENTS", "PRIVATE", "DCIM", "XDROOT", "BPAV", "AVCHD", "M4ROOT", "CLIPR"}
-RE_P2 = re.compile(r"^[0-9A-F]{4}([A-Z0-9]{2})(?:\.new)?(?:\.\d+)?$", re.IGNORECASE)  # 0016Q3, 0016Q3.new.01: Q3 = cámara
 
 
 def carpeta_tarjeta(ruta):
@@ -260,33 +265,59 @@ def fecha_media(c, mxf_por_ruta):
     return None
 
 
+def _juntar_pequenas(tandas, minimo_seg, max_seg=24 * 3600):
+    """Junta cada tanda con menos de minimo_seg de material con la tanda vecina más cercana en el
+    tiempo, si está a menos de max_seg. tandas: listas de (fecha, clip) ordenadas por fecha."""
+    duracion = lambda t: sum(c.get("duracion") or 0 for _, c in t)
+    tandas = [list(t) for t in tandas]
+    i = 0
+    while minimo_seg and len(tandas) > 1 and i < len(tandas):
+        if duracion(tandas[i]) >= minimo_seg:
+            i += 1
+            continue
+        vecinas = []
+        if i > 0 and tandas[i][0][0] and tandas[i - 1][-1][0]:
+            vecinas.append(((tandas[i][0][0] - tandas[i - 1][-1][0]).total_seconds(), i - 1))
+        if i + 1 < len(tandas) and tandas[i + 1][0][0] and tandas[i][-1][0]:
+            vecinas.append(((tandas[i + 1][0][0] - tandas[i][-1][0]).total_seconds(), i + 1))
+        vecinas = [v for v in vecinas if v[0] <= max_seg]
+        if not vecinas:
+            i += 1
+            continue
+        a, b = sorted((i, min(vecinas)[1]))
+        tandas[a] += tandas.pop(b)
+        i = 0
+    return tandas
+
+
 def partir_por_tarjeta(cs, mxf_por_ruta, cfg):
-    """Agrupa los clips por tarjeta: misma carpeta de tarjeta (si el bin la guarda) y misma cámara P2,
-    y dentro de eso se parte cuando hay un salto de fechas mayor que tarjeta_hueco_horas.
-    Devuelve [(clips, info)] ordenado por fecha; info: carpeta, camara, desde, hasta."""
+    """Agrupa los clips por tarjeta. Lo que hay en el disco real: los clips P2 no guardan en el bin la
+    ruta de la tarjeta y su nombre no la indica, así que se usa la fecha en que Avid escribió la media
+    (cada volcado de tarjeta es una tanda): un salto de más de tarjeta_hueco_horas abre otra tarjeta, y
+    las tandas de menos de tarjeta_minimo_minutos se juntan con la más cercana. Si el bin sí guarda la
+    carpeta de la tarjeta (CONTENTS, PRIVATE...), se separa también por ella.
+    Devuelve [(clips, info)] por fecha; info: carpeta, desde, hasta."""
     hueco = dt.timedelta(hours=float(cfg.get("tarjeta_hueco_horas", 2)))
-    por_clave = defaultdict(list)
+    minimo = 60 * float(cfg.get("tarjeta_minimo_minutos", 5))
+    por_carpeta = defaultdict(list)
     for c in cs:
-        m = RE_P2.match(c.get("nombre") or "")
-        por_clave[(carpeta_tarjeta(c.get("fichero_origen")), m.group(1).upper() if m else None)].append(c)
-    tarjetas = []
-    for (carpeta, camara), grupo in por_clave.items():
-        grupo.sort(key=lambda c: (fecha_media(c, mxf_por_ruta) or dt.datetime.min, c["nombre"]))
-        actual = []
-        for c in grupo:
-            f = fecha_media(c, mxf_por_ruta)
-            previa = fecha_media(actual[-1], mxf_por_ruta) if actual else None
-            if actual and f and previa and f - previa > hueco:
-                tarjetas.append((actual, carpeta, camara))
-                actual = []
-            actual.append(c)
-        tarjetas.append((actual, carpeta, camara))
+        por_carpeta[carpeta_tarjeta(c.get("fichero_origen"))].append(c)
     salida = []
-    for grupo, carpeta, camara in tarjetas:
-        fechas = [f for f in (fecha_media(c, mxf_por_ruta) for c in grupo) if f]
-        salida.append((grupo, {"carpeta": carpeta, "camara": camara, "desde": min(fechas) if fechas else None,
-                               "hasta": max(fechas) if fechas else None}))
-    salida.sort(key=lambda t: (t[1]["desde"] or dt.datetime.max, t[1]["carpeta"] or "", t[1]["camara"] or ""))
+    for carpeta, grupo in por_carpeta.items():
+        fechados = sorted(((fecha_media(c, mxf_por_ruta), c) for c in grupo), key=lambda t: (t[0] or dt.datetime.min, t[1]["nombre"]))
+        tandas, actual = [], []
+        for f, c in fechados:
+            previa = actual[-1][0] if actual else None
+            if actual and f and previa and f - previa > hueco:
+                tandas.append(actual)
+                actual = []
+            actual.append((f, c))
+        tandas.append(actual)
+        for t in _juntar_pequenas(tandas, minimo):
+            fechas = [f for f, _ in t if f]
+            salida.append(([c for _, c in t], {"carpeta": carpeta, "desde": min(fechas) if fechas else None,
+                                               "hasta": max(fechas) if fechas else None}))
+    salida.sort(key=lambda t: (t[1]["desde"] or dt.datetime.max, t[1]["carpeta"] or ""))
     return salida
 
 
@@ -336,6 +367,9 @@ def grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg):
         resto = [c for c in normales if c not in piezas]
         agencias = [c for c in resto if cfg.get("agencias_aparte", True) and prefijos and str(c.get("origen") or "").startswith(prefijos)]
         resto = [c for c in resto if c not in agencias]
+        importados = [c for c in resto if cfg.get("importados_aparte", True) and c.get("fichero_origen")
+                      and not carpeta_tarjeta(c["fichero_origen"])]
+        resto = [c for c in resto if c not in importados]
         if resto and cfg.get("partir_por_tarjeta", True):
             tarjetas = partir_por_tarjeta(resto, mxf_por_ruta, cfg)
             for n, (cs, info) in enumerate(tarjetas, 1):
@@ -344,10 +378,7 @@ def grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg):
                 partes = ["tarjeta %d de %d" % (n, len(tarjetas))]
                 if info["desde"]:
                     partes.append(info["desde"].strftime("%d/%m/%Y %H:%M") + (" – " + info["hasta"].strftime("%d/%m/%Y %H:%M") if info["hasta"] != info["desde"] else ""))
-                if info["carpeta"]:
-                    partes.append("carpeta " + info["carpeta"].rsplit("/", 1)[-1])
-                if info["camara"]:
-                    partes.append("cámara P2 " + info["camara"])
+                partes.append("carpeta " + info["carpeta"].rsplit("/", 1)[-1] if info["carpeta"] else "volcado")
                 grupos.append({"nombre": proyecto + sufijo, "base": base + sufijo, "proyecto": proyecto, "tipo": "tarjeta",
                                "contenido": " · ".join(partes), "clips": cs})
         elif resto:
@@ -356,6 +387,12 @@ def grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg):
             cuenta = Counter(c.get("origen") for c in agencias)
             grupos.append({"nombre": proyecto + "_AGENCIAS", "base": base + "_AGENCIAS", "proyecto": proyecto, "tipo": "agencias",
                            "contenido": "agencias: " + ", ".join("%s %d" % kv for kv in cuenta.most_common()), "clips": agencias})
+        if importados:
+            carpetas = Counter(str(c["fichero_origen"]).replace("\\", "/").rsplit("/", 2)[-2] if "/" in str(c["fichero_origen"]).replace("\\", "/") else "?"
+                               for c in importados)
+            grupos.append({"nombre": proyecto + "_IMPORTADOS", "base": base + "_IMPORTADOS", "proyecto": proyecto, "tipo": "importados",
+                           "contenido": "ficheros importados %d (carpetas: %s)" % (len(importados), ", ".join("%s %d" % kv for kv in carpetas.most_common(4))),
+                           "clips": importados})
         if piezas or renders:
             grupos.append({"nombre": proyecto + "_PIEZAS", "base": base + "_PIEZAS", "proyecto": proyecto, "tipo": "piezas",
                            "contenido": "piezas renderizadas %d, renders de efectos %d" % (len(piezas), len(renders)),

@@ -13,8 +13,10 @@ fichero en cuarentena, render de título, clip compartido entre proyectos,
 ruta con ñ, proyecto NTSC 29,97 en MPEG-2 (copia y timecode drop-frame),
 proyecto cuyo bin no coincide por identificador (cruce aproximado por
 nombre y duración, con dos clips ambiguos), dos tarjetas por fecha y dos por
-carpeta de tarjeta, un clip de agencia (Reuters) y una pieza renderizada.
-Las fechas de la media se fijan (15/09/2021 10:00, y un clip el día 14) para
+carpeta de tarjeta, un clip de agencia (Reuters), una pieza renderizada, un
+vídeo de móvil importado y un render de fundido que no está en ningún bin
+(como los 806 del disco real de México).
+Las fechas de la media se fijan (15/09/2021 10:00, y un clip el día 10) para
 que los nombres de los brutos sean siempre los mismos.
 
 Uso:  python tests/crear_disco_prueba.py CARPETA_DESTINO [--ffmpeg RUTA_FFMPEG --ffprobe RUTA_FFPROBE]
@@ -126,6 +128,8 @@ def main():
     ur = clip("Title: 1", "5C0095C00TITL", 1, audios=0)
     ua = clip("SISMO 15 SEPT", "5C0095C00A9E1", 2)  # agencia: lo dice la ruta del fichero importado que guarda el bin
     up = clip("PIEZA 15 SEPT", "5C0095C00B1E7", 2)  # pieza renderizada: se llama como la secuencia
+    um = clip("MOVIL 15 SEPT", "5C0095C00E0B1", 2)  # importado: el bin guarda la ruta de un MP4 que no es de tarjeta
+    clip("PIEZA 15 SEPT,Dissolve,1", "5C0095C00D155", 1, audios=0)  # render de fundido sin bin: así los nombra Avid
     P = D / "15 SEPT CENTROAMERICA"
     P.mkdir()
     (P / "15 SEPT CENTROAMERICA.avp").write_bytes(b"avp")
@@ -134,7 +138,8 @@ def main():
             [("2017 07 21", u1), ("2017 07 13", u2), ("2017 07 21 ESPAÑA", u3),
              ("CLIP OFFLINE", "060A2B340101010501010D00130000000000000000000000000000000000FFFF"),
              ("SISMO 15 SEPT", ua, 50, r"C:\Users\corresponsal\Downloads\2021-09-15T120000Z_1_LWD1234ABC_RTRMADV_A_1-MEXICO-QUAKE.MP4"),
-             ("PIEZA 15 SEPT", up, 50)],
+             ("PIEZA 15 SEPT", up, 50),
+             ("MOVIL 15 SEPT", um, 50, r"C:\Users\admin\Desktop\videos movil\VID_20210915_101500.mp4")],
             ["PIEZA 15 SEPT"], renders=[("Title: 1", ur)])
     bin_con(P / "Trash" / "viejo.avb", [("2017 07 21", u1)])
 
@@ -173,12 +178,13 @@ def main():
     clip("HUERFANO", "AAAA0001", 2, audios=1)
     mka("SOLOAUDIO", M / "SOLOAUDIOA01.BBBB.mxf", 2, 300, "060A2B340101010501010D0013000000000000000000000000000000000000AA")
     mkv("CUARENTENA", M / "Quarantined Files" / "xV01.CCCC.mxf", 1)
-    # Fechas fijas de la media: todo el 15/09/2021 a las 10:00 salvo el clip "2017 07 13" (día 14), que
-    # es otra tarjeta del proyecto 15 SEPT. Los brutos se llaman por la fecha de su tarjeta.
+    # Fechas fijas de la media: todo el 15/09/2021 a las 10:00 salvo el clip "2017 07 13" (día 10), que
+    # es otra tarjeta del proyecto 15 SEPT (a más de 24 h, para que no se junte aunque dure poco).
+    # Los brutos se llaman por la fecha de su tarjeta.
     dia15 = dt.datetime(2021, 9, 15, 10, 0).timestamp()
-    dia14 = dt.datetime(2021, 9, 14, 10, 0).timestamp()
+    dia10 = dt.datetime(2021, 9, 10, 10, 0).timestamp()
     for f in M.rglob("*.mxf"):
-        t = dia14 if f.name.startswith("2017 07 13") else dia15
+        t = dia10 if f.name.startswith("2017 07 13") else dia15
         os.utime(f, (t, t))
     (M / "msmMMOB.mdb").write_bytes(b"\0" * 100)
     (M / "msmFMID.pmr").write_bytes(b"\0" * 100)

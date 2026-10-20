@@ -40,8 +40,10 @@ def main():
         if not (carpeta / f).exists():
             fallo("falta %s" % f)
     r = json.loads((carpeta / "resumen.json").read_text(encoding="utf-8"))
-    # offline: CLIP OFFLINE + los 2 "APROX B" ambiguos. clips_fisicos: 9 + 2 NTSC + 3 APROX + agencia + pieza.
-    esperado = {"proyectos": 4, "bins": 6, "bins_ilegibles": 1, "offline": 3, "renders_en_bins": 1, "clips_compartidos": 1, "clips_fisicos": 16}
+    # offline: CLIP OFFLINE + los 2 "APROX B" ambiguos. clips_fisicos: 9 + 2 NTSC + 3 APROX + agencia + pieza
+    # + importado + render sin bin. huerfanos: HUERFANO, SOLOAUDIO, CUARENTENA y los 2 "APROX B" (el render no cuenta).
+    esperado = {"proyectos": 4, "bins": 6, "bins_ilegibles": 1, "offline": 3, "renders_en_bins": 1, "clips_compartidos": 1, "clips_fisicos": 18,
+                "huerfanos": 5}
     for k, v in esperado.items():
         if r.get(k) != v:
             fallo("resumen.%s = %r, esperado %r" % (k, r.get(k), v))
@@ -65,12 +67,14 @@ def main():
         fallo("no hay brutos_resultado.json")
     res = json.loads(res_path.read_text(encoding="utf-8"))
     por = {b["proyecto"]: b for b in res}
-    # Un bruto por tarjeta (_Tnn_fecha), y aparte agencias y piezas. 15 SEPT: el clip "2017 07 13" es del día 14
+    # Un bruto por tarjeta (_Tnn_fecha), y aparte agencias, importados y piezas. 15 SEPT: el clip "2017 07 13" es del día 10
     # (otra tarjeta); el de Reuters lo dice la ruta del bin; la pieza se llama como la secuencia y el render
-    # del título también va a _PIEZAS. NTSC: mismo día pero dos carpetas de tarjeta (CARD01, CARD02).
+    # del título también va a _PIEZAS; el vídeo de móvil importado, a _IMPORTADOS. El render de fundido sin bin
+    # va a SIN_PROYECTO_PIEZAS. NTSC: mismo día pero dos carpetas de tarjeta (CARD01, CARD02).
     # SIN_PROYECTO: huérfano 2 s + cuarentena 1 s + los 2 "APROX B" ambiguos de 2 s.
-    esperado_brutos = {"15 SEPT CENTROAMERICA_T01_2021-09-14": ("copia", 1, 2.0), "15 SEPT CENTROAMERICA_T02_2021-09-15": ("copia", 2, 5.0),
+    esperado_brutos = {"15 SEPT CENTROAMERICA_T01_2021-09-10": ("copia", 1, 2.0), "15 SEPT CENTROAMERICA_T02_2021-09-15": ("copia", 2, 5.0),
                        "15 SEPT CENTROAMERICA_AGENCIAS": ("copia", 1, 2.0), "15 SEPT CENTROAMERICA_PIEZAS": ("copia", 2, 3.0),
+                       "15 SEPT CENTROAMERICA_IMPORTADOS": ("copia", 1, 2.0), "SIN_PROYECTO_PIEZAS": ("copia", 1, 1.0),
                        "ABORTO_T01_2021-09-15": ("convertir", 2, 4.0), "APROX_T01_2021-09-15": ("copia", 1, 2.0),
                        "NTSC_T01_2021-09-15": ("copia", 1, 2.0), "NTSC_T02_2021-09-15": ("copia", 1, 2.0),
                        "SIN_PROYECTO_T01_2021-09-15": ("copia", 4, 7.0)}

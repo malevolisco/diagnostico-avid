@@ -56,6 +56,8 @@ Pasos
    - BRUTO_<PROYECTO>_T01_<fecha>.mxf     el material de la tarjeta 1 de cámara;
      BRUTO_<PROYECTO>_T02_<fecha>.mxf     de la tarjeta 2, etc.
    - BRUTO_<PROYECTO>_AGENCIAS.mxf        el material de agencias (Reuters...)
+   - BRUTO_<PROYECTO>_IMPORTADOS.mxf      vídeos importados que no son de cámara
+                                          (descargas, móvil...)
    - BRUTO_<PROYECTO>_PIEZAS.mxf          piezas ya renderizadas y rótulos
    Cada uno con su _shotlist.xlsx (lista de clips con su timecode dentro del
    bruto) y su _contactos.html (miniaturas).

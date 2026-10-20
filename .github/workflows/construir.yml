@@ -23,18 +23,28 @@ jobs:
       - name: Dependencias
         run: pip install --only-binary ":all:" pyavb openpyxl pyinstaller
 
-      - name: ffmpeg (build de BtbN)
+      - name: ffmpeg 7.1.1 (build fijada de gyan.dev)
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile ffmpeg.zip
+          Invoke-WebRequest -Uri "https://github.com/GyanD/codexffmpeg/releases/download/7.1.1/ffmpeg-7.1.1-essentials_build.zip" -OutFile ffmpeg.zip
+          $h = (Get-FileHash ffmpeg.zip -Algorithm SHA256).Hash
+          if ($h -ne "04861D3339C5EBE38B56C19A15CF2C0CC97F5DE4FA8910E4D47E5E6404E4A2D4") { throw "ffmpeg.zip no coincide con la versión fijada: $h" }
           Expand-Archive ffmpeg.zip -DestinationPath ffx
           New-Item -ItemType Directory -Force bin | Out-Null
           Get-ChildItem ffx -Recurse -Include ffmpeg.exe, ffprobe.exe | Copy-Item -Destination bin
           Remove-Item bin/PONER_AQUI_ffmpeg.txt -ErrorAction SilentlyContinue
           & bin/ffmpeg.exe -version | Select-Object -First 1
 
+      - name: Número de build
+        shell: pwsh
+        run: |
+          $sha = "${{ github.sha }}".Substring(0, 7)
+          $fecha = Get-Date -Format "yyyy-MM-dd"
+          Set-Content -Path build.txt -Value "build-${{ github.run_number }} $sha $fecha" -Encoding utf8NoBOM
+          Get-Content build.txt
+
       - name: Construir ejecutable
-        run: pyinstaller --noconfirm --clean --noconsole --onedir --name DiagnosticoAvid --add-data "bin;bin" diagnostico_avid.py
+        run: pyinstaller --noconfirm --clean --noconsole --onedir --name DiagnosticoAvid --add-data "bin;bin" --add-data "build.txt;." diagnostico_avid.py
 
       - name: Disco de prueba simulado
         run: python tests/crear_disco_prueba.py disco_prueba --ffmpeg bin/ffmpeg.exe --ffprobe bin/ffprobe.exe

@@ -6,13 +6,17 @@ Pruebas unitarias (solo biblioteca estándar; no hace falta ffmpeg).
 - Timecode drop-frame con valores conocidos.
 - Reintento copia -> convertir de exportar_proyecto, sustituyendo ejecutar_ffmpeg
   y duracion_ffprobe por funciones que simulan fallos concretos.
+- Botón Detener: corta un proceso en marcha y para la exportación entre proyectos.
 
 Uso:  python -m unittest discover -s tests -v
 """
 
+import json
 import shutil
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -176,6 +180,62 @@ class Reanudar(unittest.TestCase):
             self.assertFalse(eb.ya_exportado(previo, 3, d))
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+
+class Detener(unittest.TestCase):
+    """El botón Detener activa PARAR. Se usa un proceso real (python durmiendo) en lugar de ffmpeg."""
+    DORMIR = [sys.executable, "-c", "import time; time.sleep(30)"]
+
+    def tearDown(self):
+        eb.PARAR.clear()
+
+    def test_corta_el_proceso_en_marcha(self):
+        threading.Timer(0.5, eb.PARAR.set).start()
+        t0 = time.monotonic()
+        with self.assertRaises(eb.Detenido):
+            eb.ejecutar_ffmpeg(self.DORMIR, 60)
+        self.assertLess(time.monotonic() - t0, 5)
+
+    def test_no_arranca_si_ya_se_ha_pedido(self):
+        eb.PARAR.set()
+        with self.assertRaises(eb.Detenido):
+            eb.ejecutar_ffmpeg(self.DORMIR, 60)
+
+    def test_tiempo_agotado(self):
+        t0 = time.monotonic()
+        self.assertEqual(eb.ejecutar_ffmpeg(self.DORMIR, 1), (False, eb.TIEMPO_AGOTADO))
+        self.assertLess(time.monotonic() - t0, 5)
+
+    def test_exportacion_para_entre_proyectos(self):
+        tmp = Path(tempfile.mkdtemp())
+        orig = (eb.ejecutar_ffmpeg, eb.duracion_ffprobe)
+        try:
+            mxf, clips = [], []
+            for p in ("A", "B", "C"):
+                v = "MXF/%sV01.mxf" % p
+                mxf.append({"ruta": v, "pistas": [{"tipo": "video", "codec": "dnxhd", "ancho": 1920, "alto": 1080,
+                                                   "fps": "25/1", "pix_fmt": "yuv422p", "field_order": "progressive"}]})
+                clips.append({"clave": "K" + p, "nombre": "CLIP " + p, "ficheros": [v], "fichero_video": v, "num_audio": 0,
+                              "duracion": DUR, "bytes": 1000, "timecode": None, "proyectos": ["PROY " + p]})
+
+            def ejecutar(cmd, timeout):
+                if any("BV01" in str(x) for x in cmd):  # se pulsa Detener mientras se hace el proyecto B
+                    eb.PARAR.set()
+                    raise eb.Detenido()
+                Path(cmd[-1]).write_bytes(b"mxf")
+                return True, ""
+            eb.ejecutar_ffmpeg, eb.duracion_ffprobe = ejecutar, lambda ffprobe, ruta: DUR
+            cfg = eb.cargar_config(tmp / "config_brutos.json")
+            destino = tmp / "brutos"
+            res = eb.exportar_todo(clips, {}, mxf, tmp, destino, "ffmpeg", "ffprobe", lambda m: None, cfg)
+            self.assertEqual([r["proyecto"] for r in res], ["PROY A"])
+            guardado = json.loads((destino / "brutos_resultado.json").read_text(encoding="utf-8"))
+            self.assertEqual([r["proyecto"] for r in guardado], ["PROY A"])
+            self.assertFalse(list(destino.glob("_tmp_*")), "queda la carpeta temporal del proyecto a medias")
+            self.assertFalse((destino / "BRUTO_PROY B.mxf").exists())
+        finally:
+            eb.ejecutar_ffmpeg, eb.duracion_ffprobe = orig
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

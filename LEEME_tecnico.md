@@ -1,12 +1,14 @@
 # Diagnóstico y exportación de discos Avid — notas técnicas
 
+Autor: Adrián Merinero Sánchez (Archivo de RTVE).
+
 ## Qué hay en el paquete
 
 | Fichero | Para qué |
 |---|---|
 | `construir_exe.bat` | **Lo que ejecutas tú, una vez.** Descarga ffmpeg, construye el `.exe` y deja `DiagnosticoAvid_portable.zip` listo para enviar |
 | `diagnostico_avid.py` | Programa principal: ventana, línea de comandos, análisis (fase 1) e informe |
-| `exportar_brutos.py` | Fase 2: un MXF por tarjeta de cada proyecto (y aparte agencias y piezas) + shotlist Excel + hoja de contactos. Lo importa el principal |
+| `exportar_brutos.py` | Fase 2: brutos MXF por días seguidos hasta 3 h, con los clips agrupados por proyecto (y aparte agencias y piezas) + shotlist Excel + hoja de contactos. Lo importa el principal |
 | `actualizar.py` | Autoactualización del `.exe` al abrir la ventana. Lo importa el principal |
 | `config_brutos.json` | Parámetros de exportación. Se crea solo la primera vez que se exporta, junto al programa |
 | `INSTRUCCIONES.txt` | Hoja de uso para quien reciba el portable (se copia dentro automáticamente) |

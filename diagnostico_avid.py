@@ -1078,9 +1078,10 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
                      % (color, esc(b["proyecto"]), esc(b.get("contenido") or ""), esc(b["fichero"] or "—"), b["clips"], b["incluidos"], b["fallidos"],
                         esc(b["modo"] + (" (no se pudo copiar)" if b.get("reintento") else "")), b["pistas_audio"],
                         fmt_duracion(b["segundos"]), gb(b["bytes"]), esc(b["estado"] + (" · de una ejecución anterior" if b.get("reanudado") else ""))))
-        h.append("</table><p class='muted'>Cada proyecto se parte en un bruto por tarjeta (_T01, _T02…: carpeta de la tarjeta según el bin, cámara P2 y saltos de fecha de la media). "
-                 "El material de agencias va a _AGENCIAS y las piezas renderizadas y renders de efectos a _PIEZAS. "
-                 "Junto a cada bruto hay un shotlist Excel con el timecode de cada clip y una hoja de contactos HTML.</p>")
+        h.append("</table><p class='muted'>Por defecto, todo el disco va ordenado por la fecha en que Avid escribió la media, en bloques de días seguidos "
+                 "de hasta 3 horas; el material de agencias y las piezas renderizadas van aparte. Los renders de efectos (fundidos, rótulos, "
+                 "picture-in-picture) no se incluyen. Junto a cada bruto hay un shotlist Excel con el timecode y el proyecto de cada clip "
+                 "y una hoja de contactos HTML.</p>")
 
     h.append("<footer>Generado por diagnostico_avid.py v%s, %s. No se ha modificado nada en el disco de origen.</footer></main></body></html>" % (VERSION, esc(BUILD)))
     (destino / "informe.html").write_text("\n".join(h), encoding="utf-8")

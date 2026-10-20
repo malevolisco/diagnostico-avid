@@ -1,6 +1,6 @@
 # CLAUDE.md — DiagnosticoAvid
 
-Herramienta para el Archivo de RTVE: analiza un disco de edición Avid Media Composer completo y exporta un bruto MXF por proyecto. La usa una persona sin conocimientos técnicos (la jefa de Adrián) en Windows, sin Adrián delante. Adrián (documentalista, no programador) la mantiene con Claude; cada cambio se sube a `main` y GitHub construye y prueba el `.exe`.
+Herramienta de Adrián Merinero Sánchez para el Archivo de RTVE: analiza un disco de edición Avid Media Composer completo y exporta un bruto MXF por proyecto. La usa una persona sin conocimientos técnicos (la jefa de Adrián) en Windows, sin Adrián delante. Adrián (documentalista, no programador) es el autor: decide qué hace la herramienta y cómo, y Claude escribe el código siguiendo sus indicaciones; cada cambio se sube a `main` y GitHub construye y prueba el `.exe`.
 
 ## Reglas de trabajo con Adrián
 
@@ -10,6 +10,7 @@ Herramienta para el Archivo de RTVE: analiza un disco de edición Avid Media Com
 - Si se cometió un error, reconocerlo y corregirlo; no suavizarlo.
 - No deducir el origen del material (agencia, cámara) por el nombre de un MXF. Solo por lo que diga el bin (`config_origen.json`) y marcando lo demás "Sin determinar".
 - Material de RTVE: nunca subir vídeo ni miniaturas a ningún servicio. Para diagnosticar bastan JSON y log.
+- Autoría: los commits van a nombre de Adrián (`git config user.name "Adrián Merinero Sánchez"`, `user.email malevolisco@gmail.com`). Sin líneas de atribución a Claude: nada de `Co-Authored-By`, `Claude-Session` ni "Generated with Claude Code" en commits, PR ni comentarios.
 
 ## Estructura
 

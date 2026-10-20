@@ -343,6 +343,18 @@ def material(umid_hex):
     return (umid_hex or "")[-32:]
 
 
+def reparar_ruta(texto):
+    """Rutas de Windows guardadas sin UTF-8 (Avid antiguo): pyavb las lee como Mac Roman y salen
+    "Mis vÌdeos", "IÒigo". Se recodifican como Windows-1252 ("Mis vídeos", "Iñigo"). Solo rutas de
+    Windows ("D:\\..." o "D//..."); las de Mac se dejan como están."""
+    if not texto or not re.match(r"^[A-Za-z](:|//)", str(texto)):
+        return texto
+    try:
+        return str(texto).encode("mac_roman").decode("cp1252")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return texto
+
+
 def fuentes_de(mob, f, profundidad=4):
     """Sigue las pistas de un master clip hasta sus source mobs (ficheros de
     media, y de ahí al fichero importado o la cinta de origen) y devuelve sus
@@ -386,7 +398,7 @@ def fuentes_de(mob, f, profundidad=4):
                     loc = getattr(desc, "locator", None)
                     for l in (loc if isinstance(loc, list) else [loc]) if loc else []:
                         vol = getattr(l, "last_known_volume_utf8", None) or getattr(l, "last_known_volume", None)
-                        ruta = getattr(l, "path_utf8", None) or getattr(l, "path", None)
+                        ruta = getattr(l, "path_utf8", None) or reparar_ruta(getattr(l, "path", None))
                         if vol:
                             info["volumen"] = str(vol)
                         if ruta:
@@ -619,6 +631,9 @@ def agrupar_clips(mxf):
     return clips
 
 
+RE_NOMBRE_RENDER = re.compile(r",[^,]+,\d+(\.\w+\.\d+)*$")
+
+
 def cruzar(proyectos, bins, clips, mxf=()):
     """Relaciona clips de bin (MobID) con clips físicos (UMID de los MXF).
 
@@ -729,6 +744,13 @@ def cruzar(proyectos, bins, clips, mxf=()):
         if pr["aproximados"] or pr["ambiguos"]:
             LOG.info("Cruce aproximado en %s: %d emparejados por nombre y duración, %d ambiguos", proyecto, pr["aproximados"], pr["ambiguos"])
 
+    # Renders de efectos que no están en ningún bin: Avid los llama "<clip o secuencia>,<efecto>,<n>"
+    # (p. ej. "PIEZA X,Dissolve,3"). En el disco de México lo cumplen 1.100 de los 1.200 renders con bin y
+    # ningún clip de material, así que se tratan como renders y no como huérfanos.
+    for c in clips:
+        if not c["proyectos"] and not c.get("render") and RE_NOMBRE_RENDER.search(c.get("nombre") or ""):
+            c["render"] = True
+            c["render_por_nombre"] = True
     huerfanos = [c for c in clips if not c["proyectos"] and not c.get("render")]
     renders = [c for c in clips if c.get("render")]
     compartidos = [c for c in clips if len(c["proyectos"]) > 1]
@@ -793,8 +815,8 @@ def miniaturas(clips, origen, ffmpeg, destino, progreso, maximo=0):
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, **flags_subproceso())
             if r.returncode == 0 and salida.exists():
                 return c, "miniaturas/" + salida.name
-            # segundo intento desde el principio (clips muy cortos)
-            cmd[4] = "0"
+            # segundo intento desde el principio (clips muy cortos); cmd[5] es la posición de -ss
+            cmd[5] = "0"
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, **flags_subproceso())
             if r.returncode == 0 and salida.exists():
                 return c, "miniaturas/" + salida.name

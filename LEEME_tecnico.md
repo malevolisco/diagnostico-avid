@@ -50,9 +50,10 @@ Opciones: `--sin-miniaturas` (análisis mucho más rápido), `--max-miniaturas 2
 ## Fase 2: cómo se construye cada bruto
 
 1. **Reparto** (`grupos_de_exportacion`): los clips de cada proyecto (los cruzados en la fase 1; los huérfanos, como proyecto `SIN_PROYECTO`) se reparten en:
-   - **`_PIEZAS`**: los renders de efectos del proyecto (`usage = precompute`: títulos, fundidos) y las **piezas renderizadas**: clips que se llaman como una secuencia del proyecto, por su nombre o por el del fichero importado, quitando extensión, `.new.01` y "mixdown" (pieza exportada y reimportada, o mixdown). `piezas_regex` en el config añade otra regla por nombre.
+   - **`_PIEZAS`**: los renders de efectos del proyecto (`usage = precompute`: títulos, fundidos; los que no están en ningún bin se reconocen por el nombre que les pone Avid, `<clip>,<efecto>,<n>`, y van a `SIN_PROYECTO_PIEZAS`) y las **piezas renderizadas**: clips que se llaman como una secuencia del proyecto, por su nombre o por el del fichero importado, quitando extensión, `.new.01` y "mixdown" (pieza exportada y reimportada, o mixdown). `piezas_regex` en el config añade otra regla por nombre.
    - **`_AGENCIAS`**: clips cuyo origen según el bin (`config_origen.json`) empieza por "Agencia" (`origenes_agencia`).
-   - **`_T01_<fecha>`, `_T02_…`**: el resto, **un bruto por tarjeta** (`partir_por_tarjeta`). Se agrupan por (a) la carpeta de la tarjeta según la ruta del fichero importado que guarda el bin (la carpeta que contiene `CONTENTS`, `PRIVATE`, `DCIM`, `XDROOT`, `BPAV`, `AVCHD`, `M4ROOT`, `CLIPR`; si se importó con la tarjeta montada queda la letra, p. ej. `E:`), (b) la cámara P2 (los dos últimos caracteres de `0016Q3`) y (c) dentro de eso, un salto de más de `tarjeta_hueco_horas` (2 h) en la fecha de la media (la del MXF: cuándo se capturó o importó en Avid). Las tarjetas se numeran por fecha y el bruto lleva la fecha de la primera. El informe y el log dicen en qué se basó cada tarjeta ("carpeta CARD02", "cámara P2 Q3", fechas).
+   - **`_IMPORTADOS`**: ficheros importados que no son de tarjeta (el bin guarda su ruta y no pasa por `CONTENTS`, `PRIVATE`…: MP4 de descargas, del móvil, de agencias que la regla no reconoce). Uno por proyecto (`importados_aparte`).
+   - **`_T01_<fecha>`, `_T02_…`**: el material de cámara, **un bruto por tarjeta** (`partir_por_tarjeta`). En el disco real los clips P2 no guardan en el bin la ruta de la tarjeta y su nombre no la indica, así que una tarjeta es una **tanda de volcado**: los clips se ordenan por la fecha en que Avid escribió la media (fecha del MXF) y un salto de más de `tarjeta_hueco_horas` (2 h) abre otra. Las tandas con menos de `tarjeta_minimo_minutos` (5 min) de material se juntan con la tanda más cercana si está a menos de 24 h. Si el bin sí guarda una ruta que pasa por `CONTENTS`, `PRIVATE`, `DCIM`, `XDROOT`, `BPAV`, `AVCHD`, `M4ROOT` o `CLIPR`, se separa además por esa carpeta. Las tarjetas se numeran por fecha y el bruto lleva la fecha de la primera; el informe dice las fechas de cada una.
    Dentro de cada bruto, los clips van ordenados por nombre y timecode. `brutos_resultado.json` guarda de cada bruto `proyecto` (nombre del bruto), `proyecto_avid`, `tipo` (tarjeta, agencias, piezas) y `contenido`.
 2. **Plan**: si todos los clips comparten códec, resolución, fps y formato de píxel y el códec es copiable (DNxHD, MPEG-2, DV, ProRes, H.264) → **copia** (sin recomprimir, sin pérdida). Si no → **convertir** al formato de `config_brutos.json` (por defecto MPEG-2 4:2:2 50 Mb/s 1920×1080 25p, tipo XDCAM HD422; desentrelaza con `bwdif` si la fuente es entrelazada).
 3. **Audio**: siempre PCM 24 bits 48 kHz, una pista mono por fichero de audio de Avid; todos los clips del bruto llevan el mismo número de pistas (el máximo del proyecto, tope 8); las que faltan se rellenan con silencio de la duración del clip (no con `-shortest`, que recortaba el vídeo a la pista más corta).
@@ -81,6 +82,18 @@ Nota: `config_origen.json` viejo se conserva al actualizar, así que si una vers
 
 Se crea con valores por defecto al primer uso. Claves: `modo` (`auto` | `copia` | `convertir`), `pistas_audio` (`max` | número | 0), `timecode_inicio` (se escribe siempre `hh:mm:ss:ff`; en proyectos 29,97 el programa lo pasa a drop-frame), `incluir_huerfanos`, `prefijo_fichero`, el reparto (`partir_por_tarjeta`, `tarjeta_hueco_horas`, `agencias_aparte`, `origenes_agencia`, `piezas_aparte`, `piezas_regex`, `renders_en_piezas`; la antigua `incluir_renders` ya no se usa), y `convertir` (`codec`, `ancho`, `alto`, `fps`, `bitrate`, `desentrelazar`). Si el archivo pide otro formato de ingesta, se cambia aquí sin tocar código.
 
+## Verificado con el disco real de la Corresponsalía de México (oct. 2026, build-7)
+
+77.096 ficheros, 4 TB, 108 proyectos, 382 bins, 73.479 MXF, 18.847 clips. Análisis completo en ~2 h (ffprobe 1 h, miniaturas 1 h).
+
+- **El cruce bin ↔ MXF funciona con MXF reales de Avid**: `be` 18.215 coincidencias por el material del UMID y `fuente_be` 2.508 por los source mobs; 3.349 clips de bin offline y 4.275 huérfanos.
+- **Los nombres P2 no dicen la tarjeta ni la cámara**: clips grabados con segundos de diferencia se llaman `00016R`, `0002CI`, `000328`. La primera versión del reparto usaba los dos últimos caracteres como cámara y habría hecho un bruto por clip; se quitó al ver estos datos.
+- **Los clips P2 no guardan ruta de tarjeta en el bin**; solo los 1.990 ficheros importados la tienen (`Mis vídeos`, `Downloads`, `Escritorio`, carpetas de discos externos). La fecha del MXF agrupa por tandas de volcado: con 2 h de hueco y juntando tandas de < 5 min, el disco sale en 481 brutos (392 de tarjeta, 81 de importados, 7 de agencias…) con un máximo de 3,1 h (antes, 27,9 h); 447 de 481 tienen un solo formato y se copian sin recomprimir.
+- Formatos: 13.756 clips DV 720×480 29,97; además H.264 1440×1080, DNxHD 720p 23,976, MPEG-2 1080, y `rawvideo` 720×496.
+- 806 renders de efectos no están en ningún bin; se llaman `<clip>,<efecto>,<n>` (Dissolve, Audio Dissolve, Picture-In-Picture…), igual que 1.100 de los 1.200 renders que sí están en bins, y ningún clip de material lleva ese patrón.
+- Rutas de Windows antiguas sin UTF-8: pyavb las lee como Mac Roman ("Mis vÌdeos", "IÒigo"); se recodifican como Windows-1252 (1.012 clips).
+- Dos bins (`TARJETA 1/2 POPOCATEPETL.avb`) dan "not a avb file"; hay copias `… POPO OK.avb` que sí se leen.
+
 ## Verificado con datos reales (bins del proyecto 15 SEPT CENTROAMERICA, Media Composer 23.12.6)
 
 - pyavb lee los bins reales, incluido uno de 10 MB con 1.100 clips, en segundos.
@@ -91,12 +104,11 @@ Se crea con valores por defecto al primer uso. Claves: `modo` (`auto` | `copia` 
 
 ## Qué sigue sin verificar
 
-- El cruce bin ↔ MXF con ficheros MXF reales de Avid (el disco de media). Se compara el número de material del UMID (16 últimos bytes) en dos codificaciones, y como vía secundaria los source mobs contra el `file_package_umid` de cada MXF. `resumen.json → modo_coincidencia` dirá cuál ha funcionado.
 - Que el códec real de los MXF sea copiable (DNxHD, DV, IMX/MPEG-2 lo son).
 - Tiempos reales con miles de ficheros.
 - Timecode drop-frame: probado con valores conocidos y con MXF MPEG-2 29,97 simulados (ffmpeg 6.1 en Linux y 7.1.1 en Windows); falta compararlo con el TC que muestra Avid en un proyecto real.
 - El reintento copia → convertir solo está probado con ffmpeg simulado (pruebas unitarias): en el disco de prueba todos los formatos copiables se copian bien.
-- **Reparto por tarjetas**: probado con bins simulados que guardan la ruta de la tarjeta igual que Avid (source mob con localizador) y con fechas de MXF fijadas. Falta comprobar con el disco real qué rutas guardan los bins de material P2 importado o enlazado (AMA), y si 2 h de hueco separa bien las tarjetas de un día de rodaje. Mirar `clips.json → fichero_origen` y el reparto en el log ("Brutos previstos").
+- **Reparto por tarjetas**: calibrado con los datos del disco de México (fechas del MXF), pero nadie ha comprobado todavía contra lo que se grabó de verdad si cada tanda es una tarjeta. Si una tarjeta se volcó en dos veces separadas más de 2 h saldrá partida, y dos tarjetas volcadas seguidas saldrán juntas. Se ajusta con `tarjeta_hueco_horas` y `tarjeta_minimo_minutos`. Mirar el reparto en el log ("Brutos previstos") y la columna Contenido del informe.
 - **Piezas renderizadas**: se reconocen porque se llaman como una secuencia del proyecto. No está comprobado cómo nombra Avid un mixdown en el disco real; si no coinciden, añadir una regla en `piezas_regex`.
 - **Autoactualización**: el cambio de carpeta con el `.bat` se prueba en cada build en el Windows de GitHub (carpeta con espacios, paréntesis y ñ; se conserva la configuración). Sin probar: un PC con proxy corporativo o antivirus que bloquee la descarga o el `.bat`. En ese caso el programa sigue con su versión y lo deja en `%LOCALAPPDATA%\DiagnosticoAvid\actualizacion.log`.
 

@@ -12,14 +12,21 @@ Qué hace
    bruto y una hoja de contactos con miniaturas.
 NO modifica nada en el disco de Avid: solo lo lee. No hay que instalar nada.
 
+Orden recomendado (la primera vez con un disco)
+-----------------------------------------------
+1. Primero, SOLO el análisis (sin marcar la opción 3). Envía el zip.
+2. Exporta los brutos en una segunda ejecución, cuando Adrián haya revisado
+   el informe y te diga que adelante.
+
 Antes de empezar
 ----------------
-1. Descomprime DiagnosticoAvid_portable.zip donde quieras (por ejemplo en el
+1. Cierra Avid Media Composer si está abierto en ese ordenador.
+2. Descomprime DiagnosticoAvid_portable.zip donde quieras (por ejemplo en el
    escritorio). Queda una carpeta "DiagnosticoAvid".
-2. Conecta el disco de Avid al ordenador y mira qué letra tiene (por ejemplo F:).
-3. Si vas a exportar brutos, ten a mano otro disco con espacio libre: como
+3. Conecta el disco de Avid al ordenador y mira qué letra tiene (por ejemplo F:).
+4. Si vas a exportar brutos, ten a mano otro disco con espacio libre: como
    mínimo tanto como ocupa el disco de Avid.
-4. Si el disco está dañado o hace ruidos, no sigas: avisa antes de usarlo.
+5. Si el disco está dañado o hace ruidos, no sigas: avisa antes de usarlo.
 
 Pasos
 -----
@@ -36,7 +43,8 @@ Pasos
 5. Pulsa "Analizar disco". En el recuadro de abajo irá apareciendo lo que hace.
    Solo el análisis: de minutos a una hora según el número de ficheros.
    Con brutos: puede ser de varias horas a una noche entera. No cierres la
-   ventana ni dejes que el ordenador se suspenda.
+   ventana. El programa impide que el ordenador se suspenda mientras trabaja,
+   pero si es un portátil déjalo enchufado.
 6. Al terminar se abre el informe en el navegador y aparece un mensaje con dos
    rutas. En la carpeta de destino habrá:
    - una carpeta  Diagnostico_<disco>_<fecha>  con el informe (informe.html)
@@ -47,7 +55,16 @@ Pasos
    - BRUTO_<PROYECTO>_contactos.html      miniaturas de los clips
    Los clips que no pertenecen a ningún proyecto van a BRUTO_SIN_PROYECTO.
 7. Envía el fichero .zip del informe. Es pequeño (texto y miniaturas, sin vídeo).
+   Si te piden enviarlo sin imágenes, desmarca antes de empezar la casilla
+   "Incluir las miniaturas en el zip para enviar".
    Al final del informe hay una tabla "Brutos exportados" con el estado de cada uno.
+
+Si la exportación de brutos se corta
+------------------------------------
+(un apagón, se cerró la ventana, se desconectó un disco...)
+Vuelve a lanzar el programa con LAS MISMAS carpetas. Repetirá el análisis
+entero (eso tarda lo mismo que la primera vez), pero los brutos que ya
+estaban terminados no se vuelven a hacer: sigue por donde se quedó.
 
 Si algo falla
 -------------

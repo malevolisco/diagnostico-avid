@@ -32,7 +32,7 @@ Si el antivirus corporativo bloquea el `.exe` (pasa con PyInstaller), la alterna
 python diagnostico_avid.py --origen F:\ --destino C:\Users\TU_USUARIO\Desktop --sin-gui
 python diagnostico_avid.py --origen F:\ --destino C:\Users\TU_USUARIO\Desktop --brutos E:\BRUTOS --sin-gui
 ```
-Opciones: `--sin-miniaturas` (análisis mucho más rápido), `--max-miniaturas 200`, `--no-abrir`.
+Opciones: `--sin-miniaturas` (análisis mucho más rápido), `--max-miniaturas 200`, `--no-abrir`, `--zip-sin-miniaturas` (el zip para enviar solo lleva texto; el informe local sí tiene las miniaturas).
 
 ## Fase 1: qué hace el análisis
 
@@ -41,7 +41,8 @@ Opciones: `--sin-miniaturas` (análisis mucho más rápido), `--max-miniaturas 2
 3. **Bins**: `pyavb` lee cada bin y separa master clips (`MasterMob`) de secuencias (`CompositionMob`), con nombre, duración, fechas y MobID.
 4. **MXF**: `ffprobe -show_format -show_streams` de cada `.mxf` (4 en paralelo): códec, resolución, fps, entrelazado, duración, timecode, `material_package_umid` (identificador del clip), `material_package_name` y comentarios de usuario (`comment_*`).
 5. **Clips**: los MXF que comparten `material_package_umid` son pistas (V/A) del mismo clip.
-6. **Cruce**: el MobID de cada clip de bin contra el UMID de los clips físicos, probando dos codificaciones del UUID (`le` y `be`); `resumen.json → modo_coincidencia` dice cuál ha funcionado.
+6. **Cruce**: el MobID de cada clip de bin contra el UMID de los clips físicos, probando dos codificaciones del UUID (`le` y `be`), y como vía secundaria los source mobs contra el `file_package_umid`; `resumen.json → modo_coincidencia` dice cuál ha funcionado.
+   **Cruce aproximado** (`nombre_duracion`): solo en un proyecto donde el exacto ha dado 0 coincidencias. Un clip de bin se empareja con un clip físico que no esté ya en ningún proyecto si tienen el mismo nombre (minúsculas, espacios colapsados) y la duración difiere ≤ 0,5 s, y solo si el emparejamiento es único en los dos sentidos. Lo demás cuenta como ambiguo y queda offline/huérfano (no se empareja a ciegas: dos clips con la misma fecha como nombre son habituales). `cruce.json → por_proyecto → clips_aproximados / clips_ambiguos`; aviso ámbar en el informe y etiqueta "cruce aproximado" en el clip. El aviso rojo "ningún clip ha coincidido" solo mira los modos exactos.
 7. **Miniaturas**: un fotograma al 10 % de cada clip con vídeo, 320 px.
 8. **Informe**: `informe.html` + JSON por capa + ZIP.
 
@@ -49,17 +50,22 @@ Opciones: `--sin-miniaturas` (análisis mucho más rápido), `--max-miniaturas 2
 
 1. Clips del proyecto (los cruzados en la fase 1), ordenados por nombre y timecode. Los huérfanos van a `BRUTO_SIN_PROYECTO`.
 2. **Plan**: si todos los clips comparten códec, resolución, fps y formato de píxel y el códec es copiable (DNxHD, MPEG-2, DV, ProRes, H.264) → **copia** (sin recomprimir, sin pérdida). Si no → **convertir** al formato de `config_brutos.json` (por defecto MPEG-2 4:2:2 50 Mb/s 1920×1080 25p, tipo XDCAM HD422; desentrelaza con `bwdif` si la fuente es entrelazada).
-3. **Audio**: siempre PCM 24 bits 48 kHz, una pista mono por fichero de audio de Avid; todos los clips del bruto llevan el mismo número de pistas (el máximo del proyecto, tope 8); las que faltan se rellenan con silencio.
-4. Cada clip se convierte en un MXF OP1a intermedio homogéneo (`_tmp_<proyecto>/seg_NNNNN.mxf`); luego se unen con el demuxer `concat` de ffmpeg con `-c copy` y timecode inicial `00:00:00:00`.
+3. **Audio**: siempre PCM 24 bits 48 kHz, una pista mono por fichero de audio de Avid; todos los clips del bruto llevan el mismo número de pistas (el máximo del proyecto, tope 8); las que faltan se rellenan con silencio de la duración del clip (no con `-shortest`, que recortaba el vídeo a la pista más corta).
+4. Cada clip se convierte en un MXF OP1a intermedio homogéneo (`_tmp_<proyecto>/seg_NNNNN.mxf`); luego se unen con el demuxer `concat` de ffmpeg con `-c copy` y el `timecode_inicio` del config.
+   - **Si copiar falla** (un segmento o la unión) por algo que no sea tiempo agotado, el proyecto se repite una vez entero en modo convertir (`reintento: true`, `motivo_reintento`). Antes, ante un segmento fallido se prueba ese clip en convertir: si también falla es el fichero (clip `ERROR`, el proyecto sigue en copia); si va bien es el códec.
+   - **Tiempo máximo** de ffmpeg: segmentos `max(600 s, 30 × duración)`, unión y verificación `max(1800 s, 10 × duración total)`. Un MXF dañado deja el clip en `ERROR (tiempo agotado)` y se sigue; el tiempo agotado nunca dispara el reintento.
+   - **Timecode drop-frame**: si los fps de salida son 29,97 o 59,94, el bruto y el shotlist usan `hh:mm:ss;ff` (la única sintaxis DF que acepta ffmpeg). Con otros fps, `hh:mm:ss:ff`. Los TC del shotlist se calculan acumulando frames, no segundos.
 5. **Verificación**: ffprobe del bruto; la duración debe coincidir con la suma de los segmentos (tolerancia 1 s). Con `"verificar_decodificando": true` en el config además se decodifica entero (lento).
 6. **Shotlist** (`openpyxl`): nº, clip, TC inicio/fin dentro del bruto, duración, TC original, fecha, códec, resolución, pistas, estado, ficheros origen. **Contactos**: HTML con las miniaturas de la fase 1.
-7. Un clip que falle se salta, queda marcado en el shotlist y el bruto se hace con el resto. Antes de empezar se comprueba el espacio libre.
+7. Un clip que falle se salta, queda marcado en el shotlist y el bruto se hace con el resto; `brutos_resultado.json → errores` guarda de cada fallo el comando ffmpeg (300 caracteres) y las últimas líneas del error. Antes de empezar cada proyecto se comprueba el espacio libre.
+8. **Reanudar**: `brutos_resultado.json` se reescribe tras cada proyecto. Al relanzar sobre la misma carpeta de brutos, un proyecto se salta (`reanudado: true`) si terminó en `OK` o `AVISO`, su `.mxf` existe con el mismo tamaño, existe su shotlist y tiene el mismo número de clips. Si cambió el análisis o `config_brutos.json`, se rehace. El análisis (ffprobe, miniaturas) sí se repite entero.
+9. En Windows el programa impide la suspensión del PC mientras trabaja (`SetThreadExecutionState`) y la restaura al terminar, también si hay un error.
 
 Lo que no hace: reconstruir las piezas montadas (secuencias con efectos o rótulos). Quedan listadas en el informe, no exportadas.
 
 ## Config de exportación (`config_brutos.json`)
 
-Se crea con valores por defecto al primer uso. Claves: `modo` (`auto` | `copia` | `convertir`), `pistas_audio` (`max` | número | 0), `timecode_inicio`, `incluir_huerfanos`, `prefijo_fichero`, y `convertir` (`codec`, `ancho`, `alto`, `fps`, `bitrate`, `desentrelazar`). Si el archivo pide otro formato de ingesta, se cambia aquí sin tocar código.
+Se crea con valores por defecto al primer uso. Claves: `modo` (`auto` | `copia` | `convertir`), `pistas_audio` (`max` | número | 0), `timecode_inicio` (se escribe siempre `hh:mm:ss:ff`; en proyectos 29,97 el programa lo pasa a drop-frame), `incluir_huerfanos`, `prefijo_fichero`, y `convertir` (`codec`, `ancho`, `alto`, `fps`, `bitrate`, `desentrelazar`). Si el archivo pide otro formato de ingesta, se cambia aquí sin tocar código.
 
 ## Verificado con datos reales (bins del proyecto 15 SEPT CENTROAMERICA, Media Composer 23.12.6)
 
@@ -74,4 +80,14 @@ Se crea con valores por defecto al primer uso. Claves: `modo` (`auto` | `copia` 
 - El cruce bin ↔ MXF con ficheros MXF reales de Avid (el disco de media). Se compara el número de material del UMID (16 últimos bytes) en dos codificaciones, y como vía secundaria los source mobs contra el `file_package_umid` de cada MXF. `resumen.json → modo_coincidencia` dirá cuál ha funcionado.
 - Que el códec real de los MXF sea copiable (DNxHD, DV, IMX/MPEG-2 lo son).
 - Tiempos reales con miles de ficheros.
-- Timecode de los shotlists en proyectos 29,97: se calcula sin drop-frame (30 fps nominales); desviación de ~3,6 s por hora respecto al TC drop-frame de Avid.
+- Timecode drop-frame: probado con valores conocidos y con MXF MPEG-2 29,97 simulados (ffmpeg 6.1 en Linux y 7.1.1 en Windows); falta compararlo con el TC que muestra Avid en un proyecto real.
+- El reintento copia → convertir solo está probado con ffmpeg simulado (pruebas unitarias): en el disco de prueba todos los formatos copiables se copian bien.
+
+## Lista de comprobación del primer zip de un disco real
+
+1. `resumen.json → modo_coincidencia`: debe tener `le`, `be` o `fuente_*` con números altos. Si solo hay `nombre_duracion`, el identificador no cruza con MXF reales: revisar antes de exportar brutos.
+2. `resumen.json → formatos` y `productos`: qué códecs hay y qué programa escribió los MXF. Comprobar que los códecs están en la lista de copiables.
+3. `bins_ilegibles` y `bins.json`: qué bins no se han podido leer y por qué.
+4. `offline` frente a `clips_en_bins`, y los volúmenes de la tabla de offline: cuánta media de los bins no está en este disco y dónde la vio Avid por última vez.
+5. `cruce.json → por_proyecto`: `clips_aproximados` y `clips_ambiguos` (deberían ser 0 si el cruce exacto funciona).
+6. `diagnostico.log`: número de build en la primera línea y tiempos de cada fase (cuánto tardará en el disco entero).

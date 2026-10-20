@@ -601,7 +601,10 @@ def cruzar(proyectos, bins, clips, mxf=()):
     material_package_umid del MXF (se prueban dos codificaciones del UUID).
     Vía secundaria: los source mobs del clip == file_package_umid de los MXF.
     Los clips 'precompute' (renders de efectos) se marcan y no cuentan como
-    material. Un clip físico puede pertenecer a varios proyectos."""
+    material. Un clip físico puede pertenecer a varios proyectos.
+
+    Cruce aproximado: solo en un proyecto donde el exacto no ha dado ninguna coincidencia, por nombre
+    y duración, y solo si el emparejamiento es único en los dos sentidos (lo demás queda como ambiguo)."""
     por_clave = {c["clave"]: c for c in clips}
     por_material = {material(c["clave"]): c for c in clips if c["clave"] and not c["clave"].startswith("NOMBRE:")}
     por_fichero_pkg = {}
@@ -612,8 +615,21 @@ def cruzar(proyectos, bins, clips, mxf=()):
     ruta_a_clip = {r: c for c in clips for r in c["ficheros"]}
 
     coincidencias = Counter()
-    por_proyecto = defaultdict(lambda: {"clips_bin": 0, "online": 0, "offline": 0, "renders": 0, "claves": set(),
-                                        "offline_detalle": [], "secuencias": 0, "volumenes": Counter(), "origenes": Counter()})
+    nuevo_pr = lambda: {"clips_bin": 0, "online": 0, "offline": 0, "renders": 0, "claves": set(), "exactos": 0, "aproximados": 0,
+                        "ambiguos": 0, "offline_items": [], "secuencias": 0, "volumenes": Counter(), "origenes": Counter()}
+    por_proyecto = defaultdict(nuevo_pr)
+
+    def asignar(fisico, clip, proyecto, pr):
+        pr["online"] += 1
+        pr["claves"].add(fisico["clave"])
+        if clip.get("fichero_origen") and not fisico.get("fichero_origen"):
+            fisico["fichero_origen"] = clip["fichero_origen"]
+        if clip.get("origen") and (not fisico.get("origen") or fisico["origen"] == "Sin determinar"):
+            fisico["origen"], fisico["origen_detalle"] = clip["origen"], clip.get("origen_detalle", {})
+        if clip.get("volumenes") and not fisico.get("volumenes"):
+            fisico["volumenes"] = clip["volumenes"]
+        if proyecto not in fisico["proyectos"]:
+            fisico["proyectos"].append(proyecto)
     for b in bins:
         if not b["ok"]:
             continue
@@ -637,6 +653,8 @@ def cruzar(proyectos, bins, clips, mxf=()):
                         break
             for v in clip.get("volumenes", []):
                 pr["volumenes"][v] += 1
+            if fisico:
+                pr["exactos"] += 1
             if clip.get("render"):
                 pr["renders"] += 1
                 if fisico:
@@ -646,31 +664,48 @@ def cruzar(proyectos, bins, clips, mxf=()):
             pr["clips_bin"] += 1
             if fisico:
                 coincidencias[modo] += 1
-                pr["online"] += 1
-                pr["claves"].add(fisico["clave"])
-                if clip.get("fichero_origen") and not fisico.get("fichero_origen"):
-                    fisico["fichero_origen"] = clip["fichero_origen"]
-                if clip.get("origen") and (not fisico.get("origen") or fisico["origen"] == "Sin determinar"):
-                    fisico["origen"], fisico["origen_detalle"] = clip["origen"], clip.get("origen_detalle", {})
-                if clip.get("volumenes") and not fisico.get("volumenes"):
-                    fisico["volumenes"] = clip["volumenes"]
-                if b["proyecto"] not in fisico["proyectos"]:
-                    fisico["proyectos"].append(b["proyecto"])
+                asignar(fisico, clip, b["proyecto"], pr)
             else:
                 pr["offline"] += 1
-                if len(pr["offline_detalle"]) < 200:
-                    pr["offline_detalle"].append({"nombre": clip["nombre"], "volumenes": clip.get("volumenes", []),
-                                                  "segundos": clip.get("segundos"), "bin": b["nombre"],
-                                                  "fichero_origen": clip.get("fichero_origen"), "origen": clip.get("origen")})
+                pr["offline_items"].append((clip, b["nombre"]))
             pr["origenes"][clip.get("origen") or "Sin determinar"] += 1
+
+    # Cruce aproximado por nombre y duración (ver docstring). Solo con clips físicos que no estén ya en ningún proyecto.
+    def normal(t):
+        return " ".join(str(t or "").lower().split())
+    for proyecto, pr in sorted(por_proyecto.items()):
+        if pr["exactos"] or not pr["offline_items"] or not clips:
+            continue
+        libres = [c for c in clips if not c["proyectos"] and not c.get("render") and c.get("duracion") is not None]
+        candidatos = {}
+        for i, (clip, _) in enumerate(pr["offline_items"]):
+            if clip.get("segundos") is None:
+                continue
+            cs = [c for c in libres if normal(c["nombre"]) == normal(clip["nombre"]) and abs(clip["segundos"] - c["duracion"]) <= 0.5]
+            if cs:
+                candidatos[i] = cs
+        veces = Counter(c["clave"] for cs in candidatos.values() for c in cs)
+        emparejados = set()
+        for i, cs in candidatos.items():
+            if len(cs) == 1 and veces[cs[0]["clave"]] == 1:
+                cs[0]["coincidencia"] = "aproximada"
+                asignar(cs[0], pr["offline_items"][i][0], proyecto, pr)
+                coincidencias["nombre_duracion"] += 1
+                pr["aproximados"] += 1
+                emparejados.add(i)
+            else:
+                pr["ambiguos"] += 1
+        pr["offline"] -= len(emparejados)
+        pr["offline_items"] = [x for i, x in enumerate(pr["offline_items"]) if i not in emparejados]
+        if pr["aproximados"] or pr["ambiguos"]:
+            LOG.info("Cruce aproximado en %s: %d emparejados por nombre y duración, %d ambiguos", proyecto, pr["aproximados"], pr["ambiguos"])
 
     huerfanos = [c for c in clips if not c["proyectos"] and not c.get("render")]
     renders = [c for c in clips if c.get("render")]
     compartidos = [c for c in clips if len(c["proyectos"]) > 1]
     resumen_proy = []
     for p in proyectos:
-        pr = por_proyecto.get(p["nombre"], {"clips_bin": 0, "online": 0, "offline": 0, "renders": 0, "claves": set(),
-                                             "offline_detalle": [], "secuencias": 0, "volumenes": Counter(), "origenes": Counter()})
+        pr = por_proyecto.get(p["nombre"]) or nuevo_pr()
         cs = [por_clave[k] for k in pr["claves"]]
         codecs = Counter((c["codec_video"], c["resolucion"], c["fps"]) for c in cs if c["codec_video"])
         resumen_proy.append({
@@ -682,6 +717,8 @@ def cruzar(proyectos, bins, clips, mxf=()):
             "secuencias": pr["secuencias"],
             "clips_online": pr["online"],
             "clips_offline": pr["offline"],
+            "clips_aproximados": pr["aproximados"],
+            "clips_ambiguos": pr["ambiguos"],
             "clips_fisicos": len(cs),
             "clips_compartidos": sum(1 for c in cs if len(c["proyectos"]) > 1),
             "segundos": round(sum(c["duracion"] or 0 for c in cs), 1),
@@ -690,7 +727,9 @@ def cruzar(proyectos, bins, clips, mxf=()):
             "mezcla_formatos": len(codecs) > 1,
             "volumenes": dict(pr["volumenes"].most_common()),
             "origenes": dict(pr["origenes"].most_common()),
-            "offline_detalle": pr["offline_detalle"],
+            "offline_detalle": [{"nombre": clip["nombre"], "volumenes": clip.get("volumenes", []), "segundos": clip.get("segundos"), "bin": nbin,
+                                 "fichero_origen": clip.get("fichero_origen"), "origen": clip.get("origen")}
+                                for clip, nbin in pr["offline_items"][:200]],
         })
     LOG.info("Cruce: coincidencias %s; huérfanos %d; renders %d; compartidos %d", dict(coincidencias), len(huerfanos), len(renders), len(compartidos))
     return {
@@ -803,7 +842,13 @@ def construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmp
     solo_audio = sum(1 for c in clips if not c["num_video"])
     if solo_audio:
         avisos.append(("info", "%d grupos de ficheros solo con audio (sin vídeo con el mismo identificador)." % solo_audio))
-    if clips and not cruce["modo_coincidencia"] and bins and any(b["ok"] and b["clips"] for b in bins):
+    aprox = [p for p in cruce["por_proyecto"] if p.get("clips_aproximados") or p.get("clips_ambiguos")]
+    if aprox:
+        avisos.append(("aviso", "Cruce por nombre y duración en %d proyectos (%s): %d clips emparejados así y %d ambiguos que quedan sin emparejar. "
+                       "El identificador no ha coincidido en esos proyectos; revisar con Adrián."
+                       % (len(aprox), ", ".join(p["proyecto"] for p in aprox), sum(p["clips_aproximados"] for p in aprox), sum(p["clips_ambiguos"] for p in aprox))))
+    exactos = {k: v for k, v in cruce["modo_coincidencia"].items() if k in ("le", "be") or k.startswith("fuente_")}
+    if clips and not exactos and bins and any(b["ok"] and b["clips"] for b in bins):
         avisos.append(("error", "Ningún clip de bin ha coincidido con ningún MXF. El cruce por identificador no funciona con estos ficheros; revisar con Adrián."))
     if tags_comentario:
         avisos.append(("info", "Metadatos de usuario encontrados dentro de los MXF: " + ", ".join(sorted(tags_comentario))))
@@ -878,6 +923,8 @@ def tarjeta_clip(c):
     else:
         img = "<div class='sin'>sin miniatura</div>"
     extra = " &middot; <span title='%s'>en %d proyectos</span>" % (esc(", ".join(c["proyectos"])), len(c["proyectos"])) if len(c.get("proyectos", [])) > 1 else ""
+    if c.get("coincidencia") == "aproximada":
+        extra += " &middot; <span class='tag' style='background:#fffaeb' title='Emparejado con el bin por nombre y duración, no por identificador'>cruce aproximado</span>"
     return ("<div class='clip'>%s<div class='t'><b title='%s'>%s</b><span>%s &middot; %s &middot; %dV/%dA%s</span></div></div>"
             % (img, esc(c["nombre"]), esc(c["nombre"]), fmt_duracion(c["duracion"]), esc(c["timecode"] or "sin TC"), c["num_video"], c["num_audio"], extra))
 
@@ -906,6 +953,8 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
     for p in cruce["por_proyecto"]:
         fm = " ".join("<span class='tag'>%s %s %s (%d)</span>" % (esc(f["codec"]), esc(f["resolucion"]), esc(f["fps"]), f["clips"]) for f in p["formatos"])
         extra = " <span class='tag' style='background:#fef3f2'>%d bins ilegibles</span>" % p["bins_ilegibles"] if p["bins_ilegibles"] else ""
+        if p.get("clips_aproximados") or p.get("clips_ambiguos"):
+            extra += " <span class='tag' style='background:#fffaeb'>%d por nombre y duración, %d ambiguos</span>" % (p["clips_aproximados"], p["clips_ambiguos"])
         h.append("<tr><td>%s%s</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%s</td><td class='n'>%.2f</td><td>%s</td></tr>"
                  % (esc(p["proyecto"]), extra, p["bins"], p["clips_en_bin"], p["clips_fisicos"], p["clips_offline"], p["clips_compartidos"], p["secuencias"], fmt_duracion(p["segundos"]), gb(p["bytes"]), fm))
     h.append("</table>")
@@ -971,8 +1020,9 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
         for b in resumen["brutos"]:
             color = "" if b["estado"].startswith("OK") else " style='background:#fef3f2'"
             h.append("<tr%s><td>%s</td><td>%s</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td>%s</td><td class='n'>%d</td><td class='n'>%s</td><td class='n'>%.2f</td><td>%s</td></tr>"
-                     % (color, esc(b["proyecto"]), esc(b["fichero"] or "—"), b["clips"], b["incluidos"], b["fallidos"], esc(b["modo"]), b["pistas_audio"],
-                        fmt_duracion(b["segundos"]), gb(b["bytes"]), esc(b["estado"])))
+                     % (color, esc(b["proyecto"]), esc(b["fichero"] or "—"), b["clips"], b["incluidos"], b["fallidos"],
+                        esc(b["modo"] + (" (no se pudo copiar)" if b.get("reintento") else "")), b["pistas_audio"],
+                        fmt_duracion(b["segundos"]), gb(b["bytes"]), esc(b["estado"] + (" · de una ejecución anterior" if b.get("reanudado") else ""))))
         h.append("</table><p class='muted'>Junto a cada bruto hay un shotlist Excel con el timecode de cada clip y una hoja de contactos HTML.</p>")
 
     h.append("<footer>Generado por diagnostico_avid.py v%s, %s. No se ha modificado nada en el disco de origen.</footer></main></body></html>" % (VERSION, esc(BUILD)))
@@ -983,12 +1033,25 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
 # Orquestación
 # ---------------------------------------------------------------------------
 
+def evitar_suspension(activar):
+    """En Windows, impide que el PC se suspenda mientras dura el análisis o la exportación."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | (ES_SYSTEM_REQUIRED if activar else 0))
+    except Exception as e:
+        LOG.warning("No se ha podido %s la suspensión del PC: %s", "impedir" if activar else "restaurar", e)
+
+
 def guardar_json(destino, nombre, datos):
     with open(destino / nombre, "w", encoding="utf-8") as f:
         json.dump(datos, f, ensure_ascii=False, indent=1, default=str)
 
 
-def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_miniaturas=0, abrir=True, brutos=None):
+def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_miniaturas=0, abrir=True, brutos=None,
+             zip_miniaturas=True):
     origen = Path(origen)
     if not origen.exists():
         raise FileNotFoundError("No existe la carpeta de origen: %s" % origen)
@@ -1008,77 +1071,84 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
     fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     LOG.addHandler(fh)
     LOG.setLevel(logging.INFO)
-    LOG.info("Diagnóstico v%s (%s). Origen=%s Destino=%s Python=%s pyavb=%s", VERSION, BUILD, origen, destino, sys.version.split()[0], PYAVB_OK)
+    evitar_suspension(True)
+    try:
+        LOG.info("Diagnóstico v%s (%s). Origen=%s Destino=%s Python=%s pyavb=%s", VERSION, BUILD, origen, destino, sys.version.split()[0], PYAVB_OK)
 
-    ffmpeg, ffprobe = localizar_ffmpeg()
-    ffmpeg_ok = bool(ffmpeg)
-    LOG.info("ffmpeg=%s ffprobe=%s", ffmpeg, ffprobe)
-    progreso("Inicio. Destino: %s" % destino)
+        ffmpeg, ffprobe = localizar_ffmpeg()
+        ffmpeg_ok = bool(ffmpeg)
+        LOG.info("ffmpeg=%s ffprobe=%s", ffmpeg, ffprobe)
+        progreso("Inicio. Destino: %s" % destino)
 
-    progreso("1/6 Inventariando el disco...")
-    ficheros = inventariar(origen, progreso)
-    escribir_inventario_csv(ficheros, destino)
+        progreso("1/6 Inventariando el disco...")
+        ficheros = inventariar(origen, progreso)
+        escribir_inventario_csv(ficheros, destino)
 
-    progreso("2/6 Detectando proyectos y leyendo bins...")
-    proyectos = detectar_proyectos(ficheros)
-    bins = leer_bins(proyectos, origen, progreso)
-    guardar_json(destino, "proyectos.json", proyectos)
-    guardar_json(destino, "bins.json", bins)
+        progreso("2/6 Detectando proyectos y leyendo bins...")
+        proyectos = detectar_proyectos(ficheros)
+        bins = leer_bins(proyectos, origen, progreso)
+        guardar_json(destino, "proyectos.json", proyectos)
+        guardar_json(destino, "bins.json", bins)
 
-    progreso("3/6 Analizando ficheros MXF...")
-    mxf = analizar_mxf(ficheros, origen, ffprobe, progreso) if ffmpeg_ok else []
-    guardar_json(destino, "mxf.json", mxf)
+        progreso("3/6 Analizando ficheros MXF...")
+        mxf = analizar_mxf(ficheros, origen, ffprobe, progreso) if ffmpeg_ok else []
+        guardar_json(destino, "mxf.json", mxf)
 
-    progreso("4/6 Reconstruyendo clips y cruzando con los bins...")
-    clips = agrupar_clips(mxf)
-    cruce = cruzar(proyectos, bins, clips, mxf)
+        progreso("4/6 Reconstruyendo clips y cruzando con los bins...")
+        clips = agrupar_clips(mxf)
+        cruce = cruzar(proyectos, bins, clips, mxf)
 
-    if hacer_miniaturas and ffmpeg_ok:
-        progreso("5/6 Generando miniaturas...")
-        miniaturas(clips, origen, ffmpeg, destino, progreso, max_miniaturas)
-    else:
-        progreso("5/6 Miniaturas omitidas.")
-    guardar_json(destino, "clips.json", clips)
-    guardar_json(destino, "cruce.json", cruce)
-
-    resultados_brutos = None
-    if brutos:
-        if not ffmpeg_ok:
-            progreso("Brutos: omitidos, no hay ffmpeg.")
+        if hacer_miniaturas and ffmpeg_ok:
+            progreso("5/6 Generando miniaturas...")
+            miniaturas(clips, origen, ffmpeg, destino, progreso, max_miniaturas)
         else:
-            progreso("Brutos: exportando un MXF por proyecto en %s" % brutos)
-            cfg = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json")
-            resultados_brutos = exportar_brutos.exportar_todo(clips, cruce, mxf, origen, brutos, ffmpeg, ffprobe, progreso, cfg,
-                                                              miniaturas_dir=destino / "miniaturas" if hacer_miniaturas else None)
+            progreso("5/6 Miniaturas omitidas.")
+        guardar_json(destino, "clips.json", clips)
+        guardar_json(destino, "cruce.json", cruce)
 
-    progreso("6/6 Escribiendo resumen e informe...")
-    resumen = construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmpeg_ok)
-    if resultados_brutos is not None:
-        resumen["brutos"] = resultados_brutos
-        resumen["brutos_carpeta"] = str(brutos)
-        fallos = [b for b in resultados_brutos if not b["estado"].startswith("OK")]
-        if fallos:
-            resumen["avisos"].append({"nivel": "error", "texto": "%d brutos con problemas: %s" % (len(fallos), ", ".join(b["proyecto"] for b in fallos))})
-    guardar_json(destino, "resumen.json", resumen)
-    informe_html(resumen, proyectos, bins, clips, cruce, destino)
+        resultados_brutos = None
+        if brutos:
+            if not ffmpeg_ok:
+                progreso("Brutos: omitidos, no hay ffmpeg.")
+            else:
+                progreso("Brutos: exportando un MXF por proyecto en %s" % brutos)
+                cfg = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json")
+                resultados_brutos = exportar_brutos.exportar_todo(clips, cruce, mxf, origen, brutos, ffmpeg, ffprobe, progreso, cfg,
+                                                                  miniaturas_dir=destino / "miniaturas" if hacer_miniaturas else None)
 
-    zip_path = destino.with_suffix(".zip")
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
-        for f in destino.rglob("*"):
-            if f.is_file():
-                z.write(f, f.relative_to(destino.parent))
-    LOG.info("ZIP: %s (%.1f MB)", zip_path, zip_path.stat().st_size / 1e6)
-    LOG.removeHandler(fh)
-    fh.close()
+        progreso("6/6 Escribiendo resumen e informe...")
+        resumen = construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmpeg_ok)
+        if resultados_brutos is not None:
+            resumen["brutos"] = resultados_brutos
+            resumen["brutos_carpeta"] = str(brutos)
+            fallos = [b for b in resultados_brutos if not b["estado"].startswith("OK")]
+            if fallos:
+                resumen["avisos"].append({"nivel": "error", "texto": "%d brutos con problemas: %s" % (len(fallos), ", ".join(b["proyecto"] for b in fallos))})
+        guardar_json(destino, "resumen.json", resumen)
+        informe_html(resumen, proyectos, bins, clips, cruce, destino)
 
-    progreso("Terminado. Informe: %s" % (destino / "informe.html"))
-    progreso("ZIP para enviar: %s" % zip_path)
-    if abrir:
-        try:
-            webbrowser.open((destino / "informe.html").as_uri())
-        except Exception:
-            pass
-    return destino, zip_path, resumen
+        zip_path = destino.with_suffix(".zip")
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+            for f in destino.rglob("*"):
+                if f.is_file() and (zip_miniaturas or f.parent.name != "miniaturas"):
+                    z.write(f, f.relative_to(destino.parent))
+        LOG.info("ZIP: %s (%.1f MB)", zip_path, zip_path.stat().st_size / 1e6)
+
+        progreso("Terminado. Informe: %s" % (destino / "informe.html"))
+        progreso("ZIP para enviar: %s" % zip_path)
+        if abrir:
+            try:
+                webbrowser.open((destino / "informe.html").as_uri())
+            except Exception:
+                pass
+        return destino, zip_path, resumen
+    except Exception:
+        LOG.exception("Fallo durante la ejecución")
+        raise
+    finally:  # aunque falle: sin esto el log se duplicaría en la siguiente ejecución desde la ventana
+        evitar_suspension(False)
+        LOG.removeHandler(fh)
+        fh.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1097,6 +1167,7 @@ def lanzar_gui():
     origen = tk.StringVar()
     destino = tk.StringVar(value=str(Path.home() / "Desktop"))
     minis = tk.BooleanVar(value=True)
+    zip_minis = tk.BooleanVar(value=True)
     hacer_brutos = tk.BooleanVar(value=False)
     brutos = tk.StringVar()
     cola = queue.Queue()
@@ -1111,19 +1182,20 @@ def lanzar_gui():
     ttk.Entry(marco, textvariable=destino).grid(row=3, column=0, sticky="ew", pady=(2, 10))
     ttk.Button(marco, text="Elegir...", command=lambda: destino.set(filedialog.askdirectory(title="Carpeta de salida") or destino.get())).grid(row=3, column=1, padx=(8, 0))
     ttk.Checkbutton(marco, text="Generar miniaturas de cada clip (más lento, pero el informe queda completo)", variable=minis).grid(row=4, column=0, columnspan=2, sticky="w")
+    ttk.Checkbutton(marco, text="Incluir las miniaturas en el zip para enviar (desmarcado: el zip solo lleva texto)", variable=zip_minis).grid(row=5, column=0, columnspan=2, sticky="w")
     ttk.Checkbutton(marco, text="3. Exportar además un MXF por proyecto (brutos). Tarda mucho y necesita un disco con espacio:",
-                    variable=hacer_brutos).grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 0))
-    ttk.Entry(marco, textvariable=brutos).grid(row=6, column=0, sticky="ew", pady=(2, 10))
-    ttk.Button(marco, text="Elegir...", command=lambda: brutos.set(filedialog.askdirectory(title="Carpeta para los brutos") or brutos.get())).grid(row=6, column=1, padx=(8, 0))
+                    variable=hacer_brutos).grid(row=6, column=0, columnspan=2, sticky="w", pady=(10, 0))
+    ttk.Entry(marco, textvariable=brutos).grid(row=7, column=0, sticky="ew", pady=(2, 10))
+    ttk.Button(marco, text="Elegir...", command=lambda: brutos.set(filedialog.askdirectory(title="Carpeta para los brutos") or brutos.get())).grid(row=7, column=1, padx=(8, 0))
 
     boton = ttk.Button(marco, text="Analizar disco")
-    boton.grid(row=7, column=0, columnspan=2, pady=12)
+    boton.grid(row=8, column=0, columnspan=2, pady=12)
     barra = ttk.Progressbar(marco, mode="indeterminate")
-    barra.grid(row=8, column=0, columnspan=2, sticky="ew")
+    barra.grid(row=9, column=0, columnspan=2, sticky="ew")
     registro = tk.Text(marco, height=14, wrap="word", state="disabled", font=("Consolas", 10))
-    registro.grid(row=9, column=0, columnspan=2, sticky="nsew", pady=(8, 0))
+    registro.grid(row=10, column=0, columnspan=2, sticky="nsew", pady=(8, 0))
     marco.columnconfigure(0, weight=1)
-    marco.rowconfigure(9, weight=1)
+    marco.rowconfigure(10, weight=1)
 
     def escribe(txt):
         registro.configure(state="normal")
@@ -1154,10 +1226,10 @@ def lanzar_gui():
     def hilo():
         try:
             d, z, _ = ejecutar(origen.get(), destino.get(), progreso=lambda m: cola.put(("log", m)), hacer_miniaturas=minis.get(),
-                               brutos=brutos.get() if hacer_brutos.get() else None)
+                               brutos=brutos.get() if hacer_brutos.get() else None, zip_miniaturas=zip_minis.get())
             cola.put(("fin", (str(d / "informe.html"), str(z))))
         except Exception as e:
-            LOG.error("Fallo: %s\n%s", e, traceback.format_exc())
+            LOG.error("Fallo: %s\n%s", e, traceback.format_exc())  # ejecutar ya lo ha dejado en diagnostico.log
             cola.put(("error", "%s\n\nDetalle en diagnostico.log (si llegó a crearse)." % e))
 
     def iniciar():
@@ -1204,6 +1276,7 @@ def main():
     ap.add_argument("--max-miniaturas", type=int, default=0, help="Limitar el número de miniaturas (0 = todas)")
     ap.add_argument("--no-abrir", action="store_true", help="No abrir el informe en el navegador al terminar")
     ap.add_argument("--brutos", help="Carpeta donde exportar un MXF por proyecto (fase 2)")
+    ap.add_argument("--zip-sin-miniaturas", action="store_true", help="El zip para enviar no lleva las miniaturas (el informe local sí)")
     args = ap.parse_args()
 
     if sys.stderr is not None:  # en el .exe sin consola no hay salida estándar
@@ -1212,7 +1285,8 @@ def main():
         if not (args.origen and args.destino):
             ap.error("--sin-gui requiere --origen y --destino")
         ejecutar(args.origen, args.destino, hacer_miniaturas=not args.sin_miniaturas,
-                 max_miniaturas=args.max_miniaturas, abrir=not args.no_abrir, brutos=args.brutos)
+                 max_miniaturas=args.max_miniaturas, abrir=not args.no_abrir, brutos=args.brutos,
+                 zip_miniaturas=not args.zip_sin_miniaturas)
         return
     try:
         lanzar_gui()

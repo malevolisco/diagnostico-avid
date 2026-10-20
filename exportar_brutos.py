@@ -8,10 +8,14 @@ genera por cada proyecto UN solo fichero MXF OP1a con todos sus clips
 encadenados, más un shotlist Excel (timecode de cada clip dentro del bruto)
 y una hoja de contactos HTML con las miniaturas.
 
-Reparto: el material de cámara de cada proyecto se parte en un bruto por tarjeta,
-por tandas de volcado (fecha en que Avid escribió la media). Aparte, por proyecto:
-_AGENCIAS (origen de agencia según el bin), _IMPORTADOS (ficheros importados que
-no son de tarjeta) y _PIEZAS (piezas renderizadas y renders de efectos).
+Reparto (config "agrupar"):
+  - "dias" (por defecto): todo el disco, sin separar proyectos, ordenado por la
+    fecha en que Avid escribió la media y cortado en bloques de días seguidos de
+    hasta horas_por_bruto (3 h). Aparte, también por días: AGENCIAS y PIEZAS
+    (piezas renderizadas). El shotlist dice el proyecto de cada clip.
+  - "proyecto": cada proyecto por tarjetas (tandas de volcado), con _AGENCIAS,
+    _IMPORTADOS y _PIEZAS aparte por proyecto.
+Los renders de efectos (fundidos, picture-in-picture, rótulos) no entran.
 
 Modo de trabajo por bruto:
   - "copia":     todos los clips comparten códec, resolución, fps y formato
@@ -55,6 +59,12 @@ CONFIG_DEFECTO = {
     "_timecode_inicio": "TC del primer frame del bruto. Escríbelo siempre hh:mm:ss:ff; si el bruto sale a 29,97 o 59,94 se usa drop-frame (hh:mm:ss;ff)",
     "incluir_huerfanos": True,
     "_incluir_huerfanos": "Los clips que no están en ningún bin van a brutos SIN_PROYECTO (también partidos por tarjeta)",
+    "agrupar": "dias",
+    "_agrupar": "dias = todo el disco por días seguidos hasta horas_por_bruto, sin separar proyectos | proyecto = cada proyecto por tarjetas, con agencias, importados y piezas aparte",
+    "horas_por_bruto": 3,
+    "_horas_por_bruto": "agrupar=dias: se juntan días seguidos hasta esta duración; un día que la supere se parte en _parte1, _parte2...",
+    "dia_empieza_hora": 6,
+    "_dia_empieza_hora": "agrupar=dias: lo volcado antes de esta hora cuenta como del día anterior (volcados de madrugada)",
     "partir_por_tarjeta": True,
     "_partir_por_tarjeta": "true = un bruto por tarjeta de cámara dentro de cada proyecto (_T01, _T02...) | false = un bruto por proyecto",
     "tarjeta_hueco_horas": 2,
@@ -69,8 +79,8 @@ CONFIG_DEFECTO = {
     "piezas_aparte": True,
     "piezas_regex": "",
     "_piezas_regex": "Van al bruto _PIEZAS los renders de efectos y los clips que se llaman como una secuencia del proyecto (pieza exportada o mixdown). Aquí se puede añadir una expresión regular sobre el nombre del clip, p. ej. (?i)mixdown|emitid",
-    "renders_en_piezas": True,
-    "_renders_en_piezas": "Los renders de efectos (títulos, fundidos) van al bruto _PIEZAS; false = se descartan",
+    "renders_en_piezas": False,
+    "_renders_en_piezas": "Los renders de efectos (fundidos, picture-in-picture, rótulos) no son material: false = no entran en ningún bruto | true = van con las piezas",
     "clips_compartidos": "primero",
     "_clips_compartidos": "Un clip que está en varios proyectos: primero = solo en el bruto del primer proyecto (orden alfabético) | todos = en cada bruto",
     "prefijo_fichero": "BRUTO_",
@@ -339,12 +349,104 @@ def es_pieza(c, secuencias, rx=None):
 
 def grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg):
     """Reparte los clips en brutos. Devuelve [{nombre, base, proyecto, tipo, contenido, clips}]."""
+    if cfg.get("agrupar", "dias") == "dias":
+        return grupos_por_dias(clips, cruce, mxf_por_ruta, cfg)
+    return grupos_por_proyecto(clips, cruce, mxf_por_ruta, cfg)
+
+
+def _dia(fecha, cfg):
+    """Día al que pertenece un volcado: lo de antes de dia_empieza_hora cuenta como del día anterior."""
+    return (fecha - dt.timedelta(hours=float(cfg.get("dia_empieza_hora", 6)))).date() if fecha else None
+
+
+def bloques_por_dias(cs, mxf_por_ruta, cfg):
+    """Ordena los clips por fecha de la media y los junta por días seguidos mientras el bloque no pase de
+    horas_por_bruto. Un día que por sí solo la pase se parte en trozos (entre clips, nunca dentro de uno).
+    Devuelve [(clips, primer_dia, ultimo_dia, parte o None)]."""
+    tope = 3600 * float(cfg.get("horas_por_bruto", 3))
+    duracion = lambda lista: sum(c.get("duracion") or 0 for c in lista if c.get("fichero_video"))
+    por_dia = defaultdict(list)
+    for c in cs:
+        por_dia[_dia(fecha_media(c, mxf_por_ruta), cfg)].append(c)
+    bloques, actual, dias = [], [], []
+    for dia in sorted(por_dia, key=lambda d: (d is None, d or dt.date.min)):  # sin fecha, al final
+        del_dia = sorted(por_dia[dia], key=lambda c: (fecha_media(c, mxf_por_ruta) or dt.datetime.min, c["nombre"]))
+        if dia is None and actual:  # lo que no tiene fecha va siempre en su propio bruto
+            bloques.append((actual, dias[0], dias[-1], None))
+            actual, dias = [], []
+        if duracion(del_dia) > tope:
+            if actual:
+                bloques.append((actual, dias[0], dias[-1], None))
+                actual, dias = [], []
+            trozos, trozo = [], []
+            for c in del_dia:
+                if trozo and duracion(trozo) + duracion([c]) > tope:
+                    trozos.append(trozo)
+                    trozo = []
+                trozo.append(c)
+            trozos.append(trozo)
+            bloques += [(t, dia, dia, n if len(trozos) > 1 else None) for n, t in enumerate(trozos, 1)]
+            continue
+        if actual and duracion(actual) + duracion(del_dia) > tope:
+            bloques.append((actual, dias[0], dias[-1], None))
+            actual, dias = [], []
+        actual += del_dia
+        dias.append(dia)
+    if actual:
+        bloques.append((actual, dias[0], dias[-1], None))
+    return bloques
+
+
+def grupos_por_dias(clips, cruce, mxf_por_ruta, cfg):
+    """agrupar=dias: todo el disco por días, sin separar proyectos; agencias y piezas aparte (también por días).
+    Cada clip va una sola vez aunque esté en varios proyectos."""
+    secuencias = {p["proyecto"]: {_normal(n) for n in p.get("secuencias_nombres", [])} for p in (cruce or {}).get("por_proyecto", [])}
+    rx = re.compile(cfg["piezas_regex"]) if cfg.get("piezas_regex") else None
+    prefijos = tuple(cfg.get("origenes_agencia") or ())
+    familias = {"material": [], "agencias": [], "piezas": []}
+    for c in clips:
+        if c.get("render"):
+            if cfg.get("renders_en_piezas", False):
+                familias["piezas"].append(c)
+            continue
+        if not c.get("proyectos") and not cfg.get("incluir_huerfanos", True):
+            continue
+        secs = set().union(*(secuencias.get(p, set()) for p in c.get("proyectos") or [])) if c.get("proyectos") else set()
+        if cfg.get("piezas_aparte", True) and es_pieza(c, secs, rx):
+            familias["piezas"].append(c)
+        elif cfg.get("agencias_aparte", True) and prefijos and str(c.get("origen") or "").startswith(prefijos):
+            familias["agencias"].append(c)
+        else:
+            familias["material"].append(c)
+    grupos = []
+    for familia, cs in familias.items():
+        prefijo = "" if familia == "material" else familia.upper() + "_"
+        for bloque, desde, hasta, parte in bloques_por_dias(cs, mxf_por_ruta, cfg):
+            if desde is None:
+                fechas = "SIN_FECHA"
+            else:
+                fechas = desde.isoformat() + ("" if hasta == desde else "_a_" + hasta.isoformat())
+            nombre = prefijo + fechas + ("_parte%d" % parte if parte else "")
+            proyectos = Counter(p for c in bloque for p in (c.get("proyectos") or ["SIN_PROYECTO"]))
+            dias = (desde.strftime("%d/%m/%Y") + ("" if hasta == desde else " – " + hasta.strftime("%d/%m/%Y"))) if desde else "sin fecha"
+            lista = ", ".join("%s %d" % kv for kv in proyectos.most_common(4))
+            if len(proyectos) > 4:
+                lista += " y %d proyectos más" % (len(proyectos) - 4)
+            etiqueta = {"material": "", "agencias": "agencias · ", "piezas": "piezas renderizadas · "}[familia]
+            contenido = "%s%s%s · %d clips · %s" % (etiqueta, dias, " (parte %d)" % parte if parte else "", len(bloque), lista)
+            grupos.append({"nombre": nombre, "base": nombre_seguro(nombre), "proyecto": ", ".join(sorted(proyectos)),
+                           "tipo": familia, "contenido": contenido, "clips": bloque})
+    return grupos
+
+
+def grupos_por_proyecto(clips, cruce, mxf_por_ruta, cfg):
+    """agrupar=proyecto: cada proyecto por tarjetas, con agencias, importados y piezas aparte."""
     politica = cfg.get("clips_compartidos", "primero")
     huerfanos = cfg.get("incluir_huerfanos", True)
     por_proyecto = defaultdict(lambda: {"normales": [], "renders": []})
     for c in clips:
         render = bool(c.get("render"))
-        if render and not cfg.get("renders_en_piezas", True):
+        if render and not cfg.get("renders_en_piezas", False):
             continue
         proys = sorted(c.get("proyectos_render" if render else "proyectos") or [])
         if politica == "primero" and proys:
@@ -597,7 +699,7 @@ def escribir_contactos(ruta, proyecto, filas, miniaturas_dir):
 # ---------------------------------------------------------------------------
 
 def _fila_clip(i, proyecto, c, mxf_por_ruta):
-    return {"n": i, "proyecto": proyecto, "clip": c["nombre"], "tc_original": c.get("timecode"),
+    return {"n": i, "proyecto": ", ".join(sorted(c.get("proyectos") or [])) or "SIN_PROYECTO", "clip": c["nombre"], "tc_original": c.get("timecode"),
             "fecha": mxf_por_ruta.get(c.get("fichero_video") or c["ficheros"][0], {}).get("modificado"),
             "codec": c.get("codec_video"), "resolucion": c.get("resolucion"), "pistas": c.get("num_audio"),
             "ficheros": "; ".join(c["ficheros"]), "miniatura": c.get("miniatura"), "tc_in": None, "tc_out": None, "duracion": None,
@@ -619,7 +721,7 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
     base_fichero = base_fichero or nombre_seguro(proyecto)
     destino = Path(destino)
     timeouts = set(timeouts or ())
-    cs = sorted(cs, key=lambda c: (c["nombre"], c.get("timecode") or ""))
+    cs = sorted(cs, key=lambda c: (fecha_media(c, mxf_por_ruta) or dt.datetime.min, c["nombre"], c.get("timecode") or ""))
     plan = plan_proyecto(cs, mxf_por_ruta, cfg, modo_forzado)
     pref = cfg.get("prefijo_fichero", "BRUTO_")
     res = {"proyecto": proyecto, "modo": plan["modo"], "reintento": modo_forzado is not None, "pistas_audio": plan["pistas_audio"],

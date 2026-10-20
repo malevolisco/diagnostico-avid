@@ -25,6 +25,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import exportar_brutos as eb  # noqa: E402
 import actualizar  # noqa: E402
 
+try:  # diagnostico_avid necesita pyavb; sin él se saltan sus pruebas
+    import diagnostico_avid as da
+except Exception:  # pragma: no cover
+    da = None
+
 NTSC = 30000 / 1001
 DUR = 2.0
 
@@ -204,16 +209,25 @@ class Reparto(unittest.TestCase):
         self.assertIsNone(eb.carpeta_tarjeta(r"C:\Users\x\Downloads\video.mp4"))
         self.assertIsNone(eb.carpeta_tarjeta(None))
 
-    def test_partir_por_fecha_carpeta_y_camara(self):
-        cs = [self.clip("0001Q3", "2021-09-15 10:00:00"), self.clip("0002Q3", "2021-09-15 10:30:00"),
-              self.clip("0003Q3", "2021-09-15 16:00:00"),  # más de 2 h después: otra tarjeta
-              self.clip("0001R7", "2021-09-15 10:05:00"),  # otra cámara P2
-              self.clip("A", "2021-09-15 10:00:00", r"E:\X\CARD01\CONTENTS\V\A.MXF"),
-              self.clip("B", "2021-09-15 10:00:00", r"E:\X\CARD02\CONTENTS\V\B.MXF")]
+    def test_partir_por_tandas_de_volcado_y_carpeta(self):
+        # Nombres P2 como los del disco real: no indican la tarjeta (00016R, 0002CI, 000328 son seguidos)
+        cs = [self.clip("00016R", "2018-12-12 20:19:19", duracion=600), self.clip("0002CI", "2018-12-12 20:19:48", duracion=600),
+              self.clip("000328", "2018-12-12 20:19:50", duracion=600),
+              self.clip("0001GD", "2018-12-17 18:18:09", duracion=600),  # días después: otra tarjeta
+              self.clip("A", "2018-12-12 20:19:00", r"E:\\X\\CARD01\\CONTENTS\\V\\A.MXF", duracion=600),
+              self.clip("B", "2018-12-12 20:19:00", r"E:\\X\\CARD02\\CONTENTS\\V\\B.MXF", duracion=600)]
         t = eb.partir_por_tarjeta(cs, self.mxf, self.cfg)
-        grupos = sorted(sorted(c["nombre"] for c in g) for g, _ in t)
-        self.assertEqual(grupos, [["0001Q3", "0002Q3"], ["0001R7"], ["0003Q3"], ["A"], ["B"]])
-        self.assertEqual(t[-1][0][0]["nombre"], "0003Q3")  # ordenadas por fecha
+        self.assertEqual(sorted(sorted(c["nombre"] for c in g) for g, _ in t), [["00016R", "0002CI", "000328"], ["0001GD"], ["A"], ["B"]])
+        self.assertEqual(t[-1][0][0]["nombre"], "0001GD")  # ordenadas por fecha
+
+    def test_tandas_pequenas_se_juntan(self):
+        cs = [self.clip("A", "2018-12-12 10:00:00", duracion=1800), self.clip("B", "2018-12-12 13:00:00", duracion=60),
+              self.clip("C", "2018-12-12 20:00:00", duracion=1800), self.clip("D", "2018-12-20 10:00:00", duracion=60)]
+        t = eb.partir_por_tarjeta(cs, self.mxf, self.cfg)
+        # B (1 min) se junta con la tanda más cercana (A, 3 h antes); D está sola a más de 24 h y se queda aparte
+        self.assertEqual([sorted(c["nombre"] for c in g) for g, _ in t], [["A", "B"], ["C"], ["D"]])
+        self.cfg["tarjeta_minimo_minutos"] = 0
+        self.assertEqual(len(eb.partir_por_tarjeta(cs, self.mxf, self.cfg)), 4)
 
     def test_agencias_piezas_y_renders_aparte(self):
         cruce = {"por_proyecto": [{"proyecto": "P", "secuencias_nombres": ["PIEZA SISMO"]}]}
@@ -221,13 +235,15 @@ class Reparto(unittest.TestCase):
               self.clip("X", "2021-09-15 10:00:00", origen="Agencia Reuters"),
               self.clip("PIEZA SISMO.new.01", "2021-09-15 12:00:00"),
               self.clip("Y", "2021-09-15 12:00:00", fichero_origen=r"C:\export\Pieza Sismo.mov"),
-              self.clip("Title: 1", "2021-09-15 12:00:00", proyectos=(), render=True, proyectos_render=["P"])]
+              self.clip("Title: 1", "2021-09-15 12:00:00", proyectos=(), render=True, proyectos_render=["P"]),
+              self.clip("VID_0001.mp4", "2021-09-15 12:00:00", fichero_origen=r"C:\\Users\\admin\\Desktop\\videos movil\\VID_0001.mp4"),
+              self.clip("B.MXF", "2021-09-15 12:00:00", fichero_origen=r"E:\\CONTENTS\\VIDEO\\B.MXF")]  # tarjeta montada: no es importado
         g = {x["nombre"]: sorted(c["nombre"] for c in x["clips"]) for x in eb.grupos_de_exportacion(cs, cruce, self.mxf, self.cfg)}
-        self.assertEqual(g, {"P_T01_2021-09-15": ["0001Q3"], "P_AGENCIAS": ["X"],
-                             "P_PIEZAS": ["PIEZA SISMO.new.01", "Title: 1", "Y"]})
+        self.assertEqual(g, {"P_T01_2021-09-15": ["0001Q3"], "P_T02_2021-09-15": ["B.MXF"], "P_AGENCIAS": ["X"],
+                             "P_IMPORTADOS": ["VID_0001.mp4"], "P_PIEZAS": ["PIEZA SISMO.new.01", "Title: 1", "Y"]})
 
     def test_sin_partir(self):
-        self.cfg.update(partir_por_tarjeta=False, agencias_aparte=False, piezas_aparte=False, renders_en_piezas=False)
+        self.cfg.update(partir_por_tarjeta=False, agencias_aparte=False, piezas_aparte=False, renders_en_piezas=False, importados_aparte=False)
         cs = [self.clip("A", "2021-09-14 10:00:00"), self.clip("B", "2021-09-15 10:00:00", origen="Agencia Reuters"),
               self.clip("T", "2021-09-15 10:00:00", proyectos=(), render=True, proyectos_render=["P"])]
         g = {x["nombre"]: sorted(c["nombre"] for c in x["clips"]) for x in eb.grupos_de_exportacion(cs, {}, self.mxf, self.cfg)}
@@ -244,6 +260,34 @@ class Reparto(unittest.TestCase):
             self.assertFalse(eb.ya_exportado(previo, 1, d, eb.firma_clips([{"clave": "K2"}])))
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+
+@unittest.skipIf(da is None, "sin pyavb")
+class DatosReales(unittest.TestCase):
+    """Casos sacados del disco real de la Corresponsalía de México (oct. 2026)."""
+
+    def test_rutas_con_acentos_mal_leidos(self):
+        self.assertEqual(da.reparar_ruta("D//Documents and Settings/rtve1/Mis documentos/Mis vÌdeos/a.mp4"),
+                         "D//Documents and Settings/rtve1/Mis documentos/Mis vídeos/a.mp4")
+        self.assertEqual(da.reparar_ruta("P//notas IÒigo/a.mov"), "P//notas Iñigo/a.mov")
+        self.assertEqual(da.reparar_ruta("/Users/x/Mis vídeos/a.mov"), "/Users/x/Mis vídeos/a.mov")  # Mac: no se toca
+        self.assertIsNone(da.reparar_ruta(None))
+
+    def test_nombre_de_render(self):
+        for n in ["  ROBOT ABORTO,Audio Dissolve,10", "PIEZA ACTIVISTAS TD2,Dissolve,1",
+                  "PIEZA_DARIEN_SELVA_TD1.Copy.01_updated.01,Dissolve,2.new.01"]:
+            self.assertTrue(da.RE_NOMBRE_RENDER.search(n), n)
+        for n in ["0006M4.new.01", "HONDURAS, DIA 2", "2019 09 29T150951Z_1_LWD0016J7GF9J_RTRWNEV_D_7121 YEMEN.mp4"]:
+            self.assertFalse(da.RE_NOMBRE_RENDER.search(n), n)
+
+    def test_renders_sin_bin_no_son_huerfanos(self):
+        clips = [{"clave": "K1", "nombre": "INFORME SEMANAL,Dissolve,21", "ficheros": ["a"], "duracion": 1, "bytes": 1,
+                  "codec_video": None, "resolucion": None, "fps": None, "proyectos": []},
+                 {"clave": "K2", "nombre": "0006M4.new.01", "ficheros": ["b"], "duracion": 1, "bytes": 1,
+                  "codec_video": None, "resolucion": None, "fps": None, "proyectos": []}]
+        cruce = da.cruzar([], [], clips)
+        self.assertEqual([h["nombre"] for h in cruce["huerfanos"]], ["0006M4.new.01"])
+        self.assertEqual(cruce["renders"], 1)
 
 
 class Actualizacion(unittest.TestCase):

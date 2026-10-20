@@ -190,7 +190,7 @@ class Reanudar(unittest.TestCase):
 
 
 class Reparto(unittest.TestCase):
-    """Brutos por tarjeta, y agencias y piezas aparte."""
+    """agrupar=proyecto: brutos por tarjeta, y agencias, importados y piezas aparte."""
 
     def clip(self, nombre, fecha, fichero_origen=None, origen="Sin determinar", proyectos=("P",), **extra):
         ruta = "MXF/%s.mxf" % nombre
@@ -201,6 +201,7 @@ class Reparto(unittest.TestCase):
     def setUp(self):
         self.mxf = {}
         self.cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+        self.cfg["agrupar"] = "proyecto"
 
     def test_carpeta_tarjeta(self):
         self.assertEqual(eb.carpeta_tarjeta(r"D:\TARJETAS\CARD02\CONTENTS\VIDEO\0016Q3.MXF"), "D:/TARJETAS/CARD02")
@@ -230,6 +231,7 @@ class Reparto(unittest.TestCase):
         self.assertEqual(len(eb.partir_por_tarjeta(cs, self.mxf, self.cfg)), 4)
 
     def test_agencias_piezas_y_renders_aparte(self):
+        self.cfg["renders_en_piezas"] = True
         cruce = {"por_proyecto": [{"proyecto": "P", "secuencias_nombres": ["PIEZA SISMO"]}]}
         cs = [self.clip("0001Q3", "2021-09-15 10:00:00"),
               self.clip("X", "2021-09-15 10:00:00", origen="Agencia Reuters"),
@@ -260,6 +262,55 @@ class Reparto(unittest.TestCase):
             self.assertFalse(eb.ya_exportado(previo, 1, d, eb.firma_clips([{"clave": "K2"}])))
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+
+class PorDias(unittest.TestCase):
+    """agrupar=dias (por defecto): todo el disco por días seguidos hasta 3 h, sin separar proyectos."""
+
+    def setUp(self):
+        self.mxf = {}
+        self.cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+
+    def clip(self, nombre, fecha, horas, proyectos=("P",), **extra):
+        ruta = "MXF/%s.mxf" % nombre
+        if fecha:
+            self.mxf[ruta] = {"ruta": ruta, "modificado": fecha}
+        return dict({"clave": "K" + nombre, "nombre": nombre, "ficheros": [ruta], "fichero_video": ruta,
+                     "duracion": horas * 3600, "origen": "Sin determinar", "proyectos": list(proyectos)}, **extra)
+
+    def nombres(self, cs, cruce=None):
+        return {g["nombre"]: [c["nombre"] for c in g["clips"]] for g in eb.grupos_de_exportacion(cs, cruce or {}, self.mxf, self.cfg)}
+
+    def test_dias_seguidos_hasta_tres_horas(self):
+        cs = [self.clip("A", "2018-12-01 20:00:00", 1), self.clip("B", "2018-12-02 20:00:00", 1.5),
+              self.clip("C", "2018-12-04 20:00:00", 1),  # A+B+C pasaría de 3 h: C abre otro bruto
+              self.clip("D", "2018-12-20 20:00:00", 0.5)]
+        self.assertEqual(self.nombres(cs), {"2018-12-01_a_2018-12-02": ["A", "B"], "2018-12-04_a_2018-12-20": ["C", "D"]})
+
+    def test_dia_largo_se_parte(self):
+        cs = [self.clip("A", "2018-12-12 10:00:00", 2), self.clip("B", "2018-12-12 11:00:00", 2),
+              self.clip("C", "2018-12-12 12:00:00", 0.5)]
+        self.assertEqual(self.nombres(cs), {"2018-12-12_parte1": ["A"], "2018-12-12_parte2": ["B", "C"]})
+
+    def test_madrugada_cuenta_como_dia_anterior(self):
+        cs = [self.clip("A", "2018-12-01 23:00:00", 0.5), self.clip("B", "2018-12-02 02:30:00", 0.5)]
+        self.assertEqual(self.nombres(cs), {"2018-12-01": ["A", "B"]})
+
+    def test_proyectos_juntos_sin_repetir_y_aparte_agencias_y_piezas(self):
+        cruce = {"por_proyecto": [{"proyecto": "Q", "secuencias_nombres": ["PIEZA SISMO"]}]}
+        cs = [self.clip("A", "2018-12-01 20:00:00", 0.5, proyectos=("P", "Q")),  # compartido: una sola vez
+              self.clip("B", "2018-12-01 21:00:00", 0.5, proyectos=("Q",)),
+              self.clip("H", "2018-12-01 22:00:00", 0.5, proyectos=()),  # huérfano
+              self.clip("R", "2018-12-01 20:30:00", 0.5, origen="Agencia Reuters"),
+              self.clip("PIEZA SISMO", "2018-12-03 10:00:00", 0.1, proyectos=("Q",)),
+              self.clip("X,Dissolve,1", "2018-12-01 20:00:00", 0.01, proyectos=(), render=True),
+              self.clip("Title: 1", "2018-12-01 20:00:00", 0.01, proyectos=(), render=True, proyectos_render=["Q"])]
+        self.assertEqual(self.nombres(cs, cruce), {"2018-12-01": ["A", "B", "H"], "AGENCIAS_2018-12-01": ["R"],
+                                                   "PIEZAS_2018-12-03": ["PIEZA SISMO"]})
+
+    def test_sin_fecha_al_final(self):
+        cs = [self.clip("A", "2018-12-01 20:00:00", 0.5), self.clip("Z", None, 0.5)]
+        self.assertEqual(self.nombres(cs), {"2018-12-01": ["A"], "SIN_FECHA": ["Z"]})
 
 
 @unittest.skipIf(da is None, "sin pyavb")
@@ -425,6 +476,7 @@ class Detener(unittest.TestCase):
                 return True, ""
             eb.ejecutar_ffmpeg, eb.duracion_ffprobe = ejecutar, lambda ffprobe, ruta: DUR
             cfg = eb.cargar_config(tmp / "config_brutos.json")
+            cfg["agrupar"] = "proyecto"
             destino = tmp / "brutos"
             res = eb.exportar_todo(clips, {}, mxf, tmp, destino, "ffmpeg", "ffprobe", lambda m: None, cfg)
             self.assertEqual([r["proyecto"] for r in res], ["PROY A_T01"])

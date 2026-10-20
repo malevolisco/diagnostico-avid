@@ -3,7 +3,7 @@
 """
 Comprueba el resultado de una ejecución del programa sobre el disco de prueba.
 
-Uso:  python tests/comprobar_resultado.py CARPETA_INFORME CARPETA_BRUTOS [--ffprobe RUTA] [--reanudado]
+Uso:  python tests/comprobar_resultado.py CARPETA_INFORME CARPETA_BRUTOS [--ffprobe RUTA] [--reanudado] [--agrupar dias|proyecto]
 Sale con código 1 si algo no cuadra, para que el flujo de GitHub falle.
 --reanudado: tras una segunda ejecución sobre la misma carpeta de brutos, todos
 los proyectos deben venir marcados como reanudados (no se han vuelto a exportar).
@@ -29,6 +29,7 @@ def main():
     ap.add_argument("brutos")
     ap.add_argument("--ffprobe", default=shutil.which("ffprobe"))
     ap.add_argument("--reanudado", action="store_true")
+    ap.add_argument("--agrupar", choices=["dias", "proyecto"], default="dias", help="el agrupar de config_brutos.json con el que se exportó")
     a = ap.parse_args()
 
     carpetas = glob.glob(str(Path(a.informe) / "Diagnostico_*"))
@@ -67,17 +68,23 @@ def main():
         fallo("no hay brutos_resultado.json")
     res = json.loads(res_path.read_text(encoding="utf-8"))
     por = {b["proyecto"]: b for b in res}
-    # Un bruto por tarjeta (_Tnn_fecha), y aparte agencias, importados y piezas. 15 SEPT: el clip "2017 07 13" es del día 10
-    # (otra tarjeta); el de Reuters lo dice la ruta del bin; la pieza se llama como la secuencia y el render
-    # del título también va a _PIEZAS; el vídeo de móvil importado, a _IMPORTADOS. El render de fundido sin bin
-    # va a SIN_PROYECTO_PIEZAS. NTSC: mismo día pero dos carpetas de tarjeta (CARD01, CARD02).
-    # SIN_PROYECTO: huérfano 2 s + cuarentena 1 s + los 2 "APROX B" ambiguos de 2 s.
-    esperado_brutos = {"15 SEPT CENTROAMERICA_T01_2021-09-10": ("copia", 1, 2.0), "15 SEPT CENTROAMERICA_T02_2021-09-15": ("copia", 2, 5.0),
-                       "15 SEPT CENTROAMERICA_AGENCIAS": ("copia", 1, 2.0), "15 SEPT CENTROAMERICA_PIEZAS": ("copia", 2, 3.0),
-                       "15 SEPT CENTROAMERICA_IMPORTADOS": ("copia", 1, 2.0), "SIN_PROYECTO_PIEZAS": ("copia", 1, 1.0),
-                       "ABORTO_T01_2021-09-15": ("convertir", 2, 4.0), "APROX_T01_2021-09-15": ("copia", 1, 2.0),
-                       "NTSC_T01_2021-09-15": ("copia", 1, 2.0), "NTSC_T02_2021-09-15": ("copia", 1, 2.0),
-                       "SIN_PROYECTO_T01_2021-09-15": ("copia", 4, 7.0)}
+    if a.agrupar == "dias":
+        # Todo el disco por días seguidos hasta 3 h: un bloque del 10 al 15/09 con todo el material (13 clips con vídeo;
+        # el "2017 07 13" compartido va una sola vez; mezcla formatos, así que se convierte), y aparte la agencia y la
+        # pieza renderizada. Los dos renders de efectos (título con bin, fundido sin bin) no entran.
+        esperado_brutos = {"2021-09-10_a_2021-09-15": ("convertir", 13, 26.0), "AGENCIAS_2021-09-15": ("copia", 1, 2.0),
+                           "PIEZAS_2021-09-15": ("copia", 1, 2.0)}
+    else:
+        # Un bruto por tarjeta (_Tnn_fecha), y aparte agencias, importados y piezas. 15 SEPT: el clip "2017 07 13" es del día 10
+        # (otra tarjeta); el de Reuters lo dice la ruta del bin; la pieza se llama como la secuencia. El vídeo de móvil
+        # importado va a _IMPORTADOS. Los renders de efectos no entran. NTSC: mismo día pero dos carpetas de tarjeta.
+        # SIN_PROYECTO: huérfano 2 s + cuarentena 1 s + los 2 "APROX B" ambiguos de 2 s.
+        esperado_brutos = {"15 SEPT CENTROAMERICA_T01_2021-09-10": ("copia", 1, 2.0), "15 SEPT CENTROAMERICA_T02_2021-09-15": ("copia", 2, 5.0),
+                           "15 SEPT CENTROAMERICA_AGENCIAS": ("copia", 1, 2.0), "15 SEPT CENTROAMERICA_PIEZAS": ("copia", 1, 2.0),
+                           "15 SEPT CENTROAMERICA_IMPORTADOS": ("copia", 1, 2.0),
+                           "ABORTO_T01_2021-09-15": ("convertir", 2, 4.0), "APROX_T01_2021-09-15": ("copia", 1, 2.0),
+                           "NTSC_T01_2021-09-15": ("copia", 1, 2.0), "NTSC_T02_2021-09-15": ("copia", 1, 2.0),
+                           "SIN_PROYECTO_T01_2021-09-15": ("copia", 4, 7.0)}
     if sorted(por) != sorted(esperado_brutos):
         fallo("brutos %s, esperados %s" % (sorted(por), sorted(esperado_brutos)))
     for proy, (modo, incl, seg) in esperado_brutos.items():
@@ -99,7 +106,9 @@ def main():
             sep = ";" if proy.startswith("NTSC") else ":"  # drop-frame solo a 29,97
             if len(tc) != 11 or tc[8] != sep:
                 fallo("bruto %s: timecode %r, esperado con '%s' antes de los frames" % (proy, tc, sep))
-        tcs = tc_shotlist(Path(a.brutos) / b["shotlist"])
+        tcs, proyectos = tc_shotlist(Path(a.brutos) / b["shotlist"])
+        if a.agrupar == "dias" and not proy.startswith(("AGENCIAS", "PIEZAS")) and not {"NTSC", "ABORTO", "SIN_PROYECTO"} <= proyectos:
+            fallo("shotlist %s: debería decir el proyecto de cada clip; dice %s" % (proy, sorted(proyectos)))
         sep = ";" if proy.startswith("NTSC") else ":"
         if not tcs or any(len(t) != 11 or t[8] != sep for t in tcs):
             fallo("shotlist %s: timecodes %r, esperado '%s' antes de los frames" % (proy, tcs, sep))
@@ -111,15 +120,16 @@ def main():
 
 
 def tc_shotlist(ruta):
-    """TC de inicio de los clips incluidos, del xlsx o, si no había openpyxl, del csv de respaldo."""
+    """(TC de inicio de los clips incluidos, proyectos que aparecen), del xlsx o, si no había openpyxl, del csv de respaldo."""
     if ruta.suffix == ".xlsx":
         from openpyxl import load_workbook
         filas = list(load_workbook(ruta, read_only=True).active.iter_rows(values_only=True))
-        col = filas[0].index("TC inicio (bruto)")
-        return [f[col] for f in filas[1:] if f[col]]
+        col, colp = filas[0].index("TC inicio (bruto)"), filas[0].index("Proyecto")
+        return [f[col] for f in filas[1:] if f[col]], {p.strip() for f in filas[1:] for p in str(f[colp] or "").split(",")}
     import csv
     with open(ruta, encoding="utf-8-sig", newline="") as f:
-        return [fila["tc_in"] for fila in csv.DictReader(f, delimiter=";") if fila.get("tc_in")]
+        filas = list(csv.DictReader(f, delimiter=";"))
+    return [x["tc_in"] for x in filas if x.get("tc_in")], {p.strip() for x in filas for p in str(x.get("proyecto") or "").split(",")}
 
 
 if __name__ == "__main__":

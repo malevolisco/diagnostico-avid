@@ -52,16 +52,15 @@ Pasos
    rutas. En la carpeta de destino habrá:
    - una carpeta  Diagnostico_<disco>_<fecha>  con el informe (informe.html)
    - un fichero   Diagnostico_<disco>_<fecha>.zip
-   Y si se marcó la opción 3, en la carpeta de brutos, por cada proyecto:
-   - BRUTO_<PROYECTO>_T01_<fecha>.mxf     el material de la tarjeta 1 de cámara;
-     BRUTO_<PROYECTO>_T02_<fecha>.mxf     de la tarjeta 2, etc.
-   - BRUTO_<PROYECTO>_AGENCIAS.mxf        el material de agencias (Reuters...)
-   - BRUTO_<PROYECTO>_IMPORTADOS.mxf      vídeos importados que no son de cámara
-                                          (descargas, móvil...)
-   - BRUTO_<PROYECTO>_PIEZAS.mxf          piezas ya renderizadas y rótulos
+   Y si se marcó la opción 3, en la carpeta de brutos, todo el material del
+   disco ordenado por fechas, en bloques de días seguidos de hasta 3 horas:
+   - BRUTO_2018-12-01_a_2018-12-04.mxf    lo volcado del 1 al 4 de diciembre
+   - BRUTO_2018-12-12_parte1.mxf          un día con más de 3 horas, en partes
+   - BRUTO_AGENCIAS_<fechas>.mxf          el material de agencias (Reuters...)
+   - BRUTO_PIEZAS_<fechas>.mxf            piezas ya renderizadas
    Cada uno con su _shotlist.xlsx (lista de clips con su timecode dentro del
-   bruto) y su _contactos.html (miniaturas).
-   Los clips que no pertenecen a ningún proyecto van a BRUTO_SIN_PROYECTO_...
+   bruto y el proyecto de Avid de cada clip) y su _contactos.html (miniaturas).
+   Los fundidos, rótulos y efectos renderizados por Avid no se incluyen.
 7. Envía el fichero .zip del informe. Es pequeño (texto y miniaturas, sin vídeo).
    Si te piden enviarlo sin imágenes, desmarca antes de empezar la casilla
    "Incluir las miniaturas en el zip para enviar".

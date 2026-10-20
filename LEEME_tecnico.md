@@ -6,7 +6,8 @@
 |---|---|
 | `construir_exe.bat` | **Lo que ejecutas tú, una vez.** Descarga ffmpeg, construye el `.exe` y deja `DiagnosticoAvid_portable.zip` listo para enviar |
 | `diagnostico_avid.py` | Programa principal: ventana, línea de comandos, análisis (fase 1) e informe |
-| `exportar_brutos.py` | Fase 2: un MXF por proyecto + shotlist Excel + hoja de contactos. Lo importa el principal |
+| `exportar_brutos.py` | Fase 2: un MXF por tarjeta de cada proyecto (y aparte agencias y piezas) + shotlist Excel + hoja de contactos. Lo importa el principal |
+| `actualizar.py` | Autoactualización del `.exe` al abrir la ventana. Lo importa el principal |
 | `config_brutos.json` | Parámetros de exportación. Se crea solo la primera vez que se exporta, junto al programa |
 | `INSTRUCCIONES.txt` | Hoja de uso para quien reciba el portable (se copia dentro automáticamente) |
 | `ejecutar.bat` | Alternativa sin `.exe`: lanza el programa con Python instalado |
@@ -48,7 +49,11 @@ Opciones: `--sin-miniaturas` (análisis mucho más rápido), `--max-miniaturas 2
 
 ## Fase 2: cómo se construye cada bruto
 
-1. Clips del proyecto (los cruzados en la fase 1), ordenados por nombre y timecode. Los huérfanos van a `BRUTO_SIN_PROYECTO`.
+1. **Reparto** (`grupos_de_exportacion`): los clips de cada proyecto (los cruzados en la fase 1; los huérfanos, como proyecto `SIN_PROYECTO`) se reparten en:
+   - **`_PIEZAS`**: los renders de efectos del proyecto (`usage = precompute`: títulos, fundidos) y las **piezas renderizadas**: clips que se llaman como una secuencia del proyecto, por su nombre o por el del fichero importado, quitando extensión, `.new.01` y "mixdown" (pieza exportada y reimportada, o mixdown). `piezas_regex` en el config añade otra regla por nombre.
+   - **`_AGENCIAS`**: clips cuyo origen según el bin (`config_origen.json`) empieza por "Agencia" (`origenes_agencia`).
+   - **`_T01_<fecha>`, `_T02_…`**: el resto, **un bruto por tarjeta** (`partir_por_tarjeta`). Se agrupan por (a) la carpeta de la tarjeta según la ruta del fichero importado que guarda el bin (la carpeta que contiene `CONTENTS`, `PRIVATE`, `DCIM`, `XDROOT`, `BPAV`, `AVCHD`, `M4ROOT`, `CLIPR`; si se importó con la tarjeta montada queda la letra, p. ej. `E:`), (b) la cámara P2 (los dos últimos caracteres de `0016Q3`) y (c) dentro de eso, un salto de más de `tarjeta_hueco_horas` (2 h) en la fecha de la media (la del MXF: cuándo se capturó o importó en Avid). Las tarjetas se numeran por fecha y el bruto lleva la fecha de la primera. El informe y el log dicen en qué se basó cada tarjeta ("carpeta CARD02", "cámara P2 Q3", fechas).
+   Dentro de cada bruto, los clips van ordenados por nombre y timecode. `brutos_resultado.json` guarda de cada bruto `proyecto` (nombre del bruto), `proyecto_avid`, `tipo` (tarjeta, agencias, piezas) y `contenido`.
 2. **Plan**: si todos los clips comparten códec, resolución, fps y formato de píxel y el códec es copiable (DNxHD, MPEG-2, DV, ProRes, H.264) → **copia** (sin recomprimir, sin pérdida). Si no → **convertir** al formato de `config_brutos.json` (por defecto MPEG-2 4:2:2 50 Mb/s 1920×1080 25p, tipo XDCAM HD422; desentrelaza con `bwdif` si la fuente es entrelazada).
 3. **Audio**: siempre PCM 24 bits 48 kHz, una pista mono por fichero de audio de Avid; todos los clips del bruto llevan el mismo número de pistas (el máximo del proyecto, tope 8); las que faltan se rellenan con silencio de la duración del clip (no con `-shortest`, que recortaba el vídeo a la pista más corta).
 4. Cada clip se convierte en un MXF OP1a intermedio homogéneo (`_tmp_<proyecto>/seg_NNNNN.mxf`); luego se unen con el demuxer `concat` de ffmpeg con `-c copy` y el `timecode_inicio` del config.
@@ -58,15 +63,23 @@ Opciones: `--sin-miniaturas` (análisis mucho más rápido), `--max-miniaturas 2
 5. **Verificación**: ffprobe del bruto; la duración debe coincidir con la suma de los segmentos (tolerancia 1 s). Con `"verificar_decodificando": true` en el config además se decodifica entero (lento).
 6. **Shotlist** (`openpyxl`): nº, clip, TC inicio/fin dentro del bruto, duración, TC original, fecha, códec, resolución, pistas, estado, ficheros origen. **Contactos**: HTML con las miniaturas de la fase 1.
 7. Un clip que falle se salta, queda marcado en el shotlist y el bruto se hace con el resto; `brutos_resultado.json → errores` guarda de cada fallo el comando ffmpeg (300 caracteres) y las últimas líneas del error. Antes de empezar cada proyecto se comprueba el espacio libre.
-8. **Reanudar**: `brutos_resultado.json` se reescribe tras cada proyecto. Al relanzar sobre la misma carpeta de brutos, un proyecto se salta (`reanudado: true`) si terminó en `OK` o `AVISO`, su `.mxf` existe con el mismo tamaño, existe su shotlist y tiene el mismo número de clips. Si cambió el análisis o `config_brutos.json`, se rehace. El análisis (ffprobe, miniaturas) sí se repite entero.
+8. **Reanudar**: `brutos_resultado.json` se reescribe tras cada bruto. Al relanzar sobre la misma carpeta de brutos, un bruto se salta (`reanudado: true`) si terminó en `OK` o `AVISO`, su `.mxf` existe con el mismo tamaño, existe su shotlist y tiene exactamente los mismos clips (`firma`: huella de los identificadores). Si cambió el análisis o `config_brutos.json`, se rehace. El análisis (ffprobe, miniaturas) sí se repite entero.
 9. En Windows el programa impide la suspensión del PC mientras trabaja (`SetThreadExecutionState`) y la restaura al terminar, también si hay un error.
 10. **Botón Detener** (y cerrar la ventana con la X mientras trabaja, que pregunta antes): activa `exportar_brutos.PARAR`. `ejecutar_ffmpeg` lanza ffmpeg con `Popen` y lo mata en ≤ 1 s; el análisis lo comprueba por carpeta del inventario, por bin y en los bucles de ffprobe y miniaturas. Durante los brutos: el proyecto a medias se descarta (temporales y, si estaba uniendo, el `.mxf` parcial), `brutos_resultado.json` conserva los terminados y los de ejecuciones anteriores a los que no se llegó, y se escribe igualmente el informe y el zip con un aviso rojo y `resumen.json → detenido: true`. Durante el análisis: no hay informe; el log termina con "Análisis detenido por el usuario".
 
 Lo que no hace: reconstruir las piezas montadas (secuencias con efectos o rótulos). Quedan listadas en el informe, no exportadas.
 
+## Autoactualización (`actualizar.py`)
+
+Solo en el `.exe` de Windows y solo al abrir la ventana (nunca a mitad de un análisis; por línea de comandos no se actualiza). Consulta `api.github.com/repos/malevolisco/diagnostico-avid/releases/latest` (el repositorio es público: no hace falta contraseña); si el número de build es mayor que el propio (`build.txt`), descarga `DiagnosticoAvid_portable.zip` a una carpeta `<carpeta del programa>_actualizacion` junto al programa, comprueba tamaño, integridad del zip y que contiene `DiagnosticoAvid/DiagnosticoAvid.exe`, y lanza un `.bat` (en `%LOCALAPPDATA%\DiagnosticoAvid`) que espera a que el programa se cierre, renombra la carpeta vieja a `_anterior`, pone la nueva en su sitio, copia `config_*.json` de la vieja, borra lo sobrante y reabre el programa. Si Windows no deja renombrar (una ventana del Explorador abierta dentro), copia encima con `robocopy` sin tocar la configuración. Si falla, vuelve a la versión anterior, la reabre y no reintenta esa build (marca `fallo_build-N.txt` en `%LOCALAPPDATA%\DiagnosticoAvid`; borrarla para reintentar). Todo queda en `%LOCALAPPDATA%\DiagnosticoAvid\actualizacion.log`.
+
+`--sin-actualizar` abre la ventana sin buscar versión nueva. `--actualizar-ahora` (lo usa la prueba del workflow) actualiza sin ventana y sin reabrir. `DIAGNOSTICO_URL_ACTUALIZACION` apunta a otro JSON con el formato de la API (sirve `file:///`).
+
+Nota: `config_origen.json` viejo se conserva al actualizar, así que si una versión nueva añade reglas de origen (p. ej. APTN), hay que borrar ese fichero para que se regenere, o añadir la regla a mano.
+
 ## Config de exportación (`config_brutos.json`)
 
-Se crea con valores por defecto al primer uso. Claves: `modo` (`auto` | `copia` | `convertir`), `pistas_audio` (`max` | número | 0), `timecode_inicio` (se escribe siempre `hh:mm:ss:ff`; en proyectos 29,97 el programa lo pasa a drop-frame), `incluir_huerfanos`, `prefijo_fichero`, y `convertir` (`codec`, `ancho`, `alto`, `fps`, `bitrate`, `desentrelazar`). Si el archivo pide otro formato de ingesta, se cambia aquí sin tocar código.
+Se crea con valores por defecto al primer uso. Claves: `modo` (`auto` | `copia` | `convertir`), `pistas_audio` (`max` | número | 0), `timecode_inicio` (se escribe siempre `hh:mm:ss:ff`; en proyectos 29,97 el programa lo pasa a drop-frame), `incluir_huerfanos`, `prefijo_fichero`, el reparto (`partir_por_tarjeta`, `tarjeta_hueco_horas`, `agencias_aparte`, `origenes_agencia`, `piezas_aparte`, `piezas_regex`, `renders_en_piezas`; la antigua `incluir_renders` ya no se usa), y `convertir` (`codec`, `ancho`, `alto`, `fps`, `bitrate`, `desentrelazar`). Si el archivo pide otro formato de ingesta, se cambia aquí sin tocar código.
 
 ## Verificado con datos reales (bins del proyecto 15 SEPT CENTROAMERICA, Media Composer 23.12.6)
 
@@ -83,6 +96,9 @@ Se crea con valores por defecto al primer uso. Claves: `modo` (`auto` | `copia` 
 - Tiempos reales con miles de ficheros.
 - Timecode drop-frame: probado con valores conocidos y con MXF MPEG-2 29,97 simulados (ffmpeg 6.1 en Linux y 7.1.1 en Windows); falta compararlo con el TC que muestra Avid en un proyecto real.
 - El reintento copia → convertir solo está probado con ffmpeg simulado (pruebas unitarias): en el disco de prueba todos los formatos copiables se copian bien.
+- **Reparto por tarjetas**: probado con bins simulados que guardan la ruta de la tarjeta igual que Avid (source mob con localizador) y con fechas de MXF fijadas. Falta comprobar con el disco real qué rutas guardan los bins de material P2 importado o enlazado (AMA), y si 2 h de hueco separa bien las tarjetas de un día de rodaje. Mirar `clips.json → fichero_origen` y el reparto en el log ("Brutos previstos").
+- **Piezas renderizadas**: se reconocen porque se llaman como una secuencia del proyecto. No está comprobado cómo nombra Avid un mixdown en el disco real; si no coinciden, añadir una regla en `piezas_regex`.
+- **Autoactualización**: el cambio de carpeta con el `.bat` se prueba en cada build en el Windows de GitHub (carpeta con espacios, paréntesis y ñ; se conserva la configuración). Sin probar: un PC con proxy corporativo o antivirus que bloquee la descarga o el `.bat`. En ese caso el programa sigue con su versión y lo deja en `%LOCALAPPDATA%\DiagnosticoAvid\actualizacion.log`.
 
 ## Lista de comprobación del primer zip de un disco real
 

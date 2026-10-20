@@ -12,6 +12,7 @@ Uso:  python -m unittest discover -s tests -v
 """
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -22,6 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import exportar_brutos as eb  # noqa: E402
+import actualizar  # noqa: E402
 
 NTSC = 30000 / 1001
 DUR = 2.0
@@ -182,6 +184,159 @@ class Reanudar(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class Reparto(unittest.TestCase):
+    """Brutos por tarjeta, y agencias y piezas aparte."""
+
+    def clip(self, nombre, fecha, fichero_origen=None, origen="Sin determinar", proyectos=("P",), **extra):
+        ruta = "MXF/%s.mxf" % nombre
+        self.mxf[ruta] = {"ruta": ruta, "modificado": fecha}
+        return dict({"clave": "K" + nombre, "nombre": nombre, "ficheros": [ruta], "fichero_video": ruta,
+                     "fichero_origen": fichero_origen, "origen": origen, "proyectos": list(proyectos)}, **extra)
+
+    def setUp(self):
+        self.mxf = {}
+        self.cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+
+    def test_carpeta_tarjeta(self):
+        self.assertEqual(eb.carpeta_tarjeta(r"D:\TARJETAS\CARD02\CONTENTS\VIDEO\0016Q3.MXF"), "D:/TARJETAS/CARD02")
+        self.assertEqual(eb.carpeta_tarjeta(r"E:\CONTENTS\VIDEO\0016Q3.MXF"), "E:")
+        self.assertEqual(eb.carpeta_tarjeta("/Volumes/CAM_A/PRIVATE/M4ROOT/CLIP/C0001.MP4"), "Volumes/CAM_A")
+        self.assertIsNone(eb.carpeta_tarjeta(r"C:\Users\x\Downloads\video.mp4"))
+        self.assertIsNone(eb.carpeta_tarjeta(None))
+
+    def test_partir_por_fecha_carpeta_y_camara(self):
+        cs = [self.clip("0001Q3", "2021-09-15 10:00:00"), self.clip("0002Q3", "2021-09-15 10:30:00"),
+              self.clip("0003Q3", "2021-09-15 16:00:00"),  # más de 2 h después: otra tarjeta
+              self.clip("0001R7", "2021-09-15 10:05:00"),  # otra cámara P2
+              self.clip("A", "2021-09-15 10:00:00", r"E:\X\CARD01\CONTENTS\V\A.MXF"),
+              self.clip("B", "2021-09-15 10:00:00", r"E:\X\CARD02\CONTENTS\V\B.MXF")]
+        t = eb.partir_por_tarjeta(cs, self.mxf, self.cfg)
+        grupos = sorted(sorted(c["nombre"] for c in g) for g, _ in t)
+        self.assertEqual(grupos, [["0001Q3", "0002Q3"], ["0001R7"], ["0003Q3"], ["A"], ["B"]])
+        self.assertEqual(t[-1][0][0]["nombre"], "0003Q3")  # ordenadas por fecha
+
+    def test_agencias_piezas_y_renders_aparte(self):
+        cruce = {"por_proyecto": [{"proyecto": "P", "secuencias_nombres": ["PIEZA SISMO"]}]}
+        cs = [self.clip("0001Q3", "2021-09-15 10:00:00"),
+              self.clip("X", "2021-09-15 10:00:00", origen="Agencia Reuters"),
+              self.clip("PIEZA SISMO.new.01", "2021-09-15 12:00:00"),
+              self.clip("Y", "2021-09-15 12:00:00", fichero_origen=r"C:\export\Pieza Sismo.mov"),
+              self.clip("Title: 1", "2021-09-15 12:00:00", proyectos=(), render=True, proyectos_render=["P"])]
+        g = {x["nombre"]: sorted(c["nombre"] for c in x["clips"]) for x in eb.grupos_de_exportacion(cs, cruce, self.mxf, self.cfg)}
+        self.assertEqual(g, {"P_T01_2021-09-15": ["0001Q3"], "P_AGENCIAS": ["X"],
+                             "P_PIEZAS": ["PIEZA SISMO.new.01", "Title: 1", "Y"]})
+
+    def test_sin_partir(self):
+        self.cfg.update(partir_por_tarjeta=False, agencias_aparte=False, piezas_aparte=False, renders_en_piezas=False)
+        cs = [self.clip("A", "2021-09-14 10:00:00"), self.clip("B", "2021-09-15 10:00:00", origen="Agencia Reuters"),
+              self.clip("T", "2021-09-15 10:00:00", proyectos=(), render=True, proyectos_render=["P"])]
+        g = {x["nombre"]: sorted(c["nombre"] for c in x["clips"]) for x in eb.grupos_de_exportacion(cs, {}, self.mxf, self.cfg)}
+        self.assertEqual(g, {"P": ["A", "B"]})
+
+    def test_firma_distinta_no_reanuda(self):
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "B.mxf").write_bytes(b"12345")
+            (d / "B_shotlist.xlsx").write_bytes(b"x")
+            previo = {"estado": "OK", "clips": 1, "fichero": "B.mxf", "bytes": 5, "shotlist": "B_shotlist.xlsx",
+                      "firma": eb.firma_clips([{"clave": "K1"}])}
+            self.assertTrue(eb.ya_exportado(previo, 1, d, eb.firma_clips([{"clave": "K1"}])))
+            self.assertFalse(eb.ya_exportado(previo, 1, d, eb.firma_clips([{"clave": "K2"}])))
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+class Actualizacion(unittest.TestCase):
+    """Autoactualización con una 'release' falsa en ficheros locales (file://). El cambio de carpeta
+    lo hace un .bat de Windows: eso se prueba en el workflow de GitHub con el .exe."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self._env = os.environ.get("LOCALAPPDATA")
+        os.environ["LOCALAPPDATA"] = str(self.tmp / "localappdata")
+        self._lanzar = actualizar.lanzar_cambio
+        self.lanzados = []
+        actualizar.lanzar_cambio = lambda *a, **k: self.lanzados.append((a, k))
+        self.app = self.tmp / "Escritorio" / "DiagnosticoAvid"
+        self.app.mkdir(parents=True)
+        self._url = os.environ.get("DIAGNOSTICO_URL_ACTUALIZACION")
+        os.environ["DIAGNOSTICO_URL_ACTUALIZACION"] = "file:prueba"  # permite file:// como en la prueba del workflow
+
+    def tearDown(self):
+        actualizar.lanzar_cambio = self._lanzar
+        if self._url is None:
+            os.environ.pop("DIAGNOSTICO_URL_ACTUALIZACION", None)
+        else:
+            os.environ["DIAGNOSTICO_URL_ACTUALIZACION"] = self._url
+        if self._env is None:
+            os.environ.pop("LOCALAPPDATA", None)
+        else:
+            os.environ["LOCALAPPDATA"] = self._env
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def release(self, tag, con_exe=True, nombre_zip=actualizar.NOMBRE_ZIP):
+        z = self.tmp / "zip" / nombre_zip
+        z.parent.mkdir(exist_ok=True)
+        import zipfile
+        with zipfile.ZipFile(z, "w") as f:
+            f.writestr("DiagnosticoAvid/_internal/build.txt", tag + " abc 2026-10-20")
+            if con_exe:
+                f.writestr("DiagnosticoAvid/DiagnosticoAvid.exe", b"MZ")
+        datos = {"tag_name": tag, "assets": [{"name": nombre_zip, "browser_download_url": z.as_uri(), "size": z.stat().st_size}]}
+        j = self.tmp / "latest.json"
+        j.write_text(json.dumps(datos), encoding="utf-8")
+        return j.as_uri()
+
+    def test_numero_build(self):
+        self.assertEqual(actualizar.numero_build("build-12 abc1234 2026-10-20"), 12)
+        self.assertEqual(actualizar.numero_build("build-9"), 9)
+        self.assertIsNone(actualizar.numero_build("local"))
+
+    def test_solo_si_es_mas_nueva(self):
+        url = self.release("build-10")
+        self.assertEqual(actualizar.buscar_version("build-9 x", url)["tag"], "build-10")
+        self.assertIsNone(actualizar.buscar_version("build-10 x", url))
+        self.assertIsNone(actualizar.buscar_version("build-11 x", url))
+        self.assertIsNone(actualizar.buscar_version("local", url))  # ejecutado con Python: nunca
+
+    def test_descarga_comprueba_y_lanza_el_cambio(self):
+        url = self.release("build-10")
+        self.assertEqual(actualizar.actualizar("build-9 x", self.app, url=url), "cambio_lanzado")
+        (app, nueva, trabajo, tag, relanzar), _ = self.lanzados[0]
+        self.assertIs(relanzar, True)
+        self.assertEqual((app, tag), (self.app, "build-10"))
+        self.assertEqual((nueva / "_internal" / "build.txt").read_text(), "build-10 abc 2026-10-20")
+        self.assertEqual(trabajo.parent, self.app.parent)  # misma unidad: el cambio es un renombrado
+
+    def test_zip_sin_exe_no_se_instala(self):
+        url = self.release("build-10", con_exe=False)
+        self.assertTrue(actualizar.actualizar("build-9 x", self.app, url=url).startswith("error"))
+        self.assertEqual(self.lanzados, [])
+        self.assertFalse((self.app.parent / "DiagnosticoAvid_actualizacion").exists())
+
+    def test_release_sin_zip_no_se_instala(self):
+        url = self.release("build-10", nombre_zip="otro.zip")
+        self.assertTrue(actualizar.actualizar("build-9 x", self.app, url=url).startswith("error"))
+        self.assertEqual(self.lanzados, [])
+
+    def test_sin_internet_sigue(self):
+        r = actualizar.actualizar("build-9 x", self.app, url=(self.tmp / "no_existe.json").as_uri())
+        self.assertTrue(r.startswith("error"))
+        self.assertEqual(self.lanzados, [])
+
+    def test_solo_https_fuera_de_pruebas(self):
+        del os.environ["DIAGNOSTICO_URL_ACTUALIZACION"]
+        url = self.release("build-10")  # file://
+        self.assertTrue(actualizar.actualizar("build-9 x", self.app, url=url).startswith("error: dirección no permitida"))
+        self.assertEqual(actualizar.comprobar_url("https://api.github.com/x"), "https://api.github.com/x")
+
+    def test_no_reintenta_una_version_que_fallo(self):
+        url = self.release("build-10")
+        actualizar.marca_fallo("build-10").write_text("build-10")
+        self.assertEqual(actualizar.actualizar("build-9 x", self.app, url=url), "al_dia")
+        self.assertEqual(self.lanzados, [])
+
+
 class Detener(unittest.TestCase):
     """El botón Detener activa PARAR. Se usa un proceso real (python durmiendo) en lugar de ffmpeg."""
     DORMIR = [sys.executable, "-c", "import time; time.sleep(30)"]
@@ -228,11 +383,11 @@ class Detener(unittest.TestCase):
             cfg = eb.cargar_config(tmp / "config_brutos.json")
             destino = tmp / "brutos"
             res = eb.exportar_todo(clips, {}, mxf, tmp, destino, "ffmpeg", "ffprobe", lambda m: None, cfg)
-            self.assertEqual([r["proyecto"] for r in res], ["PROY A"])
+            self.assertEqual([r["proyecto"] for r in res], ["PROY A_T01"])
             guardado = json.loads((destino / "brutos_resultado.json").read_text(encoding="utf-8"))
-            self.assertEqual([r["proyecto"] for r in guardado], ["PROY A"])
+            self.assertEqual([r["proyecto"] for r in guardado], ["PROY A_T01"])
             self.assertFalse(list(destino.glob("_tmp_*")), "queda la carpeta temporal del proyecto a medias")
-            self.assertFalse((destino / "BRUTO_PROY B.mxf").exists())
+            self.assertFalse((destino / "BRUTO_PROY B_T01.mxf").exists())
         finally:
             eb.ejecutar_ffmpeg, eb.duracion_ffprobe = orig
             shutil.rmtree(tmp, ignore_errors=True)

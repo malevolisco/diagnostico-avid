@@ -59,6 +59,13 @@ except Exception:  # pragma: no cover
     exportar_brutos = None
     EXPORT_OK = False
 
+try:
+    import actualizar
+    ACTUALIZAR_OK = True
+except Exception:  # pragma: no cover
+    actualizar = None
+    ACTUALIZAR_OK = False
+
 if EXPORT_OK:  # el mismo aviso de "Detener" sirve para el análisis y para la exportación
     PARAR, Detenido = exportar_brutos.PARAR, exportar_brutos.Detenido
 else:  # pragma: no cover
@@ -634,7 +641,8 @@ def cruzar(proyectos, bins, clips, mxf=()):
 
     coincidencias = Counter()
     nuevo_pr = lambda: {"clips_bin": 0, "online": 0, "offline": 0, "renders": 0, "claves": set(), "exactos": 0, "aproximados": 0,
-                        "ambiguos": 0, "offline_items": [], "secuencias": 0, "volumenes": Counter(), "origenes": Counter()}
+                        "ambiguos": 0, "offline_items": [], "secuencias": 0, "secuencias_nombres": set(), "volumenes": Counter(),
+                        "origenes": Counter()}
     por_proyecto = defaultdict(nuevo_pr)
 
     def asignar(fisico, clip, proyecto, pr):
@@ -653,6 +661,7 @@ def cruzar(proyectos, bins, clips, mxf=()):
             continue
         pr = por_proyecto[b["proyecto"]]
         pr["secuencias"] += sum(1 for s in b["secuencias"] if not s.get("uso"))
+        pr["secuencias_nombres"].update(s["nombre"] for s in b["secuencias"] if not s.get("uso") and s.get("nombre"))
         for clip in b["clips"]:
             ids = clip.get("mob_id") or {}
             fisico, modo = None, None
@@ -677,6 +686,8 @@ def cruzar(proyectos, bins, clips, mxf=()):
                 pr["renders"] += 1
                 if fisico:
                     fisico["render"] = True
+                    if b["proyecto"] not in fisico.setdefault("proyectos_render", []):  # van al bruto de piezas del proyecto
+                        fisico["proyectos_render"].append(b["proyecto"])
                     coincidencias[modo] += 1
                 continue
             pr["clips_bin"] += 1
@@ -745,6 +756,7 @@ def cruzar(proyectos, bins, clips, mxf=()):
             "mezcla_formatos": len(codecs) > 1,
             "volumenes": dict(pr["volumenes"].most_common()),
             "origenes": dict(pr["origenes"].most_common()),
+            "secuencias_nombres": sorted(pr["secuencias_nombres"]),
             "offline_detalle": [{"nombre": clip["nombre"], "volumenes": clip.get("volumenes", []), "segundos": clip.get("segundos"), "bin": nbin,
                                  "fichero_origen": clip.get("fichero_origen"), "origen": clip.get("origen")}
                                 for clip, nbin in pr["offline_items"][:200]],
@@ -1037,14 +1049,16 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
 
     if resumen.get("brutos") is not None:
         h.append("<h2>Brutos exportados</h2><p class='muted'>Carpeta: %s</p>" % esc(resumen.get("brutos_carpeta")))
-        h.append("<table><tr><th>Proyecto</th><th>Fichero</th><th class='n'>Clips</th><th class='n'>Incluidos</th><th class='n'>Fallidos</th><th>Modo</th><th class='n'>Audio</th><th class='n'>Duración</th><th class='n'>GB</th><th>Estado</th></tr>")
+        h.append("<table><tr><th>Bruto</th><th>Contenido</th><th>Fichero</th><th class='n'>Clips</th><th class='n'>Incluidos</th><th class='n'>Fallidos</th><th>Modo</th><th class='n'>Audio</th><th class='n'>Duración</th><th class='n'>GB</th><th>Estado</th></tr>")
         for b in resumen["brutos"]:
             color = "" if b["estado"].startswith("OK") else " style='background:#fef3f2'"
-            h.append("<tr%s><td>%s</td><td>%s</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td>%s</td><td class='n'>%d</td><td class='n'>%s</td><td class='n'>%.2f</td><td>%s</td></tr>"
-                     % (color, esc(b["proyecto"]), esc(b["fichero"] or "—"), b["clips"], b["incluidos"], b["fallidos"],
+            h.append("<tr%s><td>%s</td><td>%s</td><td>%s</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td>%s</td><td class='n'>%d</td><td class='n'>%s</td><td class='n'>%.2f</td><td>%s</td></tr>"
+                     % (color, esc(b["proyecto"]), esc(b.get("contenido") or ""), esc(b["fichero"] or "—"), b["clips"], b["incluidos"], b["fallidos"],
                         esc(b["modo"] + (" (no se pudo copiar)" if b.get("reintento") else "")), b["pistas_audio"],
                         fmt_duracion(b["segundos"]), gb(b["bytes"]), esc(b["estado"] + (" · de una ejecución anterior" if b.get("reanudado") else ""))))
-        h.append("</table><p class='muted'>Junto a cada bruto hay un shotlist Excel con el timecode de cada clip y una hoja de contactos HTML.</p>")
+        h.append("</table><p class='muted'>Cada proyecto se parte en un bruto por tarjeta (_T01, _T02…: carpeta de la tarjeta según el bin, cámara P2 y saltos de fecha de la media). "
+                 "El material de agencias va a _AGENCIAS y las piezas renderizadas y renders de efectos a _PIEZAS. "
+                 "Junto a cada bruto hay un shotlist Excel con el timecode de cada clip y una hoja de contactos HTML.</p>")
 
     h.append("<footer>Generado por diagnostico_avid.py v%s, %s. No se ha modificado nada en el disco de origen.</footer></main></body></html>" % (VERSION, esc(BUILD)))
     (destino / "informe.html").write_text("\n".join(h), encoding="utf-8")
@@ -1185,7 +1199,12 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
 # Ventana (tkinter)
 # ---------------------------------------------------------------------------
 
-def lanzar_gui():
+def puede_actualizarse():
+    """Solo el .exe de Windows se actualiza solo; ejecutado con Python nunca toca su carpeta."""
+    return ACTUALIZAR_OK and getattr(sys, "frozen", False) and os.name == "nt"
+
+
+def lanzar_gui(sin_actualizar=False):
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
 
@@ -1243,6 +1262,14 @@ def lanzar_gui():
                 tipo, msg = cola.get_nowait()
                 if tipo == "log":
                     escribe(msg)
+                    continue
+                if tipo == "actualizacion":
+                    if msg == "cambio_lanzado":  # el .bat espera a que se cierre para cambiar de versión y reabrir
+                        raiz.destroy()
+                        return
+                    boton.configure(state="normal")
+                    escribe("Versión al día (%s)." % BUILD if msg == "al_dia" else
+                            "No se ha podido buscar o instalar una versión nueva; se sigue con esta (%s)." % BUILD)
                     continue
                 barra.stop()
                 boton.configure(state="normal")
@@ -1329,6 +1356,11 @@ def lanzar_gui():
     raiz.protocol("WM_DELETE_WINDOW", al_cerrar)
     escribe("Programa de diagnóstico de discos Avid (solo lectura). pyavb: %s. ffmpeg: %s."
             % ("OK" if PYAVB_OK else "NO INSTALADO", "OK" if localizar_ffmpeg()[0] else "no encontrado"))
+    if puede_actualizarse() and not sin_actualizar:
+        boton.configure(state="disabled")  # nunca se actualiza a mitad de un análisis
+        escribe("Buscando versión nueva en GitHub...")
+        threading.Thread(target=lambda: cola.put(("actualizacion", actualizar.actualizar(
+            BUILD, carpeta_base(), progreso=lambda m: cola.put(("log", m))))), daemon=True).start()
     raiz.after(200, vaciar_cola)
     raiz.mainloop()
 
@@ -1347,10 +1379,19 @@ def main():
     ap.add_argument("--no-abrir", action="store_true", help="No abrir el informe en el navegador al terminar")
     ap.add_argument("--brutos", help="Carpeta donde exportar un MXF por proyecto (fase 2)")
     ap.add_argument("--zip-sin-miniaturas", action="store_true", help="El zip para enviar no lleva las miniaturas (el informe local sí)")
+    ap.add_argument("--sin-actualizar", action="store_true", help="Al abrir la ventana, no buscar versión nueva en GitHub")
+    ap.add_argument("--actualizar-ahora", action="store_true", help="Solo .exe: buscar e instalar la última versión sin abrir la ventana ni reabrir")
     args = ap.parse_args()
 
     if sys.stderr is not None:  # en el .exe sin consola no hay salida estándar
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    if args.actualizar_ahora:
+        if not puede_actualizarse():
+            print("--actualizar-ahora solo funciona en el .exe de Windows")
+            sys.exit(2)
+        r = actualizar.actualizar(BUILD, carpeta_base(), progreso=print, relanzar=False)
+        print(r)
+        sys.exit(0 if r in ("al_dia", "cambio_lanzado") else 1)
     if args.sin_gui or (args.origen and args.destino):
         if not (args.origen and args.destino):
             ap.error("--sin-gui requiere --origen y --destino")
@@ -1359,7 +1400,7 @@ def main():
                  zip_miniaturas=not args.zip_sin_miniaturas)
         return
     try:
-        lanzar_gui()
+        lanzar_gui(sin_actualizar=args.sin_actualizar)
     except ImportError:
         print("No hay tkinter disponible. Usa: --origen RUTA --destino RUTA --sin-gui")
         sys.exit(2)

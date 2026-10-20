@@ -10,15 +10,20 @@ comparten el identificador UMID como hace Avid). Incluye casos límite:
 proyecto uniforme, proyecto con mezcla de formatos, clip sin audio, clip
 solo audio, clip huérfano, clip offline, bin corrupto, bin en papelera,
 fichero en cuarentena, render de título, clip compartido entre proyectos,
-ruta con ñ, proyecto NTSC 29,97 en MPEG-2 (copia y timecode drop-frame) y
+ruta con ñ, proyecto NTSC 29,97 en MPEG-2 (copia y timecode drop-frame),
 proyecto cuyo bin no coincide por identificador (cruce aproximado por
-nombre y duración, con dos clips ambiguos).
+nombre y duración, con dos clips ambiguos), dos tarjetas por fecha y dos por
+carpeta de tarjeta, un clip de agencia (Reuters) y una pieza renderizada.
+Las fechas de la media se fijan (15/09/2021 10:00, y un clip el día 14) para
+que los nombres de los brutos sean siempre los mismos.
 
 Uso:  python tests/crear_disco_prueba.py CARPETA_DESTINO [--ffmpeg RUTA_FFMPEG --ffprobe RUTA_FFPROBE]
 """
 
 import argparse
+import datetime as dt
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -74,13 +79,28 @@ def main():
         return u
 
     def bin_con(path, clips, secs=(), renders=()):
-        """clips: (nombre, umid) o (nombre, umid, frames). Los mobs no llevan pistas, así que el
-        programa asume 25 fps al calcular los segundos del bin."""
+        """clips: (nombre, umid[, frames[, fichero_origen]]). Sin fichero_origen los mobs no llevan
+        pistas, así que el programa asume 25 fps al calcular los segundos del bin. Con fichero_origen
+        el master clip apunta a un source mob cuyo localizador guarda la ruta del fichero importado,
+        como hace Avid (de ahí salen la carpeta de la tarjeta y el origen, p. ej. Reuters)."""
         f = avb.file.AVBFile()
-        for nombre, u, *frames in clips:
+        for nombre, u, *extra in clips:
             m = f.create.Composition(mob_type="MasterMob")
             m.name = nombre
-            m.length = frames[0] if frames else 75
+            m.length = extra[0] if extra else 75
+            if len(extra) > 1:
+                src = f.create.Composition(mob_type="SourceMob")
+                src.name, src.length, src.mob_id, src.tracks = nombre, m.length, avb.mobid.MobID.new(), []
+                d = f.create.CDCIDescriptor()
+                loc = f.create.WinFileLocator()
+                loc.path = loc.path_utf8 = extra[1]
+                d.locator = loc
+                src.descriptor = d
+                f.content.add_mob(src)
+                t, sc = f.create.Track(), f.create.SourceClip()
+                sc.mob_id, sc.media_kind, sc.length, sc.start_time, sc.track_id = src.mob_id, "picture", m.length, 0, 1
+                t.component = sc
+                m.tracks = [t]
             m.mob_id = avb.mobid.MobID(bytes_le=bytes.fromhex(u))
             f.content.add_mob(m)
         for nombre, u in renders:  # precompute = render de efecto (título, fundido)
@@ -104,13 +124,17 @@ def main():
     u2 = clip("2017 07 13", "5C0095C00948C", 2)
     u3 = clip("2017 07 21 ESPAÑA", "5C0095C009517", 2, audios=0)  # ruta con ñ
     ur = clip("Title: 1", "5C0095C00TITL", 1, audios=0)
+    ua = clip("SISMO 15 SEPT", "5C0095C00A9E1", 2)  # agencia: lo dice la ruta del fichero importado que guarda el bin
+    up = clip("PIEZA 15 SEPT", "5C0095C00B1E7", 2)  # pieza renderizada: se llama como la secuencia
     P = D / "15 SEPT CENTROAMERICA"
     P.mkdir()
     (P / "15 SEPT CENTROAMERICA.avp").write_bytes(b"avp")
     (P / "SearchData").mkdir()
     bin_con(P / "15 SEPT CENTROAMERICA Bin.avb",
             [("2017 07 21", u1), ("2017 07 13", u2), ("2017 07 21 ESPAÑA", u3),
-             ("CLIP OFFLINE", "060A2B340101010501010D00130000000000000000000000000000000000FFFF")],
+             ("CLIP OFFLINE", "060A2B340101010501010D00130000000000000000000000000000000000FFFF"),
+             ("SISMO 15 SEPT", ua, 50, r"C:\Users\corresponsal\Downloads\2021-09-15T120000Z_1_LWD1234ABC_RTRMADV_A_1-MEXICO-QUAKE.MP4"),
+             ("PIEZA 15 SEPT", up, 50)],
             ["PIEZA 15 SEPT"], renders=[("Title: 1", ur)])
     bin_con(P / "Trash" / "viejo.avb", [("2017 07 21", u1)])
 
@@ -130,7 +154,9 @@ def main():
     P = D / "NTSC"
     P.mkdir()
     (P / "NTSC.avp").write_bytes(b"avp")
-    bin_con(P / "NTSC Bin.avb", [("NTSC 1", n1, 60), ("NTSC 2", n2, 60)])
+    # Mismo día, pero el bin dice que vienen de dos tarjetas distintas (carpetas CARD01 y CARD02).
+    bin_con(P / "NTSC Bin.avb", [("NTSC 1", n1, 60, r"E:\TARJETAS\NTSC\CARD01\CONTENTS\VIDEO\0001AB.MXF"),
+                                 ("NTSC 2", n2, 60, r"E:\TARJETAS\NTSC\CARD02\CONTENTS\VIDEO\0002AB.MXF")])
 
     # Identificadores que no coinciden con ningún MXF: cruce aproximado por nombre y duración.
     # "APROX A" es único (se empareja); los dos "APROX B" son iguales (ambiguos: quedan sin proyecto).
@@ -147,6 +173,13 @@ def main():
     clip("HUERFANO", "AAAA0001", 2, audios=1)
     mka("SOLOAUDIO", M / "SOLOAUDIOA01.BBBB.mxf", 2, 300, "060A2B340101010501010D0013000000000000000000000000000000000000AA")
     mkv("CUARENTENA", M / "Quarantined Files" / "xV01.CCCC.mxf", 1)
+    # Fechas fijas de la media: todo el 15/09/2021 a las 10:00 salvo el clip "2017 07 13" (día 14), que
+    # es otra tarjeta del proyecto 15 SEPT. Los brutos se llaman por la fecha de su tarjeta.
+    dia15 = dt.datetime(2021, 9, 15, 10, 0).timestamp()
+    dia14 = dt.datetime(2021, 9, 14, 10, 0).timestamp()
+    for f in M.rglob("*.mxf"):
+        t = dia14 if f.name.startswith("2017 07 13") else dia15
+        os.utime(f, (t, t))
     (M / "msmMMOB.mdb").write_bytes(b"\0" * 100)
     (M / "msmFMID.pmr").write_bytes(b"\0" * 100)
     print("Disco de prueba creado en %s (%d ficheros)" % (D, sum(1 for _ in D.rglob("*") if _.is_file())))

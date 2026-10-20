@@ -308,6 +308,15 @@ class PorDias(unittest.TestCase):
         self.assertEqual(self.nombres(cs, cruce), {"2018-12-01": ["A", "B", "H"], "AGENCIAS_2018-12-01": ["R"],
                                                    "PIEZAS_2018-12-03": ["PIEZA SISMO"]})
 
+    def test_dentro_del_bloque_agrupados_por_proyecto(self):
+        cs = [self.clip("P1", "2018-12-01 20:00:00", 0.1, proyectos=("PANAMA",)), self.clip("H1", "2018-12-01 20:05:00", 0.1, proyectos=()),
+              self.clip("M1", "2018-12-01 20:10:00", 0.1, proyectos=("MEXICO", "PANAMA")),  # compartido: va con el primero (MEXICO)
+              self.clip("P2", "2018-12-01 21:00:00", 0.1, proyectos=("PANAMA",)), self.clip("M2", "2018-12-02 09:00:00", 0.1, proyectos=("MEXICO",))]
+        # PANAMA empieza antes que MEXICO; los sin proyecto, al final
+        self.assertEqual(self.nombres(cs), {"2018-12-01_a_2018-12-02": ["P1", "P2", "M1", "M2", "H1"]})
+        fila = eb._fila_clip(1, "x", cs[2], self.mxf)
+        self.assertEqual((fila["proyecto"], fila["proyecto_principal"]), ("MEXICO (también en PANAMA)", "MEXICO"))
+
     def test_sin_fecha_al_final(self):
         cs = [self.clip("A", "2018-12-01 20:00:00", 0.5), self.clip("Z", None, 0.5)]
         self.assertEqual(self.nombres(cs), {"2018-12-01": ["A"], "SIN_FECHA": ["Z"]})

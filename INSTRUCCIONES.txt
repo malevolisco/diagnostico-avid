@@ -58,8 +58,11 @@ Pasos
    - BRUTO_2018-12-12_parte1.mxf          un día con más de 3 horas, en partes
    - BRUTO_AGENCIAS_<fechas>.mxf          el material de agencias (Reuters...)
    - BRUTO_PIEZAS_<fechas>.mxf            piezas ya renderizadas
+   Dentro de cada bruto los clips van agrupados por proyecto de Avid: todo un
+   proyecto seguido, luego el siguiente.
    Cada uno con su _shotlist.xlsx (lista de clips con su timecode dentro del
-   bruto y el proyecto de Avid de cada clip) y su _contactos.html (miniaturas).
+   bruto y el proyecto de cada clip, en negrita donde empieza uno nuevo) y su
+   _contactos.html (miniaturas).
    Los fundidos, rótulos y efectos renderizados por Avid no se incluyen.
 7. Envía el fichero .zip del informe. Es pequeño (texto y miniaturas, sin vídeo).
    Si te piden enviarlo sin imágenes, desmarca antes de empezar la casilla

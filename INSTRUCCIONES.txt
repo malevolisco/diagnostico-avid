@@ -34,6 +34,9 @@ Pasos
    Si Windows muestra un aviso azul "Windows protegió su PC", pulsa
    "Más información" y luego "Ejecutar de todas formas". Es normal en
    programas que no están firmados por una empresa.
+   Al abrirse, el programa mira si hay una versión nueva. Si la hay, la
+   descarga, se cierra y se vuelve a abrir solo ya actualizado (un par de
+   minutos; no lo cierres mientras). Sin internet sigue con la que tiene.
 2. Casilla 1: pulsa "Elegir..." y selecciona el disco de Avid (la letra del
    disco, no una carpeta dentro de él).
 3. Casilla 2: dónde guardar el informe. Deja el escritorio o elige otra
@@ -50,10 +53,13 @@ Pasos
    - una carpeta  Diagnostico_<disco>_<fecha>  con el informe (informe.html)
    - un fichero   Diagnostico_<disco>_<fecha>.zip
    Y si se marcó la opción 3, en la carpeta de brutos, por cada proyecto:
-   - BRUTO_<PROYECTO>.mxf                 el vídeo, todo el proyecto en un fichero
-   - BRUTO_<PROYECTO>_shotlist.xlsx       lista de clips con su timecode dentro del bruto
-   - BRUTO_<PROYECTO>_contactos.html      miniaturas de los clips
-   Los clips que no pertenecen a ningún proyecto van a BRUTO_SIN_PROYECTO.
+   - BRUTO_<PROYECTO>_T01_<fecha>.mxf     el material de la tarjeta 1 de cámara;
+     BRUTO_<PROYECTO>_T02_<fecha>.mxf     de la tarjeta 2, etc.
+   - BRUTO_<PROYECTO>_AGENCIAS.mxf        el material de agencias (Reuters...)
+   - BRUTO_<PROYECTO>_PIEZAS.mxf          piezas ya renderizadas y rótulos
+   Cada uno con su _shotlist.xlsx (lista de clips con su timecode dentro del
+   bruto) y su _contactos.html (miniaturas).
+   Los clips que no pertenecen a ningún proyecto van a BRUTO_SIN_PROYECTO_...
 7. Envía el fichero .zip del informe. Es pequeño (texto y miniaturas, sin vídeo).
    Si te piden enviarlo sin imágenes, desmarca antes de empezar la casilla
    "Incluir las miniaturas en el zip para enviar".

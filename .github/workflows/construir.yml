@@ -69,9 +69,42 @@ jobs:
           if ($p.ExitCode -ne 0) { Get-Content salida2/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
           python tests/comprobar_resultado.py salida2 brutos --ffprobe bin/ffprobe.exe --reanudado
 
+      - name: Autoactualización (release falsa en local; el .bat cambia la carpeta)
+        shell: pwsh
+        run: |
+          # "Instalado": una copia del .exe con una configuración propia que debe conservarse, en una
+          # carpeta con espacios, paréntesis y ñ (como "DiagnosticoAvid (2)" al descomprimir dos veces)
+          New-Item -ItemType Directory -Force prueba_act, falsa | Out-Null
+          $app = "prueba_act/Diagnostico Avid (2) ñ"
+          Copy-Item -Recurse dist/DiagnosticoAvid $app
+          Set-Content "$app/config_brutos.json" '{"prefijo_fichero": "MIO_"}' -Encoding utf8NoBOM
+          # "Release nueva": el mismo programa con otro número de build
+          Copy-Item -Recurse dist/DiagnosticoAvid falsa/
+          Remove-Item falsa/DiagnosticoAvid/config_*.json -ErrorAction SilentlyContinue
+          Set-Content falsa/DiagnosticoAvid/_internal/build.txt "build-99999 prueba 2026-01-01" -Encoding utf8NoBOM
+          Compress-Archive -Path falsa/DiagnosticoAvid -DestinationPath falsa/DiagnosticoAvid_portable.zip
+          $zip = Get-Item falsa/DiagnosticoAvid_portable.zip
+          @{ tag_name = "build-99999"; assets = @(@{ name = "DiagnosticoAvid_portable.zip"; browser_download_url = ([System.Uri]$zip.FullName).AbsoluteUri; size = $zip.Length }) } | ConvertTo-Json -Depth 4 | Set-Content falsa/latest.json -Encoding utf8NoBOM
+          $env:DIAGNOSTICO_URL_ACTUALIZACION = ([System.Uri](Resolve-Path falsa/latest.json).Path).AbsoluteUri
+          $log = "$env:LOCALAPPDATA/DiagnosticoAvid/actualizacion.log"
+          $p = Start-Process -FilePath "$app/DiagnosticoAvid.exe" -ArgumentList "--actualizar-ahora" -PassThru -Wait -NoNewWindow
+          if ($p.ExitCode -ne 0) { Get-Content $log -ErrorAction SilentlyContinue; throw "--actualizar-ahora ha fallado ($($p.ExitCode))" }
+          # el .bat espera a que se cierre el programa y cambia la carpeta
+          for ($i = 0; $i -lt 90; $i++) { if (-not (Test-Path "${app}_actualizacion")) { break }; Start-Sleep 1 }
+          Get-Content $log
+          if (-not ((Get-Content "$app/_internal/build.txt") -match "build-99999")) { throw "no se ha cambiado de versión" }
+          if (-not ((Get-Content "$app/config_brutos.json" -Raw) -match "MIO_")) { throw "se ha perdido la configuración" }
+          if (Test-Path "${app}_anterior") { throw "queda la carpeta de la versión anterior" }
+          if (Test-Path "${app}_actualizacion") { throw "queda la carpeta de trabajo" }
+          # el programa nuevo arranca y ya está al día
+          $p = Start-Process -FilePath "$app/DiagnosticoAvid.exe" -ArgumentList "--actualizar-ahora" -PassThru -Wait -NoNewWindow
+          if ($p.ExitCode -ne 0) { throw "el programa actualizado no arranca ($($p.ExitCode))" }
+          Get-Content $log -Tail 3
+
       - name: Empaquetar portable
         shell: pwsh
         run: |
+          Remove-Item dist/DiagnosticoAvid/config_*.json -ErrorAction SilentlyContinue  # los crea la prueba; no van en el portable
           Copy-Item INSTRUCCIONES.txt dist/DiagnosticoAvid/
           Compress-Archive -Path dist/DiagnosticoAvid -DestinationPath DiagnosticoAvid_portable.zip -CompressionLevel Optimal
           Compress-Archive -Path salida/* -DestinationPath informe_prueba.zip -CompressionLevel Optimal

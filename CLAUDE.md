@@ -61,7 +61,7 @@ Debe terminar con "Análisis OK", "Brutos OK" y las pruebas unitarias en OK. Par
 
 - Las piezas montadas (secuencias) no se reconstruyen: requiere Avid. Se listan en el informe.
 - Audio siempre PCM 24 bits 48 kHz, una pista mono por fichero de Avid; mismo número de pistas en todo el bruto, rellenando con silencio.
-- Brutos (Adrián, oct. 2026, tras ver los 481 del reparto por tarjetas sobre el disco real): **todo el disco por días seguidos hasta 3 h, sin separar proyectos** (`agrupar = dias`, 67 brutos en México); agencias y piezas renderizadas aparte, también por días; el shotlist dice el proyecto de cada clip. Los renders de efectos (fundidos, picture-in-picture, rótulos) no entran. El reparto por proyecto y tarjeta sigue disponible con `agrupar = proyecto`.
+- Brutos (Adrián, oct. 2026, tras ver los 481 del reparto por tarjetas sobre el disco real): **todo el disco por días seguidos hasta 3 h, sin separar proyectos** (`agrupar = dias`, 67 brutos en México), y **dentro de cada bruto los clips agrupados por proyecto**; agencias y piezas renderizadas aparte, también por días; el shotlist dice el proyecto de cada clip. Los renders de efectos (fundidos, picture-in-picture, rótulos) no entran. El reparto por proyecto y tarjeta sigue disponible con `agrupar = proyecto`.
 - La autoactualización es automática, sin preguntar, al abrir la ventana.
 - El programa nunca escribe en el disco de origen y se niega si el destino está dentro de él.
 - Clips en `Quarantined Files` se incluyen en los brutos pero marcados "incluido (cuarentena)" en el shotlist.

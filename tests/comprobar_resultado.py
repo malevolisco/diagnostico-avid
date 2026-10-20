@@ -106,9 +106,14 @@ def main():
             sep = ";" if proy.startswith("NTSC") else ":"  # drop-frame solo a 29,97
             if len(tc) != 11 or tc[8] != sep:
                 fallo("bruto %s: timecode %r, esperado con '%s' antes de los frames" % (proy, tc, sep))
-        tcs, proyectos = tc_shotlist(Path(a.brutos) / b["shotlist"])
-        if a.agrupar == "dias" and not proy.startswith(("AGENCIAS", "PIEZAS")) and not {"NTSC", "ABORTO", "SIN_PROYECTO"} <= proyectos:
-            fallo("shotlist %s: debería decir el proyecto de cada clip; dice %s" % (proy, sorted(proyectos)))
+        tcs, orden = tc_shotlist(Path(a.brutos) / b["shotlist"])
+        proyectos = set(orden)
+        if a.agrupar == "dias" and not proy.startswith(("AGENCIAS", "PIEZAS")):
+            if not {"NTSC", "ABORTO", "SIN_PROYECTO"} <= proyectos:
+                fallo("shotlist %s: debería decir el proyecto de cada clip; dice %s" % (proy, sorted(proyectos)))
+            seguidos = [p for i, p in enumerate(orden) if i == 0 or p != orden[i - 1]]
+            if len(seguidos) != len(proyectos) or seguidos[-1] != "SIN_PROYECTO":
+                fallo("shotlist %s: los clips deberían ir agrupados por proyecto (sin proyecto al final): %s" % (proy, seguidos))
         sep = ";" if proy.startswith("NTSC") else ":"
         if not tcs or any(len(t) != 11 or t[8] != sep for t in tcs):
             fallo("shotlist %s: timecodes %r, esperado '%s' antes de los frames" % (proy, tcs, sep))
@@ -120,16 +125,18 @@ def main():
 
 
 def tc_shotlist(ruta):
-    """(TC de inicio de los clips incluidos, proyectos que aparecen), del xlsx o, si no había openpyxl, del csv de respaldo."""
+    """(TC de inicio de los clips incluidos, proyecto principal de cada fila en orden), del xlsx o, si no había
+    openpyxl, del csv de respaldo. "15 SEPT (también en HONDURAS)" cuenta como 15 SEPT."""
+    principal = lambda t: str(t or "").split(" (también en ")[0].strip()
     if ruta.suffix == ".xlsx":
         from openpyxl import load_workbook
         filas = list(load_workbook(ruta, read_only=True).active.iter_rows(values_only=True))
         col, colp = filas[0].index("TC inicio (bruto)"), filas[0].index("Proyecto")
-        return [f[col] for f in filas[1:] if f[col]], {p.strip() for f in filas[1:] for p in str(f[colp] or "").split(",")}
+        return [f[col] for f in filas[1:] if f[col]], [principal(f[colp]) for f in filas[1:]]
     import csv
     with open(ruta, encoding="utf-8-sig", newline="") as f:
         filas = list(csv.DictReader(f, delimiter=";"))
-    return [x["tc_in"] for x in filas if x.get("tc_in")], {p.strip() for x in filas for p in str(x.get("proyecto") or "").split(",")}
+    return [x["tc_in"] for x in filas if x.get("tc_in")], [principal(x.get("proyecto")) for x in filas]
 
 
 if __name__ == "__main__":

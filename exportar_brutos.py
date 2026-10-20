@@ -11,8 +11,9 @@ y una hoja de contactos HTML con las miniaturas.
 Reparto (config "agrupar"):
   - "dias" (por defecto): todo el disco, sin separar proyectos, ordenado por la
     fecha en que Avid escribió la media y cortado en bloques de días seguidos de
-    hasta horas_por_bruto (3 h). Aparte, también por días: AGENCIAS y PIEZAS
-    (piezas renderizadas). El shotlist dice el proyecto de cada clip.
+    hasta horas_por_bruto (3 h). Dentro de cada bloque los clips van agrupados por
+    proyecto (cada proyecto seguido, por orden de fecha). Aparte, también por días:
+    AGENCIAS y PIEZAS (piezas renderizadas). El shotlist dice el proyecto de cada clip.
   - "proyecto": cada proyecto por tarjetas (tandas de volcado), con _AGENCIAS,
     _IMPORTADOS y _PIEZAS aparte por proyecto.
 Los renders de efectos (fundidos, picture-in-picture, rótulos) no entran.
@@ -397,6 +398,23 @@ def bloques_por_dias(cs, mxf_por_ruta, cfg):
     return bloques
 
 
+def proyecto_principal(c):
+    """Proyecto con el que un clip se ordena dentro de un bloque por días (el primero si está en varios)."""
+    return sorted(c.get("proyectos") or [])[0] if c.get("proyectos") else None
+
+
+def ordenar_por_proyecto(cs, mxf_por_ruta):
+    """Clips agrupados por proyecto: los proyectos por orden de su primer clip, y dentro de cada uno por fecha.
+    Los que no tienen proyecto, al final."""
+    fecha = lambda c: fecha_media(c, mxf_por_ruta) or dt.datetime.min
+    primero = {}
+    for c in cs:
+        p = proyecto_principal(c)
+        primero[p] = min(primero.get(p, dt.datetime.max), fecha(c))
+    return sorted(cs, key=lambda c: (proyecto_principal(c) is None, primero[proyecto_principal(c)], proyecto_principal(c) or "",
+                                     fecha(c), c["nombre"], c.get("timecode") or ""))
+
+
 def grupos_por_dias(clips, cruce, mxf_por_ruta, cfg):
     """agrupar=dias: todo el disco por días, sin separar proyectos; agencias y piezas aparte (también por días).
     Cada clip va una sola vez aunque esté en varios proyectos."""
@@ -435,7 +453,8 @@ def grupos_por_dias(clips, cruce, mxf_por_ruta, cfg):
             etiqueta = {"material": "", "agencias": "agencias · ", "piezas": "piezas renderizadas · "}[familia]
             contenido = "%s%s%s · %d clips · %s" % (etiqueta, dias, " (parte %d)" % parte if parte else "", len(bloque), lista)
             grupos.append({"nombre": nombre, "base": nombre_seguro(nombre), "proyecto": ", ".join(sorted(proyectos)),
-                           "tipo": familia, "contenido": contenido, "clips": bloque})
+                           "tipo": familia, "contenido": contenido, "clips": ordenar_por_proyecto(bloque, mxf_por_ruta),
+                           "ordenado": True})
     return grupos
 
 
@@ -660,9 +679,13 @@ def escribir_shotlist(ruta, proyecto, filas):
     ws.append(cab)
     for c in ws[1]:
         c.font = Font(bold=True)
+    anterior = None
     for fila in filas:
         ws.append([fila.get(k) for k in ["n", "proyecto", "clip", "tc_in", "tc_out", "duracion", "tc_original", "fecha",
                                           "codec", "resolucion", "pistas", "estado", "ficheros", "fichero_origen", "volumenes", "origen", "ref_agencia", "slug"]])
+        if fila.get("proyecto_principal") != anterior:  # donde empieza otro proyecto, en negrita
+            ws.cell(row=ws.max_row, column=2).font = Font(bold=True)
+            anterior = fila.get("proyecto_principal")
     anchos = [5, 24, 34, 14, 14, 11, 14, 18, 12, 14, 8, 14, 60, 50, 24, 20, 18, 40]
     for i, a in enumerate(anchos):
         ws.column_dimensions[chr(65 + i)].width = a
@@ -699,7 +722,9 @@ def escribir_contactos(ruta, proyecto, filas, miniaturas_dir):
 # ---------------------------------------------------------------------------
 
 def _fila_clip(i, proyecto, c, mxf_por_ruta):
-    return {"n": i, "proyecto": ", ".join(sorted(c.get("proyectos") or [])) or "SIN_PROYECTO", "clip": c["nombre"], "tc_original": c.get("timecode"),
+    otros = sorted(c.get("proyectos") or [])[1:]
+    texto = (proyecto_principal(c) or "SIN_PROYECTO") + (" (también en %s)" % ", ".join(otros) if otros else "")
+    return {"n": i, "proyecto": texto, "proyecto_principal": proyecto_principal(c) or "SIN_PROYECTO", "clip": c["nombre"], "tc_original": c.get("timecode"),
             "fecha": mxf_por_ruta.get(c.get("fichero_video") or c["ficheros"][0], {}).get("modificado"),
             "codec": c.get("codec_video"), "resolucion": c.get("resolucion"), "pistas": c.get("num_audio"),
             "ficheros": "; ".join(c["ficheros"]), "miniatura": c.get("miniatura"), "tc_in": None, "tc_out": None, "duracion": None,
@@ -708,7 +733,7 @@ def _fila_clip(i, proyecto, c, mxf_por_ruta):
 
 
 def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir=None,
-                      etiqueta="", modo_forzado=None, timeouts=None, motivo_reintento=None, base_fichero=None):
+                      etiqueta="", modo_forzado=None, timeouts=None, motivo_reintento=None, base_fichero=None, ordenado=False):
     """Exporta el bruto de un proyecto. Devuelve el resultado (dict) para brutos_resultado.json.
 
     En modo copia, si un segmento o la unión fallan por algo que no sea tiempo agotado, se repite
@@ -721,7 +746,8 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
     base_fichero = base_fichero or nombre_seguro(proyecto)
     destino = Path(destino)
     timeouts = set(timeouts or ())
-    cs = sorted(cs, key=lambda c: (fecha_media(c, mxf_por_ruta) or dt.datetime.min, c["nombre"], c.get("timecode") or ""))
+    if not ordenado:  # en agrupar=dias el reparto ya los da agrupados por proyecto
+        cs = sorted(cs, key=lambda c: (fecha_media(c, mxf_por_ruta) or dt.datetime.min, c["nombre"], c.get("timecode") or ""))
     plan = plan_proyecto(cs, mxf_por_ruta, cfg, modo_forzado)
     pref = cfg.get("prefijo_fichero", "BRUTO_")
     res = {"proyecto": proyecto, "modo": plan["modo"], "reintento": modo_forzado is not None, "pistas_audio": plan["pistas_audio"],
@@ -749,7 +775,8 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
         progreso("  %s: no se puede copiar sin recomprimir; se repite convirtiendo" % proyecto)
         shutil.rmtree(tmp, ignore_errors=True)
         return exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir,
-                                 etiqueta, modo_forzado="convertir", timeouts=timeouts, motivo_reintento=motivo, base_fichero=base_fichero)
+                                 etiqueta, modo_forzado="convertir", timeouts=timeouts, motivo_reintento=motivo, base_fichero=base_fichero,
+                                 ordenado=True)
 
     puede_reintentar = plan["modo"] == "copia" and modo_forzado is None
     tmp = destino / ("_tmp_" + base_fichero)
@@ -903,7 +930,7 @@ def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso,
                 LOG.info("Bruto %s: reanudado (ya exportado en una ejecución anterior)", proyecto)
             else:
                 res = exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir,
-                                        etiqueta, base_fichero=g["base"])
+                                        etiqueta, base_fichero=g["base"], ordenado=g.get("ordenado", False))
                 res["reanudado"] = False
             res.update({"proyecto_avid": g["proyecto"], "tipo": g["tipo"], "contenido": g["contenido"]})
         except Detenido:

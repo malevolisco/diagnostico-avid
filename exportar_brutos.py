@@ -31,6 +31,8 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -63,6 +65,13 @@ CONFIG_DEFECTO = {
     "verificar_decodificando": False,
     "_verificar_decodificando": "true = tras unir, decodifica el bruto entero para comprobarlo (lento, muy seguro)"
 }
+
+PARAR = threading.Event()  # lo activa el botón Detener de la ventana
+
+
+class Detenido(Exception):
+    """El usuario ha pulsado Detener."""
+
 
 CODECS_COPIABLES = {"dnxhd", "mpeg2video", "dvvideo", "prores", "h264"}
 MAX_PISTAS = 8
@@ -158,15 +167,26 @@ TIEMPO_AGOTADO = "tiempo agotado"
 
 
 def ejecutar_ffmpeg(cmd, timeout):
-    """Devuelve (ok, últimas líneas de stderr). timeout en segundos: un MXF dañado no debe colgar la exportación."""
+    """Devuelve (ok, últimas líneas de stderr). timeout en segundos: un MXF dañado no debe colgar la exportación.
+    Si se pulsa Detener, mata ffmpeg en un segundo como mucho y lanza Detenido."""
+    if PARAR.is_set():
+        raise Detenido()
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=timeout, **flags_subproceso())
-        return r.returncode == 0, (r.stderr or "").strip()[-600:]
-    except subprocess.TimeoutExpired:
-        return False, TIEMPO_AGOTADO
+        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, **flags_subproceso())
     except Exception as e:
         return False, str(e)
+    limite = time.monotonic() + timeout
+    while True:
+        try:
+            _, err = proc.communicate(timeout=1)
+            return proc.returncode == 0, (err or b"").decode("utf-8", "replace").strip()[-600:]
+        except subprocess.TimeoutExpired:
+            if PARAR.is_set() or time.monotonic() > limite:
+                proc.kill()
+                proc.communicate()
+                if PARAR.is_set():
+                    raise Detenido()
+                return False, TIEMPO_AGOTADO
 
 
 def timeout_segmento(duracion):
@@ -438,76 +458,84 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
     if tmp.exists():
         shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir()
-    segmentos, filas = [], []
-    frames = 0  # se acumulan frames, no segundos, para no arrastrar redondeos en el shotlist
-    inicio = tc_a_frames(timecode_inicio(cfg, plan["fps"]), plan["fps"])
-    for i, c in enumerate(cs, 1):
-        fila = _fila_clip(i, proyecto, c, mxf_por_ruta)
-        if not c.get("fichero_video"):
-            fila["estado"] = "solo audio, no incluido"
-            filas.append(fila)
-            continue
-        if c.get("clave") in timeouts:
-            fila["estado"] = "ERROR (tiempo agotado)"
-            res["fallidos"] += 1
-            filas.append(fila)
-            continue
-        progreso("  %s: clip %d/%d  %s" % (proyecto, i, len(cs), c["nombre"]))
-        seg, err, cmd = hacer_segmento(c, i, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg)
-        if not seg:
-            if err == TIEMPO_AGOTADO:
-                timeouts.add(c.get("clave"))
+    salida = destino / ("%s%s.mxf" % (pref, nombre_seguro(proyecto)))
+    uniendo = False
+    try:
+        segmentos, filas = [], []
+        frames = 0  # se acumulan frames, no segundos, para no arrastrar redondeos en el shotlist
+        inicio = tc_a_frames(timecode_inicio(cfg, plan["fps"]), plan["fps"])
+        for i, c in enumerate(cs, 1):
+            fila = _fila_clip(i, proyecto, c, mxf_por_ruta)
+            if not c.get("fichero_video"):
+                fila["estado"] = "solo audio, no incluido"
+                filas.append(fila)
+                continue
+            if c.get("clave") in timeouts:
                 fila["estado"] = "ERROR (tiempo agotado)"
-            else:
-                if puede_reintentar:
-                    prueba, _, _ = hacer_segmento(c, i, dict(plan, modo="convertir"), origen, mxf_por_ruta, tmp, ffmpeg, cfg,
-                                                  nombre="prueba_%05d.mxf" % i)
-                    if prueba:  # convirtiendo sí sale: el problema es el códec, no el fichero
-                        return reintentar("segmento %s: %s" % (c["nombre"], (err or "")[-200:]))
-                fila["estado"] = "ERROR al convertir"
-            res["errores"].append(dict(detalle_error(c["nombre"], "segmento", cmd, err), estado=fila["estado"]))
-            res["fallidos"] += 1
+                res["fallidos"] += 1
+                filas.append(fila)
+                continue
+            progreso("  %s: clip %d/%d  %s" % (proyecto, i, len(cs), c["nombre"]))
+            seg, err, cmd = hacer_segmento(c, i, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg)
+            if not seg:
+                if err == TIEMPO_AGOTADO:
+                    timeouts.add(c.get("clave"))
+                    fila["estado"] = "ERROR (tiempo agotado)"
+                else:
+                    if puede_reintentar:
+                        prueba, _, _ = hacer_segmento(c, i, dict(plan, modo="convertir"), origen, mxf_por_ruta, tmp, ffmpeg, cfg,
+                                                      nombre="prueba_%05d.mxf" % i)
+                        if prueba:  # convirtiendo sí sale: el problema es el códec, no el fichero
+                            return reintentar("segmento %s: %s" % (c["nombre"], (err or "")[-200:]))
+                    fila["estado"] = "ERROR al convertir"
+                res["errores"].append(dict(detalle_error(c["nombre"], "segmento", cmd, err), estado=fila["estado"]))
+                res["fallidos"] += 1
+                filas.append(fila)
+                continue
+            dur = duracion_ffprobe(ffprobe, seg) or (c.get("duracion") or 0)
+            n = int(round(dur * plan["fps"]))
+            fila.update({"estado": "incluido (cuarentena)" if c.get("en_cuarentena") else "incluido",
+                         "tc_in": fmt_tc(inicio + frames, plan["fps"]), "tc_out": fmt_tc(inicio + frames + n, plan["fps"]),
+                         "duracion": fmt_tc(n, plan["fps"])})
+            frames += n
+            segmentos.append(seg)
+            res["incluidos"] += 1
             filas.append(fila)
-            continue
-        dur = duracion_ffprobe(ffprobe, seg) or (c.get("duracion") or 0)
-        n = int(round(dur * plan["fps"]))
-        fila.update({"estado": "incluido (cuarentena)" if c.get("en_cuarentena") else "incluido",
-                     "tc_in": fmt_tc(inicio + frames, plan["fps"]), "tc_out": fmt_tc(inicio + frames + n, plan["fps"]),
-                     "duracion": fmt_tc(n, plan["fps"])})
-        frames += n
-        segmentos.append(seg)
-        res["incluidos"] += 1
-        filas.append(fila)
 
-    acumulado = frames / plan["fps"]
-    if segmentos:
-        salida = destino / ("%s%s.mxf" % (pref, nombre_seguro(proyecto)))
-        progreso("  %s: uniendo %d clips..." % (proyecto, len(segmentos)))
-        ok, err, cmd = unir_segmentos(segmentos, salida, ffmpeg, cfg, plan, acumulado)
-        if not ok and puede_reintentar and err != TIEMPO_AGOTADO:
-            return reintentar("unión: %s" % (err or "")[-200:])
-        if ok and salida.exists():
-            dur_final = duracion_ffprobe(ffprobe, salida)
-            res.update({"fichero": salida.name, "bytes": salida.stat().st_size, "segundos": round(dur_final or 0, 2)})
-            if dur_final is None:
-                res["estado"] = "ERROR: el bruto no se puede leer"
-            elif abs(dur_final - acumulado) > 1.0:
-                res["estado"] = "AVISO: duración %.1fs, esperada %.1fs" % (dur_final, acumulado)
+        acumulado = frames / plan["fps"]
+        if segmentos:
+            progreso("  %s: uniendo %d clips..." % (proyecto, len(segmentos)))
+            uniendo = True
+            ok, err, cmd = unir_segmentos(segmentos, salida, ffmpeg, cfg, plan, acumulado)
+            if not ok and puede_reintentar and err != TIEMPO_AGOTADO:
+                return reintentar("unión: %s" % (err or "")[-200:])
+            if ok and salida.exists():
+                dur_final = duracion_ffprobe(ffprobe, salida)
+                res.update({"fichero": salida.name, "bytes": salida.stat().st_size, "segundos": round(dur_final or 0, 2)})
+                if dur_final is None:
+                    res["estado"] = "ERROR: el bruto no se puede leer"
+                elif abs(dur_final - acumulado) > 1.0:
+                    res["estado"] = "AVISO: duración %.1fs, esperada %.1fs" % (dur_final, acumulado)
+                else:
+                    res["estado"] = "OK"
+                if cfg.get("verificar_decodificando") and res["estado"] == "OK":
+                    progreso("  %s: verificando decodificación completa..." % proyecto)
+                    cmd2 = [ffmpeg, "-v", "error", "-i", str(salida), "-f", "null", "-"]
+                    ok2, err2 = ejecutar_ffmpeg(cmd2, timeout_union(acumulado))
+                    res["estado"] = "OK (decodificación verificada)" if ok2 else "ERROR al decodificar: " + err2[-200:]
+                    if not ok2:
+                        res["errores"].append(detalle_error(None, "verificación", cmd2, err2))
             else:
-                res["estado"] = "OK"
-            if cfg.get("verificar_decodificando") and res["estado"] == "OK":
-                progreso("  %s: verificando decodificación completa..." % proyecto)
-                cmd2 = [ffmpeg, "-v", "error", "-i", str(salida), "-f", "null", "-"]
-                ok2, err2 = ejecutar_ffmpeg(cmd2, timeout_union(acumulado))
-                res["estado"] = "OK (decodificación verificada)" if ok2 else "ERROR al decodificar: " + err2[-200:]
-                if not ok2:
-                    res["errores"].append(detalle_error(None, "verificación", cmd2, err2))
+                res["estado"] = "ERROR al unir (tiempo agotado)" if err == TIEMPO_AGOTADO else "ERROR al unir: " + (err or "")[-200:]
+                res["errores"].append(detalle_error(None, "unión", cmd, err))
+                LOG.error("%s: %s", proyecto, res["estado"])
         else:
-            res["estado"] = "ERROR al unir (tiempo agotado)" if err == TIEMPO_AGOTADO else "ERROR al unir: " + (err or "")[-200:]
-            res["errores"].append(detalle_error(None, "unión", cmd, err))
-            LOG.error("%s: %s", proyecto, res["estado"])
-    else:
-        res["estado"] = "sin clips de vídeo exportables"
+            res["estado"] = "sin clips de vídeo exportables"
+    except Detenido:  # el proyecto a medias se descarta: al relanzar se rehace entero
+        shutil.rmtree(tmp, ignore_errors=True)
+        if uniendo:
+            salida.unlink(missing_ok=True)
+        raise
 
     base = destino / ("%s%s" % (pref, nombre_seguro(proyecto)))
     try:
@@ -545,7 +573,8 @@ def ya_exportado(previo, n_clips, destino):
 
 def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir=None):
     """Devuelve una lista con el resultado por proyecto (para el informe). brutos_resultado.json se
-    reescribe tras cada proyecto, y al relanzar sobre la misma carpeta se saltan los ya terminados."""
+    reescribe tras cada proyecto, y al relanzar sobre la misma carpeta se saltan los ya terminados.
+    Si se pulsa Detener, devuelve los proyectos terminados hasta ese momento (PARAR queda activado)."""
     destino = Path(destino)
     destino.mkdir(parents=True, exist_ok=True)
     mxf_por_ruta = {m["ruta"]: m for m in mxf}
@@ -574,15 +603,28 @@ def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso,
             grupos["SIN_PROYECTO"] = huer
 
     resultados = []
-    for n_proy, (proyecto, cs) in enumerate(sorted(grupos.items()), 1):
+    pendientes = sorted(grupos.items())
+    for n_proy, (proyecto, cs) in enumerate(pendientes, 1):
         etiqueta = "%d/%d" % (n_proy, len(grupos))
-        if ya_exportado(previos.get(proyecto), len(cs), destino):
-            res = dict(previos[proyecto], reanudado=True)
-            progreso("Bruto %s: %s ya estaba exportado, se salta (reanudado)" % (etiqueta, proyecto))
-            LOG.info("Bruto %s: reanudado (ya exportado en una ejecución anterior)", proyecto)
-        else:
-            res = exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir, etiqueta)
-            res["reanudado"] = False
+        try:
+            if PARAR.is_set():
+                raise Detenido()
+            if ya_exportado(previos.get(proyecto), len(cs), destino):
+                res = dict(previos[proyecto], reanudado=True)
+                progreso("Bruto %s: %s ya estaba exportado, se salta (reanudado)" % (etiqueta, proyecto))
+                LOG.info("Bruto %s: reanudado (ya exportado en una ejecución anterior)", proyecto)
+            else:
+                res = exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir, etiqueta)
+                res["reanudado"] = False
+        except Detenido:
+            faltan = [p for p, _ in pendientes[n_proy - 1:]]
+            progreso("Exportación detenida. Terminados: %d de %d brutos. Al relanzar con las mismas carpetas sigue por %s."
+                     % (len(resultados), len(grupos), faltan[0]))
+            LOG.warning("Exportación detenida por el usuario en %s; quedan %d proyectos", faltan[0], len(faltan))
+            # los de una ejecución anterior a los que no se ha llegado se conservan para poder reanudarlos
+            with open(ruta_json, "w", encoding="utf-8") as f:
+                json.dump(resultados + [previos[p] for p in faltan if p in previos], f, ensure_ascii=False, indent=1)
+            return resultados
         resultados.append(res)
         with open(ruta_json, "w", encoding="utf-8") as f:  # tras cada proyecto: un corte no pierde lo ya hecho
             json.dump(resultados, f, ensure_ascii=False, indent=1)

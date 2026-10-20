@@ -59,12 +59,21 @@ Pasos
    "Incluir las miniaturas en el zip para enviar".
    Al final del informe hay una tabla "Brutos exportados" con el estado de cada uno.
 
-Si la exportación de brutos se corta
-------------------------------------
-(un apagón, se cerró la ventana, se desconectó un disco...)
-Vuelve a lanzar el programa con LAS MISMAS carpetas. Repetirá el análisis
-entero (eso tarda lo mismo que la primera vez), pero los brutos que ya
-estaban terminados no se vuelven a hacer: sigue por donde se quedó.
+Si hay que pararlo (por ejemplo, se acaba la jornada)
+-----------------------------------------------------
+Pulsa el botón "Detener" (al lado de "Analizar disco") y confirma. En unos
+segundos se para. También puedes cerrar la ventana con la X: pregunta
+antes y se para igual de bien.
+- Si estaba exportando brutos: los brutos terminados se quedan, el que
+  estaba a medias se descarta, y se genera el informe con lo hecho.
+- Si todavía estaba analizando (antes de los brutos): no hay informe y la
+  próxima vez empieza de cero.
+
+Para seguir otro día (o si se cortó por un apagón, un disco que se
+desconectó...): vuelve a lanzar el programa con LAS MISMAS carpetas y la
+opción 3 marcada. Repetirá el análisis entero (tarda lo mismo que la
+primera vez), pero los brutos que ya estaban terminados no se vuelven a
+hacer: sigue por donde se quedó.
 
 Si algo falla
 -------------

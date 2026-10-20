@@ -59,6 +59,19 @@ except Exception:  # pragma: no cover
     exportar_brutos = None
     EXPORT_OK = False
 
+if EXPORT_OK:  # el mismo aviso de "Detener" sirve para el análisis y para la exportación
+    PARAR, Detenido = exportar_brutos.PARAR, exportar_brutos.Detenido
+else:  # pragma: no cover
+    PARAR = threading.Event()
+
+    class Detenido(Exception):
+        pass
+
+
+def comprobar_parar():
+    if PARAR.is_set():
+        raise Detenido()
+
 try:
     import avb  # pyavb
     PYAVB_OK = True
@@ -219,6 +232,7 @@ def inventariar(origen, progreso):
     ficheros = []
     n = 0
     for raiz, dirs, nombres in os.walk(origen, onerror=lambda e: LOG.warning("No se puede leer: %s", e)):
+        comprobar_parar()
         dirs[:] = [d for d in dirs if d.lower() not in CARPETAS_SISTEMA]
         for nombre in nombres:
             ruta = Path(raiz) / nombre
@@ -457,6 +471,7 @@ def leer_bins(proyectos, origen, progreso):
     i = 0
     for p in proyectos:
         for b in p["bins"]:
+            comprobar_parar()
             i += 1
             progreso("Bins: %d/%d  %s" % (i, total, b["nombre"]))
             r = leer_bin(Path(origen) / b["ruta"], reglas)
@@ -540,6 +555,9 @@ def analizar_mxf(ficheros, origen, ffprobe, progreso):
     with ThreadPoolExecutor(max_workers=NUM_HILOS) as ex:
         futuros = [ex.submit(trabajo, f) for f in objetivo]
         for fut in as_completed(futuros):
+            if PARAR.is_set():
+                ex.shutdown(wait=False, cancel_futures=True)
+                raise Detenido()
             resultados.append(fut.result())
             hechos += 1
             if hechos % 25 == 0 or hechos == total:
@@ -776,6 +794,9 @@ def miniaturas(clips, origen, ffmpeg, destino, progreso, maximo=0):
     with ThreadPoolExecutor(max_workers=NUM_HILOS) as ex:
         futuros = [ex.submit(trabajo, i, c) for i, c in enumerate(con_video)]
         for fut in as_completed(futuros):
+            if PARAR.is_set():
+                ex.shutdown(wait=False, cancel_futures=True)
+                raise Detenido()
             c, ruta = fut.result()
             c["miniatura"] = ruta
             hechos += 1
@@ -1107,6 +1128,7 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
         guardar_json(destino, "cruce.json", cruce)
 
         resultados_brutos = None
+        detenido = False
         if brutos:
             if not ffmpeg_ok:
                 progreso("Brutos: omitidos, no hay ffmpeg.")
@@ -1115,6 +1137,7 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
                 cfg = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json")
                 resultados_brutos = exportar_brutos.exportar_todo(clips, cruce, mxf, origen, brutos, ffmpeg, ffprobe, progreso, cfg,
                                                                   miniaturas_dir=destino / "miniaturas" if hacer_miniaturas else None)
+                detenido = PARAR.is_set()  # el análisis está completo: se escribe el informe con los brutos terminados
 
         progreso("6/6 Escribiendo resumen e informe...")
         resumen = construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmpeg_ok)
@@ -1124,6 +1147,10 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
             fallos = [b for b in resultados_brutos if not b["estado"].startswith("OK")]
             if fallos:
                 resumen["avisos"].append({"nivel": "error", "texto": "%d brutos con problemas: %s" % (len(fallos), ", ".join(b["proyecto"] for b in fallos))})
+        if detenido:
+            resumen["detenido"] = True
+            resumen["avisos"].insert(0, {"nivel": "error", "texto": "Exportación de brutos DETENIDA a mano: solo están los brutos de la tabla del final. "
+                                                                   "Para seguir, relanzar con las mismas carpetas: los terminados no se repiten."})
         guardar_json(destino, "resumen.json", resumen)
         informe_html(resumen, proyectos, bins, clips, cruce, destino)
 
@@ -1142,6 +1169,9 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
             except Exception:
                 pass
         return destino, zip_path, resumen
+    except Detenido:
+        LOG.warning("Análisis detenido por el usuario antes de terminar: no hay informe.")
+        raise
     except Exception:
         LOG.exception("Fallo durante la ejecución")
         raise
@@ -1171,7 +1201,7 @@ def lanzar_gui():
     hacer_brutos = tk.BooleanVar(value=False)
     brutos = tk.StringVar()
     cola = queue.Queue()
-    estado = {"ocupado": False}
+    estado = {"ocupado": False, "cerrar": False}
 
     marco = ttk.Frame(raiz, padding=14)
     marco.pack(fill="both", expand=True)
@@ -1188,8 +1218,12 @@ def lanzar_gui():
     ttk.Entry(marco, textvariable=brutos).grid(row=7, column=0, sticky="ew", pady=(2, 10))
     ttk.Button(marco, text="Elegir...", command=lambda: brutos.set(filedialog.askdirectory(title="Carpeta para los brutos") or brutos.get())).grid(row=7, column=1, padx=(8, 0))
 
-    boton = ttk.Button(marco, text="Analizar disco")
-    boton.grid(row=8, column=0, columnspan=2, pady=12)
+    botones = ttk.Frame(marco)
+    botones.grid(row=8, column=0, columnspan=2, pady=12)
+    boton = ttk.Button(botones, text="Analizar disco")
+    boton.pack(side="left", padx=6)
+    boton_parar = ttk.Button(botones, text="Detener", state="disabled")
+    boton_parar.pack(side="left", padx=6)
     barra = ttk.Progressbar(marco, mode="indeterminate")
     barra.grid(row=9, column=0, columnspan=2, sticky="ew")
     registro = tk.Text(marco, height=14, wrap="word", state="disabled", font=("Consolas", 10))
@@ -1209,15 +1243,24 @@ def lanzar_gui():
                 tipo, msg = cola.get_nowait()
                 if tipo == "log":
                     escribe(msg)
-                elif tipo == "fin":
-                    barra.stop()
-                    boton.configure(state="normal")
-                    estado["ocupado"] = False
+                    continue
+                barra.stop()
+                boton.configure(state="normal")
+                boton_parar.configure(state="disabled")
+                estado["ocupado"] = False
+                if estado["cerrar"]:  # se pidió cerrar la ventana mientras trabajaba
+                    raiz.destroy()
+                    return
+                if tipo == "fin":
                     messagebox.showinfo("Terminado", "Diagnóstico terminado.\n\nInforme: %s\n\nZIP para enviar: %s" % msg)
+                elif tipo == "detenido_brutos":
+                    messagebox.showwarning("Detenido", "Exportación detenida. Los brutos terminados se conservan y el informe recoge lo hecho.\n\n"
+                                           "Para seguir otro día, vuelve a lanzar el programa con las mismas carpetas: "
+                                           "repetirá el análisis y seguirá por el bruto que faltaba.\n\nInforme: %s\n\nZIP para enviar: %s" % msg)
+                elif tipo == "detenido":
+                    messagebox.showwarning("Detenido", "Análisis detenido antes de terminar: no se ha generado informe.\n\n"
+                                           "Al volver a lanzarlo empezará desde el principio.")
                 elif tipo == "error":
-                    barra.stop()
-                    boton.configure(state="normal")
-                    estado["ocupado"] = False
                     messagebox.showerror("Error", msg)
         except queue.Empty:
             pass
@@ -1225,9 +1268,11 @@ def lanzar_gui():
 
     def hilo():
         try:
-            d, z, _ = ejecutar(origen.get(), destino.get(), progreso=lambda m: cola.put(("log", m)), hacer_miniaturas=minis.get(),
+            d, z, resumen = ejecutar(origen.get(), destino.get(), progreso=lambda m: cola.put(("log", m)), hacer_miniaturas=minis.get(),
                                brutos=brutos.get() if hacer_brutos.get() else None, zip_miniaturas=zip_minis.get())
-            cola.put(("fin", (str(d / "informe.html"), str(z))))
+            cola.put(("detenido_brutos" if resumen.get("detenido") else "fin", (str(d / "informe.html"), str(z))))
+        except Detenido:
+            cola.put(("detenido", None))
         except Exception as e:
             LOG.error("Fallo: %s\n%s", e, traceback.format_exc())  # ejecutar ya lo ha dejado en diagnostico.log
             cola.put(("error", "%s\n\nDetalle en diagnostico.log (si llegó a crearse)." % e))
@@ -1250,13 +1295,38 @@ def lanzar_gui():
             return
         if not ff and not messagebox.askyesno("Sin ffmpeg", "No se encuentra ffmpeg/ffprobe (carpeta bin o PATH).\nSe analizarán los bins pero no los ficheros de vídeo.\n¿Continuar igualmente?"):
             return
+        PARAR.clear()
         estado["ocupado"] = True
         boton.configure(state="disabled")
+        boton_parar.configure(state="normal")
         barra.start(12)
         escribe("— %s —" % ahora_txt())
         threading.Thread(target=hilo, daemon=True).start()
 
+    def detener():
+        if not estado["ocupado"] or PARAR.is_set():
+            return
+        if messagebox.askyesno("Detener", "¿Detener ahora?\n\n"
+                               "· Si está exportando brutos: los terminados se conservan, el que está a medias se descarta "
+                               "y se genera el informe con lo hecho. Relanzando con las mismas carpetas, sigue por donde se quedó.\n\n"
+                               "· Si aún está analizando: no habrá informe y al relanzar empezará de cero."):
+            PARAR.set()
+            boton_parar.configure(state="disabled")
+            escribe("Deteniendo... (unos segundos)")
+
+    def al_cerrar():
+        if not estado["ocupado"]:
+            raiz.destroy()
+            return
+        if messagebox.askyesno("Está trabajando", "El programa está trabajando. ¿Detenerlo y cerrar la ventana?\n\n"
+                               "Los brutos ya terminados se conservan."):
+            estado["cerrar"] = True
+            PARAR.set()
+            escribe("Deteniendo para cerrar... (unos segundos)")
+
     boton.configure(command=iniciar)
+    boton_parar.configure(command=detener)
+    raiz.protocol("WM_DELETE_WINDOW", al_cerrar)
     escribe("Programa de diagnóstico de discos Avid (solo lectura). pyavb: %s. ffmpeg: %s."
             % ("OK" if PYAVB_OK else "NO INSTALADO", "OK" if localizar_ffmpeg()[0] else "no encontrado"))
     raiz.after(200, vaciar_cola)

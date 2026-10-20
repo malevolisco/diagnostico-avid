@@ -20,7 +20,7 @@ Herramienta para el Archivo de RTVE: analiza un disco de edición Avid Media Com
 | `config_brutos.json`, `config_origen.json` | Se crean junto al programa con valores por defecto la primera vez. No están en git. |
 | `tests/crear_disco_prueba.py` | Genera un disco Avid simulado con casos límite (bins con pyavb, MXF OP-Atom con ffmpeg, V y A compartiendo UMID como hace Avid). |
 | `tests/comprobar_resultado.py` | Comprueba un resultado contra valores fijos; sale con 1 si algo no cuadra. `--reanudado` para la segunda ejecución. |
-| `tests/test_unitarios.py` | Timecode drop-frame con valores conocidos, reintento copia→convertir con ffmpeg simulado, reanudar. Solo stdlib. |
+| `tests/test_unitarios.py` | Timecode drop-frame con valores conocidos, reintento copia→convertir con ffmpeg simulado, reanudar, botón Detener. Solo stdlib. |
 | `.github/workflows/construir.yml` | En cada push a `main` (o a mano en otra rama): pruebas unitarias, ffmpeg 7.1.1 fijado, PyInstaller con `build.txt`, disco de prueba, ejecuta el `.exe` dos veces (la segunda debe reanudar), comprueba y, solo en `main`, publica release `build-N` con `DiagnosticoAvid_portable.zip`. |
 | `construir_exe.bat`, `ejecutar.bat` | Plan B local sin GitHub. |
 | `INSTRUCCIONES.txt` | Para quien ejecuta el programa. Se copia dentro del portable. |

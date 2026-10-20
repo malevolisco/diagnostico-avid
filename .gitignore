@@ -11,3 +11,4 @@ salida/
 brutos/
 __pycache__/
 *.pyc
+.adversarial-review/

@@ -20,6 +20,10 @@
 3. Pruébalo antes de enviarlo: entra en `dist\DiagnosticoAvid`, abre `DiagnosticoAvid.exe`, elige cualquier carpeta con un `.avp` (vale una carpeta con un fichero vacío llamado `prueba.avp`) y analiza. Debe abrirse el informe.
 4. Envía `DiagnosticoAvid_portable.zip` (~150 MB). Quien lo recibe descomprime y hace doble clic; no instala nada.
 
+**Versión de ffmpeg fijada**: 7.1.1 "essentials" de gyan.dev (`https://github.com/GyanD/codexffmpeg/releases/tag/7.1.1`), la misma en GitHub Actions y en `construir_exe.bat`. El workflow comprueba además la huella SHA-256 del zip, así que cada release se construye con exactamente el mismo ffmpeg. Para cambiar de versión hay que actualizar la URL en los dos sitios y la huella en el workflow.
+
+**Número de build**: GitHub Actions escribe `build.txt` (`build-<n> <commit> <fecha>`) y lo mete en el `.exe`. Se ve en el título de la ventana, en la cabecera y el pie del informe, en `resumen.json → build` y en la primera línea de `diagnostico.log`. Así se sabe qué versión ha usado quien envía un informe. Ejecutado con Python, sin `.exe`, pone "local".
+
 Si el antivirus corporativo bloquea el `.exe` (pasa con PyInstaller), la alternativa es `ejecutar.bat` + Python instalado en el PC de destino.
 
 ## Modo línea de comandos (para ti)

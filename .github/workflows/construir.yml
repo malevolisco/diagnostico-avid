@@ -23,6 +23,9 @@ jobs:
       - name: Dependencias
         run: pip install --only-binary ":all:" pyavb openpyxl pyinstaller
 
+      - name: Pruebas unitarias
+        run: python -m unittest discover -s tests -v
+
       - name: ffmpeg 7.1.1 (build fijada de gyan.dev)
         shell: pwsh
         run: |
@@ -58,6 +61,13 @@ jobs:
 
       - name: Comprobar resultado
         run: python tests/comprobar_resultado.py salida brutos --ffprobe bin/ffprobe.exe
+
+      - name: Segunda ejecución sobre los mismos brutos (debe reanudar, no repetir)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--origen disco_prueba --destino salida2 --brutos brutos --sin-gui --no-abrir --zip-sin-miniaturas" -PassThru -Wait -NoNewWindow
+          if ($p.ExitCode -ne 0) { Get-Content salida2/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
+          python tests/comprobar_resultado.py salida2 brutos --ffprobe bin/ffprobe.exe --reanudado
 
       - name: Empaquetar portable
         shell: pwsh

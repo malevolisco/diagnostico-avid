@@ -21,7 +21,7 @@ jobs:
           python-version: "3.12"
 
       - name: Dependencias
-        run: pip install --only-binary :all: pyavb openpyxl pyinstaller
+        run: pip install --only-binary ":all:" pyavb openpyxl pyinstaller
 
       - name: ffmpeg (build de BtbN)
         shell: pwsh

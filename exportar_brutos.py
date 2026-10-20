@@ -8,7 +8,12 @@ genera por cada proyecto UN solo fichero MXF OP1a con todos sus clips
 encadenados, más un shotlist Excel (timecode de cada clip dentro del bruto)
 y una hoja de contactos HTML con las miniaturas.
 
-Modo de trabajo por proyecto:
+Reparto: cada proyecto se parte en un bruto por tarjeta de cámara (carpeta de la
+tarjeta según el bin, cámara P2 y saltos de fecha de la media). El material de
+agencias va siempre a un bruto _AGENCIAS y las piezas renderizadas y los renders
+de efectos a un bruto _PIEZAS, ambos por proyecto.
+
+Modo de trabajo por bruto:
   - "copia":     todos los clips comparten códec, resolución, fps y formato
                  de píxel → se encadenan sin recomprimir (sin pérdida).
   - "convertir": hay mezcla de formatos o el códec no se puede copiar →
@@ -26,14 +31,16 @@ Este módulo lo usa diagnostico_avid.py; no se ejecuta solo.
 """
 
 import datetime as dt
+import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 LOG = logging.getLogger("diagnostico")
@@ -47,9 +54,19 @@ CONFIG_DEFECTO = {
     "timecode_inicio": "00:00:00:00",
     "_timecode_inicio": "TC del primer frame del bruto. Escríbelo siempre hh:mm:ss:ff; si el bruto sale a 29,97 o 59,94 se usa drop-frame (hh:mm:ss;ff)",
     "incluir_huerfanos": True,
-    "_incluir_huerfanos": "Los clips que no están en ningún bin van a un bruto llamado SIN_PROYECTO",
-    "incluir_renders": False,
-    "_incluir_renders": "Los renders de efectos (títulos, fundidos) no son material; false = no entran en los brutos",
+    "_incluir_huerfanos": "Los clips que no están en ningún bin van a brutos SIN_PROYECTO (también partidos por tarjeta)",
+    "partir_por_tarjeta": True,
+    "_partir_por_tarjeta": "true = un bruto por tarjeta de cámara dentro de cada proyecto (_T01, _T02...) | false = un bruto por proyecto",
+    "tarjeta_hueco_horas": 2,
+    "_tarjeta_hueco_horas": "Dentro de una misma carpeta de tarjeta y cámara, un salto de más de estas horas entre clips (fecha de la media) se considera otra tarjeta",
+    "agencias_aparte": True,
+    "origenes_agencia": ["Agencia"],
+    "_origenes_agencia": "Clips cuyo origen (según config_origen.json) empieza por alguno de estos textos van al bruto _AGENCIAS del proyecto",
+    "piezas_aparte": True,
+    "piezas_regex": "",
+    "_piezas_regex": "Van al bruto _PIEZAS los renders de efectos y los clips que se llaman como una secuencia del proyecto (pieza exportada o mixdown). Aquí se puede añadir una expresión regular sobre el nombre del clip, p. ej. (?i)mixdown|emitid",
+    "renders_en_piezas": True,
+    "_renders_en_piezas": "Los renders de efectos (títulos, fundidos) van al bruto _PIEZAS; false = se descartan",
     "clips_compartidos": "primero",
     "_clips_compartidos": "Un clip que está en varios proyectos: primero = solo en el bruto del primer proyecto (orden alfabético) | todos = en cada bruto",
     "prefijo_fichero": "BRUTO_",
@@ -210,6 +227,145 @@ def duracion_ffprobe(ffprobe, ruta):
         return float(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Reparto en brutos: tarjetas, agencias y piezas
+# ---------------------------------------------------------------------------
+
+# Carpetas que cuelgan de la raíz de una tarjeta de cámara (P2, XDCAM/XAVC, AVCHD, foto/vídeo genérico)
+MARCAS_TARJETA = {"CONTENTS", "PRIVATE", "DCIM", "XDROOT", "BPAV", "AVCHD", "M4ROOT", "CLIPR"}
+RE_P2 = re.compile(r"^[0-9A-F]{4}([A-Z0-9]{2})(?:\.new)?(?:\.\d+)?$", re.IGNORECASE)  # 0016Q3, 0016Q3.new.01: Q3 = cámara
+
+
+def carpeta_tarjeta(ruta):
+    """Raíz de la tarjeta según la ruta del fichero importado que guarda el bin: la carpeta que
+    contiene CONTENTS, PRIVATE, DCIM... ('E:' si se importó con la tarjeta montada). None si no consta."""
+    partes = [x for x in re.split(r"[\\/]+", str(ruta or "")) if x]
+    for i, x in enumerate(partes):
+        if i and x.upper() in MARCAS_TARJETA:
+            return "/".join(partes[:i])
+    return None
+
+
+def fecha_media(c, mxf_por_ruta):
+    """Fecha del fichero de media (la de vídeo si hay): cuándo se capturó o importó en Avid."""
+    for r in [c.get("fichero_video")] + list(c.get("ficheros") or []):
+        texto = (mxf_por_ruta.get(r) or {}).get("modificado") if r else None
+        if texto:
+            try:
+                return dt.datetime.strptime(texto, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                pass
+    return None
+
+
+def partir_por_tarjeta(cs, mxf_por_ruta, cfg):
+    """Agrupa los clips por tarjeta: misma carpeta de tarjeta (si el bin la guarda) y misma cámara P2,
+    y dentro de eso se parte cuando hay un salto de fechas mayor que tarjeta_hueco_horas.
+    Devuelve [(clips, info)] ordenado por fecha; info: carpeta, camara, desde, hasta."""
+    hueco = dt.timedelta(hours=float(cfg.get("tarjeta_hueco_horas", 2)))
+    por_clave = defaultdict(list)
+    for c in cs:
+        m = RE_P2.match(c.get("nombre") or "")
+        por_clave[(carpeta_tarjeta(c.get("fichero_origen")), m.group(1).upper() if m else None)].append(c)
+    tarjetas = []
+    for (carpeta, camara), grupo in por_clave.items():
+        grupo.sort(key=lambda c: (fecha_media(c, mxf_por_ruta) or dt.datetime.min, c["nombre"]))
+        actual = []
+        for c in grupo:
+            f = fecha_media(c, mxf_por_ruta)
+            previa = fecha_media(actual[-1], mxf_por_ruta) if actual else None
+            if actual and f and previa and f - previa > hueco:
+                tarjetas.append((actual, carpeta, camara))
+                actual = []
+            actual.append(c)
+        tarjetas.append((actual, carpeta, camara))
+    salida = []
+    for grupo, carpeta, camara in tarjetas:
+        fechas = [f for f in (fecha_media(c, mxf_por_ruta) for c in grupo) if f]
+        salida.append((grupo, {"carpeta": carpeta, "camara": camara, "desde": min(fechas) if fechas else None,
+                               "hasta": max(fechas) if fechas else None}))
+    salida.sort(key=lambda t: (t[1]["desde"] or dt.datetime.max, t[1]["carpeta"] or "", t[1]["camara"] or ""))
+    return salida
+
+
+def _normal(texto):
+    """Nombre comparable: sin extensión, sin .new.01 ni 'mixdown' al final, minúsculas y espacios colapsados."""
+    t = re.sub(r"\.(mxf|mov|mp4|m4v|avi|mts|wav|aif+)$", "", str(texto or "").strip(), flags=re.IGNORECASE)
+    t = re.sub(r"(\.new)?(\.\d+)?$", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"[\s._-]*(video\s*|audio\s*)?mixdown$", "", t, flags=re.IGNORECASE)
+    return " ".join(t.lower().split())
+
+
+def es_pieza(c, secuencias, rx=None):
+    """Pieza renderizada: el clip (o el fichero importado) se llama como una secuencia del proyecto."""
+    if rx and rx.search(c.get("nombre") or ""):
+        return True
+    fichero = str(c.get("fichero_origen") or "").replace("\\", "/").rsplit("/", 1)[-1]
+    return bool(secuencias) and bool({_normal(c.get("nombre")), _normal(fichero)} & secuencias - {""})
+
+
+def grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg):
+    """Reparte los clips en brutos. Devuelve [{nombre, base, proyecto, tipo, contenido, clips}]."""
+    politica = cfg.get("clips_compartidos", "primero")
+    huerfanos = cfg.get("incluir_huerfanos", True)
+    por_proyecto = defaultdict(lambda: {"normales": [], "renders": []})
+    for c in clips:
+        render = bool(c.get("render"))
+        if render and not cfg.get("renders_en_piezas", True):
+            continue
+        proys = sorted(c.get("proyectos_render" if render else "proyectos") or [])
+        if politica == "primero" and proys:
+            proys = proys[:1]
+        if not proys:
+            if not huerfanos:
+                continue
+            proys = ["SIN_PROYECTO"]
+        for p in proys:
+            por_proyecto[p]["renders" if render else "normales"].append(c)
+
+    secuencias = {p["proyecto"]: {_normal(n) for n in p.get("secuencias_nombres", [])} for p in (cruce or {}).get("por_proyecto", [])}
+    rx = re.compile(cfg["piezas_regex"]) if cfg.get("piezas_regex") else None
+    prefijos = tuple(cfg.get("origenes_agencia") or ())
+    grupos = []
+    for proyecto in sorted(por_proyecto):
+        normales, renders = por_proyecto[proyecto]["normales"], por_proyecto[proyecto]["renders"]
+        base = nombre_seguro(proyecto, 50)
+        piezas = [c for c in normales if cfg.get("piezas_aparte", True) and es_pieza(c, secuencias.get(proyecto, set()), rx)]
+        resto = [c for c in normales if c not in piezas]
+        agencias = [c for c in resto if cfg.get("agencias_aparte", True) and prefijos and str(c.get("origen") or "").startswith(prefijos)]
+        resto = [c for c in resto if c not in agencias]
+        if resto and cfg.get("partir_por_tarjeta", True):
+            tarjetas = partir_por_tarjeta(resto, mxf_por_ruta, cfg)
+            for n, (cs, info) in enumerate(tarjetas, 1):
+                fecha = info["desde"].strftime("%Y-%m-%d") if info["desde"] else ""
+                sufijo = "_T%02d" % n + ("_" + fecha if fecha else "")
+                partes = ["tarjeta %d de %d" % (n, len(tarjetas))]
+                if info["desde"]:
+                    partes.append(info["desde"].strftime("%d/%m/%Y %H:%M") + (" – " + info["hasta"].strftime("%d/%m/%Y %H:%M") if info["hasta"] != info["desde"] else ""))
+                if info["carpeta"]:
+                    partes.append("carpeta " + info["carpeta"].rsplit("/", 1)[-1])
+                if info["camara"]:
+                    partes.append("cámara P2 " + info["camara"])
+                grupos.append({"nombre": proyecto + sufijo, "base": base + sufijo, "proyecto": proyecto, "tipo": "tarjeta",
+                               "contenido": " · ".join(partes), "clips": cs})
+        elif resto:
+            grupos.append({"nombre": proyecto, "base": base, "proyecto": proyecto, "tipo": "proyecto", "contenido": "proyecto entero", "clips": resto})
+        if agencias:
+            cuenta = Counter(c.get("origen") for c in agencias)
+            grupos.append({"nombre": proyecto + "_AGENCIAS", "base": base + "_AGENCIAS", "proyecto": proyecto, "tipo": "agencias",
+                           "contenido": "agencias: " + ", ".join("%s %d" % kv for kv in cuenta.most_common()), "clips": agencias})
+        if piezas or renders:
+            grupos.append({"nombre": proyecto + "_PIEZAS", "base": base + "_PIEZAS", "proyecto": proyecto, "tipo": "piezas",
+                           "contenido": "piezas renderizadas %d, renders de efectos %d" % (len(piezas), len(renders)),
+                           "clips": piezas + renders})
+    return grupos
+
+
+def firma_clips(cs):
+    """Identifica el conjunto de clips de un bruto: si cambia, el bruto no se reanuda, se rehace."""
+    return hashlib.sha256("\n".join(sorted(str(c.get("clave")) for c in cs)).encode("utf-8")).hexdigest()[:16]
 
 
 # ---------------------------------------------------------------------------
@@ -413,14 +569,17 @@ def _fila_clip(i, proyecto, c, mxf_por_ruta):
 
 
 def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir=None,
-                      etiqueta="", modo_forzado=None, timeouts=None, motivo_reintento=None):
+                      etiqueta="", modo_forzado=None, timeouts=None, motivo_reintento=None, base_fichero=None):
     """Exporta el bruto de un proyecto. Devuelve el resultado (dict) para brutos_resultado.json.
 
     En modo copia, si un segmento o la unión fallan por algo que no sea tiempo agotado, se repite
     el proyecto entero una sola vez en modo convertir (modo_forzado). Para no convertir todo por
     un fichero dañado, ante un segmento fallido se prueba antes ese mismo clip en convertir: si
     también falla, el problema es el fichero y el proyecto sigue en copia sin ese clip.
-    timeouts: claves de clips que ya agotaron el tiempo (no se reintentan)."""
+    timeouts: claves de clips que ya agotaron el tiempo (no se reintentan).
+    proyecto es el nombre del bruto (p. ej. "MEXICO_T02_2021-09-15"); base_fichero, el nombre de
+    fichero sin prefijo (por defecto, el nombre del bruto saneado)."""
+    base_fichero = base_fichero or nombre_seguro(proyecto)
     destino = Path(destino)
     timeouts = set(timeouts or ())
     cs = sorted(cs, key=lambda c: (c["nombre"], c.get("timecode") or ""))
@@ -428,7 +587,7 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
     pref = cfg.get("prefijo_fichero", "BRUTO_")
     res = {"proyecto": proyecto, "modo": plan["modo"], "reintento": modo_forzado is not None, "pistas_audio": plan["pistas_audio"],
            "clips": len(cs), "incluidos": 0, "fallidos": 0, "solo_audio": plan["clips_solo_audio"], "fichero": None, "bytes": 0,
-           "segundos": 0.0, "estado": "", "shotlist": None, "contactos": None, "errores": []}
+           "segundos": 0.0, "estado": "", "shotlist": None, "contactos": None, "errores": [], "firma": firma_clips(cs)}
     if motivo_reintento:
         res["motivo_reintento"] = motivo_reintento
     progreso("Bruto %s: %s (%d clips, modo %s%s)" % (etiqueta, proyecto, len(cs), plan["modo"], ", reintento" if modo_forzado else ""))
@@ -451,14 +610,14 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
         progreso("  %s: no se puede copiar sin recomprimir; se repite convirtiendo" % proyecto)
         shutil.rmtree(tmp, ignore_errors=True)
         return exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir,
-                                 etiqueta, modo_forzado="convertir", timeouts=timeouts, motivo_reintento=motivo)
+                                 etiqueta, modo_forzado="convertir", timeouts=timeouts, motivo_reintento=motivo, base_fichero=base_fichero)
 
     puede_reintentar = plan["modo"] == "copia" and modo_forzado is None
-    tmp = destino / ("_tmp_" + nombre_seguro(proyecto, 30))
+    tmp = destino / ("_tmp_" + base_fichero)
     if tmp.exists():
         shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir()
-    salida = destino / ("%s%s.mxf" % (pref, nombre_seguro(proyecto)))
+    salida = destino / ("%s%s.mxf" % (pref, base_fichero))
     uniendo = False
     try:
         segmentos, filas = [], []
@@ -537,7 +696,7 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
             salida.unlink(missing_ok=True)
         raise
 
-    base = destino / ("%s%s" % (pref, nombre_seguro(proyecto)))
+    base = destino / ("%s%s" % (pref, base_fichero))
     try:
         res["shotlist"] = escribir_shotlist(base.with_name(base.name + "_shotlist.xlsx"), proyecto, filas).name
     except Exception as e:
@@ -560,12 +719,14 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
     return res
 
 
-def ya_exportado(previo, n_clips, destino):
-    """Un proyecto de una ejecución anterior se salta si terminó bien, sus ficheros siguen ahí con el
+def ya_exportado(previo, n_clips, destino, firma=None):
+    """Un bruto de una ejecución anterior se salta si terminó bien, sus ficheros siguen ahí con el
     mismo tamaño y tiene los mismos clips (si cambió el análisis o el config, se rehace)."""
     if not previo or not (str(previo.get("estado", "")).startswith(("OK", "AVISO"))):
         return False
     if previo.get("clips") != n_clips or not previo.get("fichero") or not previo.get("shotlist"):
+        return False
+    if firma and previo.get("firma") and previo["firma"] != firma:
         return False
     mxf = Path(destino) / previo["fichero"]
     return mxf.exists() and mxf.stat().st_size == previo.get("bytes") and (Path(destino) / previo["shotlist"]).exists()
@@ -587,37 +748,27 @@ def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso,
         except Exception as e:
             LOG.warning("brutos_resultado.json anterior ilegible (%s); se exporta todo", e)
 
-    grupos = {}
-    politica = cfg.get("clips_compartidos", "primero")
-    for c in clips:
-        if c.get("render") and not cfg.get("incluir_renders", False):
-            continue
-        proys = sorted(c.get("proyectos", []))
-        if politica == "primero" and proys:
-            proys = proys[:1]
-        for p in proys:
-            grupos.setdefault(p, []).append(c)
-    if cfg.get("incluir_huerfanos", True):
-        huer = [c for c in clips if not c.get("proyectos") and not (c.get("render") and not cfg.get("incluir_renders", False))]
-        if huer:
-            grupos["SIN_PROYECTO"] = huer
+    grupos = grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg)
 
     resultados = []
-    pendientes = sorted(grupos.items())
-    for n_proy, (proyecto, cs) in enumerate(pendientes, 1):
+    LOG.info("Brutos previstos: %d (%s)", len(grupos), "; ".join("%s: %d clips" % (g["nombre"], len(g["clips"])) for g in grupos))
+    for n_proy, g in enumerate(grupos, 1):
+        proyecto, cs = g["nombre"], g["clips"]
         etiqueta = "%d/%d" % (n_proy, len(grupos))
         try:
             if PARAR.is_set():
                 raise Detenido()
-            if ya_exportado(previos.get(proyecto), len(cs), destino):
+            if ya_exportado(previos.get(proyecto), len(cs), destino, firma_clips(cs)):
                 res = dict(previos[proyecto], reanudado=True)
                 progreso("Bruto %s: %s ya estaba exportado, se salta (reanudado)" % (etiqueta, proyecto))
                 LOG.info("Bruto %s: reanudado (ya exportado en una ejecución anterior)", proyecto)
             else:
-                res = exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir, etiqueta)
+                res = exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir,
+                                        etiqueta, base_fichero=g["base"])
                 res["reanudado"] = False
+            res.update({"proyecto_avid": g["proyecto"], "tipo": g["tipo"], "contenido": g["contenido"]})
         except Detenido:
-            faltan = [p for p, _ in pendientes[n_proy - 1:]]
+            faltan = [x["nombre"] for x in grupos[n_proy - 1:]]
             progreso("Exportación detenida. Terminados: %d de %d brutos. Al relanzar con las mismas carpetas sigue por %s."
                      % (len(resultados), len(grupos), faltan[0]))
             LOG.warning("Exportación detenida por el usuario en %s; quedan %d proyectos", faltan[0], len(faltan))

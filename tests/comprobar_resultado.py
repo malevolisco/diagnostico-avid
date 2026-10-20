@@ -40,8 +40,8 @@ def main():
         if not (carpeta / f).exists():
             fallo("falta %s" % f)
     r = json.loads((carpeta / "resumen.json").read_text(encoding="utf-8"))
-    # offline: CLIP OFFLINE + los 2 "APROX B" ambiguos. clips_fisicos: 9 + 2 NTSC + 3 APROX.
-    esperado = {"proyectos": 4, "bins": 6, "bins_ilegibles": 1, "offline": 3, "renders_en_bins": 1, "clips_compartidos": 1, "clips_fisicos": 14}
+    # offline: CLIP OFFLINE + los 2 "APROX B" ambiguos. clips_fisicos: 9 + 2 NTSC + 3 APROX + agencia + pieza.
+    esperado = {"proyectos": 4, "bins": 6, "bins_ilegibles": 1, "offline": 3, "renders_en_bins": 1, "clips_compartidos": 1, "clips_fisicos": 16}
     for k, v in esperado.items():
         if r.get(k) != v:
             fallo("resumen.%s = %r, esperado %r" % (k, r.get(k), v))
@@ -65,9 +65,17 @@ def main():
         fallo("no hay brutos_resultado.json")
     res = json.loads(res_path.read_text(encoding="utf-8"))
     por = {b["proyecto"]: b for b in res}
-    # SIN_PROYECTO: huérfano 2 s + cuarentena 1 s + los 2 "APROX B" ambiguos de 2 s. NTSC: 2 × 60 frames a 29,97 = 4,004 s.
-    esperado_brutos = {"15 SEPT CENTROAMERICA": ("copia", 3, 7.0), "ABORTO": ("convertir", 2, 4.0), "NTSC": ("copia", 2, 4.0),
-                       "APROX": ("copia", 1, 2.0), "SIN_PROYECTO": ("copia", 4, 7.0)}
+    # Un bruto por tarjeta (_Tnn_fecha), y aparte agencias y piezas. 15 SEPT: el clip "2017 07 13" es del día 14
+    # (otra tarjeta); el de Reuters lo dice la ruta del bin; la pieza se llama como la secuencia y el render
+    # del título también va a _PIEZAS. NTSC: mismo día pero dos carpetas de tarjeta (CARD01, CARD02).
+    # SIN_PROYECTO: huérfano 2 s + cuarentena 1 s + los 2 "APROX B" ambiguos de 2 s.
+    esperado_brutos = {"15 SEPT CENTROAMERICA_T01_2021-09-14": ("copia", 1, 2.0), "15 SEPT CENTROAMERICA_T02_2021-09-15": ("copia", 2, 5.0),
+                       "15 SEPT CENTROAMERICA_AGENCIAS": ("copia", 1, 2.0), "15 SEPT CENTROAMERICA_PIEZAS": ("copia", 2, 3.0),
+                       "ABORTO_T01_2021-09-15": ("convertir", 2, 4.0), "APROX_T01_2021-09-15": ("copia", 1, 2.0),
+                       "NTSC_T01_2021-09-15": ("copia", 1, 2.0), "NTSC_T02_2021-09-15": ("copia", 1, 2.0),
+                       "SIN_PROYECTO_T01_2021-09-15": ("copia", 4, 7.0)}
+    if sorted(por) != sorted(esperado_brutos):
+        fallo("brutos %s, esperados %s" % (sorted(por), sorted(esperado_brutos)))
     for proy, (modo, incl, seg) in esperado_brutos.items():
         b = por.get(proy)
         if not b:
@@ -84,11 +92,11 @@ def main():
                 fallo("bruto %s: pistas %s, esperadas 1 vídeo + %d audio" % (proy, out, b["pistas_audio"]))
             tc = subprocess.run([a.ffprobe, "-v", "error", "-show_entries", "format_tags=timecode", "-of", "default=nw=1:nk=1", str(mxf)],
                                 capture_output=True, text=True).stdout.strip()
-            sep = ";" if proy == "NTSC" else ":"  # drop-frame solo a 29,97
+            sep = ";" if proy.startswith("NTSC") else ":"  # drop-frame solo a 29,97
             if len(tc) != 11 or tc[8] != sep:
                 fallo("bruto %s: timecode %r, esperado con '%s' antes de los frames" % (proy, tc, sep))
         tcs = tc_shotlist(Path(a.brutos) / b["shotlist"])
-        sep = ";" if proy == "NTSC" else ":"
+        sep = ";" if proy.startswith("NTSC") else ":"
         if not tcs or any(len(t) != 11 or t[8] != sep for t in tcs):
             fallo("shotlist %s: timecodes %r, esperado '%s' antes de los frames" % (proy, tcs, sep))
     if a.reanudado:

@@ -21,6 +21,7 @@ Herramienta de Adrián Merinero Sánchez para el Archivo de RTVE: analiza un dis
 | `actualizar.py` | Autoactualización del `.exe` al abrir la ventana: consulta la última release en GitHub, descarga, comprueba y un `.bat` cambia la carpeta conservando `config_*.json`. |
 | `config_brutos.json`, `config_origen.json` | Se crean junto al programa con valores por defecto la primera vez. No están en git. |
 | `tests/crear_disco_prueba.py` | Genera un disco Avid simulado con casos límite (bins con pyavb, MXF OP-Atom con ffmpeg, V y A compartiendo UMID como hace Avid). |
+| `tests/probar_cortes.py` | Prueba de la pantalla de cortes sin ventana: escribe un `cortes.json` y comprueba los brutos exportados con `--usar-analisis`. |
 | `tests/comprobar_resultado.py` | Comprueba un resultado contra valores fijos; sale con 1 si algo no cuadra. `--reanudado` para la segunda ejecución. |
 | `tests/test_unitarios.py` | Timecode drop-frame, reintento copia→convertir con ffmpeg simulado, reanudar, botón Detener, reparto por tarjeta/agencias/piezas, autoactualización con release falsa local. Solo stdlib. |
 | `.github/workflows/construir.yml` | En cada push a `main` (o a mano en otra rama): pruebas unitarias, ffmpeg 7.1.1 fijado, PyInstaller con `build.txt`, disco de prueba, ejecuta el `.exe` dos veces (la segunda debe reanudar) y una tercera con `agrupar = proyecto` y `formato_salida = auto`, comprueba, prueba la autoactualización con una release falsa local y, solo en `main`, publica release `build-N` con `DiagnosticoAvid_portable.zip`. El repositorio es público (la autoactualización lo necesita sin contraseña). |
@@ -66,6 +67,8 @@ Debe terminar con "Análisis OK", "Brutos OK" y las pruebas unitarias en OK. Par
 - Un fichero con ruta de tarjeta (`CONTENTS`, `PRIVATE`…) es material de cámara aunque la columna Origen diga "Fichero importado" (el disco simulado tiene ese caso en el proyecto NTSC).
 - Formato real del disco de México: 94 % DV 720×480 29,97 (151 de 160 h); nada a 25 ni en XDCAM HD. Con XDCAM HD 50 hay que convertirlo todo; unir antes de convertir no ahorra trabajo. Se convierten varios clips a la vez (`clips_a_la_vez`) y se unen en orden.
 - Orden de los clips: estricto por fecha y hora del fichero (al segundo), luego timecode original, luego nombre (`orden_cronologico`).
+- Hora que manda para ordenar (Adrián, oct. 2026): la de grabación si el bin o el MXF la guardan con fecha y hora (columnas de usuario tipo "Shoot Date"/"Shoot Time"); si no, la del volcado (fecha del MXF). No verificado con bins reales: `cruce.json → fecha_grabacion` dice qué hay.
+- Cortes de los brutos (Adrián, oct. 2026): se trabaja en tres pasos (analizar; "Revisar cortes" sobre ese análisis; exportar sin repetirlo). En la pantalla se puede mover el comienzo de cada bruto a un clip anterior o posterior para no partir una entrevista; puede pasar de 2 h (sale en rojo). Se guarda en `cortes.json` de la carpeta de brutos.
 - Selector de proyectos (ventana y `--proyectos`): el análisis es siempre del disco entero; los brutos, solo de los elegidos; `brutos_resultado.json` conserva los de otras veces para hacer un disco en varias sesiones.
 - La autoactualización es automática, sin preguntar, al abrir la ventana.
 - El programa nunca escribe en el disco de origen y se niega si el destino está dentro de él.

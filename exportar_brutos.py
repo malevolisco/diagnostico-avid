@@ -285,10 +285,24 @@ def fecha_media(c, mxf_por_ruta):
     return None
 
 
+def fecha_grabacion(c):
+    """Fecha y hora de grabación (cámara) si el análisis la encontró en una columna del bin o un comentario del MXF."""
+    try:
+        return dt.datetime.strptime(c["fecha_grabacion"], "%Y-%m-%d %H:%M:%S") if c.get("fecha_grabacion") else None
+    except ValueError:
+        return None
+
+
+def fecha_clip(c, mxf_por_ruta):
+    """La fecha que manda (Adrián, oct. 2026): la de grabación si consta; si no, la del fichero de media (volcado)."""
+    return fecha_grabacion(c) or fecha_media(c, mxf_por_ruta)
+
+
 def orden_cronologico(c, mxf_por_ruta):
-    """Orden estricto: fecha y hora del fichero de media (al segundo); si coinciden, el timecode original del clip
-    (en un volcado de tarjeta caen varios clips en el mismo segundo) y después el nombre. Sin fecha, al final."""
-    f = fecha_media(c, mxf_por_ruta)
+    """Orden estricto: fecha y hora de grabación (o, si no consta, del fichero de media) al segundo; si coinciden, el
+    timecode original del clip (en un volcado de tarjeta caen varios clips en el mismo segundo) y después el nombre.
+    Sin fecha, al final."""
+    f = fecha_clip(c, mxf_por_ruta)
     return (f is None, f or dt.datetime.min, str(c.get("timecode") or "").replace(";", ":"), c["nombre"])
 
 
@@ -390,14 +404,15 @@ def excluido(c, cfg):
     return bool(cfg.get("excluir_importados", True)) and es_importado(c, cfg)
 
 
-def grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg):
-    """Reparte los clips en brutos. Devuelve [{nombre, base, proyecto, tipo, contenido, clips}]."""
+def grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg, cortes=None):
+    """Reparte los clips en brutos. Devuelve [{nombre, base, proyecto, tipo, contenido, clips}].
+    cortes (solo proyecto_mes): {proyecto: [claves de los clips donde empieza cada bruto]} de la pantalla de cortes."""
     agrupar = cfg.get("agrupar", "proyecto_mes")
     if agrupar == "dias":
         return grupos_por_dias(clips, cruce, mxf_por_ruta, cfg)
     if agrupar == "proyecto":
         return grupos_por_proyecto(clips, cruce, mxf_por_ruta, cfg)
-    return grupos_por_proyecto_mes(clips, cruce, mxf_por_ruta, cfg)
+    return grupos_por_proyecto_mes(clips, cruce, mxf_por_ruta, cfg, cortes)
 
 
 def trozos_hasta(cs, tope):
@@ -415,12 +430,10 @@ def trozos_hasta(cs, tope):
     return trozos
 
 
-def grupos_por_proyecto_mes(clips, cruce, mxf_por_ruta, cfg):
-    """agrupar=proyecto_mes (por defecto, pedido por el Archivo en oct. 2026): cada proyecto en orden cronológico
-    (fecha del fichero de media), en brutos de hasta horas_por_bruto, llamados PROYECTO_AAAA-MM (o
-    PROYECTO_AAAA-MM_a_AAAA-MM si abarca varios meses; _1, _2... si se repite el nombre). Piezas renderizadas
-    aparte (PROYECTO_PIEZAS_...). Fuera: renders de efectos e importados (excluir_importados)."""
-    tope = 3600 * float(cfg.get("horas_por_bruto", 2))
+def listas_por_proyecto(clips, cruce, mxf_por_ruta, cfg):
+    """agrupar=proyecto_mes: {proyecto: {"material": [...], "piezas": [...]}} con los clips de cada proyecto en orden
+    cronológico estricto. Fuera: renders de efectos e importados (excluir_importados). Un clip en varios proyectos,
+    solo en el primero (clips_compartidos = primero); los que no están en ningún bin, en SIN_PROYECTO."""
     politica = cfg.get("clips_compartidos", "primero")
     secuencias = {p["proyecto"]: {_normal(n) for n in p.get("secuencias_nombres", [])} for p in (cruce or {}).get("por_proyecto", [])}
     rx = re.compile(cfg["piezas_regex"]) if cfg.get("piezas_regex") else None
@@ -441,15 +454,54 @@ def grupos_por_proyecto_mes(clips, cruce, mxf_por_ruta, cfg):
                 por_proyecto[p]["piezas"].append(c)
             elif not excluido(c, cfg):
                 por_proyecto[p]["material"].append(c)
-    fecha = lambda c: fecha_media(c, mxf_por_ruta)
+    for listas in por_proyecto.values():
+        for familia in listas:
+            listas[familia].sort(key=lambda c: orden_cronologico(c, mxf_por_ruta))
+    return dict(por_proyecto)
+
+
+def inicios_auto(cs, tope, desde=0):
+    """Posiciones (en cs) donde empieza cada bruto a partir de la posición desde, llenando hasta tope segundos."""
+    duracion = lambda c: (c.get("duracion") or 0) if c.get("fichero_video") else 0
+    inicios, acumulado = [], 0
+    for i in range(desde, len(cs)):
+        if i > desde and acumulado + duracion(cs[i]) > tope:
+            inicios.append(i)
+            acumulado = 0
+        acumulado += duracion(cs[i])
+    return inicios
+
+
+def partir_con_cortes(cs, tope, cortes=None):
+    """Trozos de cs. cortes: claves de los clips donde empieza cada bruto, elegidas en la pantalla de cortes; si
+    alguna ya no está (otro análisis), se ignoran y se corta automáticamente hasta tope."""
+    posicion = {c.get("clave"): i for i, c in enumerate(cs)}
+    if cortes and all(k in posicion for k in cortes):
+        inicios = sorted({posicion[k] for k in cortes} - {0})
+    else:
+        if cortes:
+            LOG.warning("Cortes guardados que ya no cuadran con el análisis: se corta automáticamente")
+        inicios = inicios_auto(cs, tope)
+    bordes = [0] + inicios + [len(cs)]
+    return [cs[a:b] for a, b in zip(bordes, bordes[1:]) if b > a]
+
+
+def grupos_por_proyecto_mes(clips, cruce, mxf_por_ruta, cfg, cortes=None):
+    """agrupar=proyecto_mes (por defecto, pedido por el Archivo en oct. 2026): cada proyecto en orden cronológico,
+    en brutos de hasta horas_por_bruto (o donde se eligió en la pantalla de cortes: cortes = {proyecto: [claves]}),
+    llamados PROYECTO_AAAA-MM (o PROYECTO_AAAA-MM_a_AAAA-MM si abarca varios meses; _1, _2... si se repite el nombre).
+    Piezas renderizadas aparte (PROYECTO_PIEZAS_...)."""
+    tope = 3600 * float(cfg.get("horas_por_bruto", 2))
+    fecha = lambda c: fecha_clip(c, mxf_por_ruta)
     grupos = []
-    for proyecto in sorted(por_proyecto):
-        for familia, cs in por_proyecto[proyecto].items():
-            cs = sorted(cs, key=lambda c: orden_cronologico(c, mxf_por_ruta))
+    listas = listas_por_proyecto(clips, cruce, mxf_por_ruta, cfg)
+    for proyecto in sorted(listas):
+        for familia, cs in listas[proyecto].items():
             con_fecha = [c for c in cs if fecha(c)]
             sin_fecha = [c for c in cs if not fecha(c)]
+            elegidos = (cortes or {}).get(proyecto) if familia == "material" else None
             nombres = []
-            for t in trozos_hasta(con_fecha, tope):
+            for t in partir_con_cortes(con_fecha, tope, elegidos):
                 desde, hasta = fecha(t[0]).strftime("%Y-%m"), fecha(t[-1]).strftime("%Y-%m")
                 nombres.append((desde if desde == hasta else desde + "_a_" + hasta, t))
             nombres += [("SIN_FECHA", t) for t in trozos_hasta(sin_fecha, tope)]
@@ -461,7 +513,8 @@ def grupos_por_proyecto_mes(clips, cruce, mxf_por_ruta, cfg):
                 nombre = proyecto + ("_PIEZAS_" if familia == "piezas" else "_") + sufijo
                 fechas = [fecha(c) for c in t if fecha(c)]
                 periodo = (fechas[0].strftime("%d/%m/%Y") + ("" if fechas[-1].date() == fechas[0].date() else " – " + fechas[-1].strftime("%d/%m/%Y"))) if fechas else "sin fecha"
-                contenido = "%s%s · %d clips" % ("piezas renderizadas · " if familia == "piezas" else "", periodo, len(t))
+                contenido = "%s%s · %d clips%s" % ("piezas renderizadas · " if familia == "piezas" else "", periodo, len(t),
+                                                   " · corte elegido a mano" if elegidos and familia == "material" else "")
                 grupos.append({"nombre": nombre, "base": nombre_seguro(proyecto, 50) + nombre[len(proyecto):], "proyecto": proyecto,
                                "tipo": familia, "contenido": contenido, "clips": t, "ordenado": True})
     return grupos
@@ -818,19 +871,19 @@ def escribir_shotlist(ruta, proyecto, filas):
     wb = Workbook()
     ws = wb.active
     ws.title = "Shotlist"
-    cab = ["Nº", "Proyecto", "Clip", "TC inicio (bruto)", "TC fin (bruto)", "Duración", "TC original", "Fecha fichero",
+    cab = ["Nº", "Proyecto", "Clip", "TC inicio (bruto)", "TC fin (bruto)", "Duración", "TC original", "Fecha fichero", "Fecha grabación",
            "Códec origen", "Resolución origen", "Pistas audio", "Estado", "Ficheros origen", "Fichero importado (según bin)", "Disco de origen (según bin)", "Origen", "Referencia agencia", "Slug"]
     ws.append(cab)
     for c in ws[1]:
         c.font = Font(bold=True)
     anterior = None
     for fila in filas:
-        ws.append([fila.get(k) for k in ["n", "proyecto", "clip", "tc_in", "tc_out", "duracion", "tc_original", "fecha",
+        ws.append([fila.get(k) for k in ["n", "proyecto", "clip", "tc_in", "tc_out", "duracion", "tc_original", "fecha", "fecha_grabacion",
                                           "codec", "resolucion", "pistas", "estado", "ficheros", "fichero_origen", "volumenes", "origen", "ref_agencia", "slug"]])
         if fila.get("proyecto_principal") != anterior:  # donde empieza otro proyecto, en negrita
             ws.cell(row=ws.max_row, column=2).font = Font(bold=True)
             anterior = fila.get("proyecto_principal")
-    anchos = [5, 24, 34, 14, 14, 11, 14, 18, 12, 14, 8, 14, 60, 50, 24, 20, 18, 40]
+    anchos = [5, 24, 34, 14, 14, 11, 14, 18, 18, 12, 14, 8, 14, 60, 50, 24, 20, 18, 40]
     for i, a in enumerate(anchos):
         ws.column_dimensions[chr(65 + i)].width = a
     ws.freeze_panes = "A2"
@@ -870,6 +923,7 @@ def _fila_clip(i, proyecto, c, mxf_por_ruta):
     texto = (proyecto_principal(c) or "SIN_PROYECTO") + (" (también en %s)" % ", ".join(otros) if otros else "")
     return {"n": i, "proyecto": texto, "proyecto_principal": proyecto_principal(c) or "SIN_PROYECTO", "clip": c["nombre"], "tc_original": c.get("timecode"),
             "fecha": mxf_por_ruta.get(c.get("fichero_video") or c["ficheros"][0], {}).get("modificado"),
+            "fecha_grabacion": c.get("fecha_grabacion"),
             "codec": c.get("codec_video"), "resolucion": c.get("resolucion"), "pistas": c.get("num_audio"),
             "ficheros": "; ".join(c["ficheros"]), "miniatura": c.get("miniatura"), "tc_in": None, "tc_out": None, "duracion": None,
             "fichero_origen": c.get("fichero_origen"), "volumenes": ", ".join(c.get("volumenes") or []),
@@ -1060,12 +1114,35 @@ def de_proyectos(c, elegidos):
     return bool(set(c.get("proyectos_render" if c.get("render") else "proyectos") or ["SIN_PROYECTO"]) & set(elegidos))
 
 
-def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir=None, proyectos=None):
+FICHERO_CORTES = "cortes.json"
+
+
+def cargar_cortes(carpeta_brutos):
+    """Cortes elegidos en la pantalla de cortes: {proyecto: [claves de los clips donde empieza cada bruto]}."""
+    try:
+        datos = json.loads((Path(carpeta_brutos) / FICHERO_CORTES).read_text(encoding="utf-8"))
+        return {k: list(v) for k, v in (datos.get("proyectos") or {}).items()}
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        LOG.warning("%s ilegible (%s): se corta automáticamente", FICHERO_CORTES, e)
+        return {}
+
+
+def guardar_cortes(carpeta_brutos, cortes):
+    Path(carpeta_brutos).mkdir(parents=True, exist_ok=True)
+    datos = {"_comentario": "Dónde empieza cada bruto, elegido en 'Revisar cortes'. Borra un proyecto (o el fichero) para volver al corte automático.",
+             "proyectos": {k: v for k, v in sorted(cortes.items()) if v}}
+    (Path(carpeta_brutos) / FICHERO_CORTES).write_text(json.dumps(datos, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir=None, proyectos=None, cortes=None):
     """Devuelve una lista con el resultado por proyecto (para el informe). brutos_resultado.json se
     reescribe tras cada proyecto, y al relanzar sobre la misma carpeta se saltan los ya terminados.
     Si se pulsa Detener, devuelve los proyectos terminados hasta ese momento (PARAR queda activado).
     proyectos: nombres de los proyectos elegidos (None = todos; "SIN_PROYECTO" = clips sin bin). Los brutos de
-    proyectos no elegidos que ya estaban en brutos_resultado.json se conservan, para hacer el disco en varias veces."""
+    proyectos no elegidos que ya estaban en brutos_resultado.json se conservan, para hacer el disco en varias veces.
+    cortes: los de la pantalla de cortes; por defecto, los de cortes.json de la carpeta de brutos."""
     destino = Path(destino)
     destino.mkdir(parents=True, exist_ok=True)
     mxf_por_ruta = {m["ruta"]: m for m in mxf}
@@ -1078,17 +1155,28 @@ def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso,
         except Exception as e:
             LOG.warning("brutos_resultado.json anterior ilegible (%s); se exporta todo", e)
 
+    if cortes is None:
+        cortes = cargar_cortes(destino)
+    if cortes:
+        LOG.info("Cortes elegidos a mano en %d proyectos (%s)", len(cortes), FICHERO_CORTES)
     if proyectos is not None:
         elegidos = set(proyectos)
         if cfg.get("agrupar", "proyecto_mes") == "dias":  # los bloques por días mezclan proyectos: se filtran los clips
             clips = [c for c in clips if de_proyectos(c, elegidos)]
-        grupos = [g for g in grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg)
+        grupos = [g for g in grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg, cortes)
                   if cfg.get("agrupar", "proyecto_mes") == "dias" or g["proyecto"] in elegidos]
         LOG.info("Proyectos elegidos (%d): %s", len(elegidos), "; ".join(sorted(elegidos)))
     else:
-        grupos = grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg)
+        grupos = grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg, cortes)
     de_esta_vez = {g["nombre"] for g in grupos}
-    otros = [r for p, r in previos.items() if p not in de_esta_vez]  # de otras ejecuciones (otros proyectos): se conservan
+    proyectos_de_esta_vez = {g["proyecto"] for g in grupos}
+    # De otras ejecuciones: se conservan los de otros proyectos. Los de estos proyectos que ya no salen (se movieron
+    # los cortes o cambió el análisis) se olvidan; su .mxf se queda en la carpeta y se avisa en el log.
+    otros = [r for p, r in previos.items() if p not in de_esta_vez and r.get("proyecto_avid") not in proyectos_de_esta_vez]
+    for p, r in previos.items():
+        if p not in de_esta_vez and r.get("proyecto_avid") in proyectos_de_esta_vez and r.get("fichero"):
+            LOG.warning("%s es de una exportación anterior con otros cortes; ya no corresponde y se puede borrar", r["fichero"])
+            progreso("Aviso: %s es de una exportación anterior con otros cortes; se puede borrar." % r["fichero"])
 
     resultados = []
     LOG.info("Brutos previstos: %d (%s)", len(grupos), "; ".join("%s: %d clips" % (g["nombre"], len(g["clips"])) for g in grupos))

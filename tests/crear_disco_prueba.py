@@ -81,7 +81,8 @@ def main():
         return u
 
     def bin_con(path, clips, secs=(), renders=()):
-        """clips: (nombre, umid[, frames[, fichero_origen]]). Sin fichero_origen los mobs no llevan
+        """clips: (nombre, umid[, frames[, fichero_origen[, columnas]]]). columnas: columnas de usuario del bin
+        (p. ej. "Shoot Date"), como las que Avid guarda en _USER. Sin fichero_origen los mobs no llevan
         pistas, así que el programa asume 25 fps al calcular los segundos del bin. Con fichero_origen
         el master clip apunta a un source mob cuyo localizador guarda la ruta del fichero importado,
         como hace Avid (de ahí salen la carpeta de la tarjeta y el origen, p. ej. Reuters)."""
@@ -103,6 +104,11 @@ def main():
                 sc.mob_id, sc.media_kind, sc.length, sc.start_time, sc.track_id = src.mob_id, "picture", m.length, 0, 1
                 t.component = sc
                 m.tracks = [t]
+            if len(extra) > 2:
+                u_attr = f.create.Attributes()
+                for k, v in extra[2].items():
+                    u_attr[k] = v
+                m.attributes["_USER"] = u_attr
             m.mob_id = avb.mobid.MobID(bytes_le=bytes.fromhex(u))
             f.content.add_mob(m)
         for nombre, u in renders:  # precompute = render de efecto (título, fundido)
@@ -159,9 +165,12 @@ def main():
     P = D / "NTSC"
     P.mkdir()
     (P / "NTSC.avp").write_bytes(b"avp")
-    # Mismo día, pero el bin dice que vienen de dos tarjetas distintas (carpetas CARD01 y CARD02).
-    bin_con(P / "NTSC Bin.avb", [("NTSC 1", n1, 60, r"E:\TARJETAS\NTSC\CARD01\CONTENTS\VIDEO\0001AB.MXF"),
-                                 ("NTSC 2", n2, 60, r"E:\TARJETAS\NTSC\CARD02\CONTENTS\VIDEO\0002AB.MXF")])
+    # Mismo día, pero el bin dice que vienen de dos tarjetas distintas (carpetas CARD01 y CARD02). Columnas de
+    # usuario con la hora de grabación: NTSC 2 se grabó antes que NTSC 1 (los dos se volcaron en el mismo segundo).
+    bin_con(P / "NTSC Bin.avb", [("NTSC 1", n1, 60, r"E:\TARJETAS\NTSC\CARD01\CONTENTS\VIDEO\0001AB.MXF",
+                                  {"Shoot Date": "15/09/2021", "Shoot Time": "18:30:00"}),
+                                 ("NTSC 2", n2, 60, r"E:\TARJETAS\NTSC\CARD02\CONTENTS\VIDEO\0002AB.MXF",
+                                  {"Shoot Date": "15/09/2021", "Shoot Time": "09:15:00"})])
 
     # Identificadores que no coinciden con ningún MXF: cruce aproximado por nombre y duración.
     # "APROX A" es único (se empareja); los dos "APROX B" son iguales (ambiguos: quedan sin proyecto).

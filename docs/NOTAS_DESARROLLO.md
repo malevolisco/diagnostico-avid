@@ -1,16 +1,16 @@
-# CLAUDE.md — DiagnosticoAvid
+# Notas de desarrollo — DiagnosticoAvid
 
-Herramienta de Adrián Merinero Sánchez para el Archivo de RTVE: analiza un disco de edición Avid Media Composer completo y exporta un bruto MXF por proyecto. La usa una persona sin conocimientos técnicos (la jefa de Adrián, del Archivo de Informativos) en Windows, sin Adrián delante. Adrián (documentalista, no programador) es el autor: decide qué hace la herramienta y cómo, y Claude escribe el código siguiendo sus indicaciones; cada cambio se sube a `main` y GitHub construye y prueba el `.exe`.
+Herramienta de Adrián Merinero Sánchez para el Archivo de RTVE: analiza un disco de edición Avid Media Composer completo y exporta los brutos MXF de cada proyecto. La usa una persona sin conocimientos técnicos (la jefa de Adrián, del Archivo de Informativos) en Windows, sin Adrián delante. Adrián (documentalista) es el autor: decide qué hace la herramienta y cómo. Cada cambio se sube a `main` y GitHub construye y prueba el `.exe`.
 
-## Reglas de trabajo con Adrián
+Estas notas recogen lo que no está en el código: cómo probar, lo aprendido de los discos reales y las decisiones tomadas. Leerlas antes de cambiar nada.
 
-- Responder en español. Tono pragmático, sin paternalismo ni jerga sin explicar.
-- Al cambiar código entregar **ficheros completos**, nunca fragmentos. Varios ficheros → zip; uno solo → suelto.
+## Normas del proyecto
+
 - Nada sin comprobar: ejecutar `tests/` antes de dar algo por hecho. Si algo no se ha podido verificar, decirlo explícitamente (hay una lista en `LEEME_tecnico.md`).
-- Si se cometió un error, reconocerlo y corregirlo; no suavizarlo.
+- Si se comete un error, se reconoce y se corrige.
 - No deducir el origen del material (agencia, cámara) por el nombre de un MXF. Solo por lo que diga el bin (`config_origen.json`) y marcando lo demás "Sin determinar".
 - Material de RTVE: nunca subir vídeo ni miniaturas a ningún servicio. Para diagnosticar bastan JSON y log.
-- Autoría: los commits van a nombre de Adrián (`git config user.name "Adrián Merinero Sánchez"`, `user.email malevolisco@gmail.com`), sin firmas automáticas ni líneas de coautoría en commits, PR ni comentarios. Si GitHub añade una firma al crear una PR, quitarla de la descripción justo después y comprobarlo.
+- Autoría: los commits van a nombre de Adrián (`git config user.name "Adrián Merinero Sánchez"`, `user.email malevolisco@gmail.com`), sin firmas automáticas ni líneas de coautoría en commits, PR ni comentarios. Si aparece una firma automática en la descripción de una PR, quitarla.
 
 ## Estructura
 
@@ -28,6 +28,7 @@ Herramienta de Adrián Merinero Sánchez para el Archivo de RTVE: analiza un dis
 | `construir_exe.bat`, `ejecutar.bat` | Plan B local sin GitHub. |
 | `INSTRUCCIONES.txt` | Para quien ejecuta el programa. Se copia dentro del portable. |
 | `LEEME_tecnico.md` | Cómo funciona por dentro, qué está verificado con datos reales y qué no. |
+| `docs/NOTAS_DESARROLLO.md` | Estas notas. |
 | `docs/plan_fase3.md` | Plan aprobado de la fase 3. Implementados los pasos 1-4 y 6; el paso 5 (regla APTN) espera un nombre de fichero real. |
 
 Descarga del portable: `https://github.com/malevolisco/diagnostico-avid/releases/latest/download/DiagnosticoAvid_portable.zip`

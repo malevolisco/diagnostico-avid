@@ -79,12 +79,33 @@ Pasos
    material (depende del PC). Con un disco grande, mejor por proyectos con
    "Elegir proyectos...", o usa "Detener" y vuelve a lanzarlo con las mismas
    carpetas para seguir donde se quedó.
-   Los clips van en orden estricto de fecha y hora del fichero (al segundo);
-   si dos coinciden en el mismo segundo, por su timecode.
+   Los clips van en orden estricto de fecha y hora (al segundo): la de
+   grabación si el bin la guarda (columnas como "Shoot Date" y "Shoot
+   Time"); si no, la del volcado al disco de Avid. Si dos coinciden en el
+   mismo segundo, por su timecode. El Excel lleva las dos fechas, y el
+   informe dice en cuántos clips se ha encontrado la de grabación.
 7. Envía el fichero .zip del informe. Es pequeño (texto y miniaturas, sin vídeo).
    Si te piden enviarlo sin imágenes, desmarca antes de empezar la casilla
    "Incluir las miniaturas en el zip para enviar".
    Al final del informe hay una tabla "Brutos exportados" con el estado de cada uno.
+
+Elegir dónde se corta cada bruto (en tres pasos)
+------------------------------------------------
+Para no partir una entrevista en dos brutos:
+1. Analiza el disco ("Analizar disco") sin marcar los brutos. Se hace una
+   vez: los pasos siguientes usan ese análisis y no lo repiten.
+2. Elige la carpeta de brutos y pulsa "Revisar cortes...". A la izquierda,
+   los proyectos; a la derecha, sus brutos de hasta 2 horas. Al elegir un
+   bruto salen abajo los clips de alrededor de su comienzo, con miniatura,
+   fecha y hora, duración y el hueco desde el clip anterior (un hueco largo
+   suele ser un cambio de tema). Marca el clip con el que quieres que empiece
+   ese bruto, antes o después, y pulsa "Empezar aquí el bruto". Los cortes
+   siguientes se recalculan solos. Si un bruto pasa de 2 horas sale en
+   rojo: lo decides tú. "Guardar cortes" los deja en cortes.json, en la
+   carpeta de brutos.
+3. Pulsa "Exportar brutos (sin repetir el análisis)". Puede quedarse toda
+   la noche; con "Detener" se para y al volver a pulsarlo sigue.
+Con "Elegir proyectos..." antes del paso 2 o del 3 se hace solo una parte.
 
 Si hay que pararlo (por ejemplo, se acaba la jornada)
 -----------------------------------------------------

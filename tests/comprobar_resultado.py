@@ -58,6 +58,9 @@ def main():
     aprox = next((p for p in cruce["por_proyecto"] if p["proyecto"] == "APROX"), {})
     if (aprox.get("clips_aproximados"), aprox.get("clips_ambiguos")) != (1, 2):
         fallo("APROX: aproximados %r, ambiguos %r; esperado 1 y 2" % (aprox.get("clips_aproximados"), aprox.get("clips_ambiguos")))
+    grab = (json.loads((carpeta / "cruce.json").read_text(encoding="utf-8")).get("fecha_grabacion") or {})
+    if grab.get("clips") != 2:
+        fallo("fecha de grabación: %r clips, esperados 2 (NTSC, columnas Shoot Date/Time del bin)" % grab.get("clips"))
     if r.get("mxf_error"):
         fallo("%d MXF con error de lectura" % r["mxf_error"])
     if not glob.glob(str(carpeta / "miniaturas" / "*.jpg")):
@@ -121,7 +124,10 @@ def main():
         tcs, _, clips, fechas = tc_shotlist(Path(a.brutos) / b["shotlist"])
         if a.agrupar == "proyecto_mes":
             if fechas != sorted(fechas):
-                fallo("shotlist %s: no está en orden cronológico: %s" % (proy, fechas))
+                fallo("shotlist %s: no está en orden cronológico (grabación o, si no consta, fichero): %s" % (proy, fechas))
+            # NTSC: los dos se volcaron en el mismo segundo; las columnas "Shoot Date/Time" del bin dicen que NTSC 2 se grabó antes
+            if proy.startswith("NTSC") and clips != ["NTSC 2", "NTSC 1"]:
+                fallo("shotlist %s: orden %s, esperado por hora de grabación ['NTSC 2', 'NTSC 1']" % (proy, clips))
             if {"SISMO 15 SEPT", "MOVIL 15 SEPT"} & set(clips):
                 fallo("shotlist %s: lleva importados (%s)" % (proy, clips))
         sep = ";" if proy.startswith("NTSC") and a.agrupar == "proyecto" else ":"
@@ -141,14 +147,14 @@ def tc_shotlist(ruta):
     if ruta.suffix == ".xlsx":
         from openpyxl import load_workbook
         filas = list(load_workbook(ruta, read_only=True).active.iter_rows(values_only=True))
-        col, colp, colc, colf = (filas[0].index(x) for x in ("TC inicio (bruto)", "Proyecto", "Clip", "Fecha fichero"))
+        col, colp, colc, colf, colg = (filas[0].index(x) for x in ("TC inicio (bruto)", "Proyecto", "Clip", "Fecha fichero", "Fecha grabación"))
         return ([f[col] for f in filas[1:] if f[col]], [principal(f[colp]) for f in filas[1:]], [f[colc] for f in filas[1:]],
-                [str(f[colf] or "") for f in filas[1:]])
+                [str(f[colg] or f[colf] or "") for f in filas[1:]])
     import csv
     with open(ruta, encoding="utf-8-sig", newline="") as f:
         filas = list(csv.DictReader(f, delimiter=";"))
     return ([x["tc_in"] for x in filas if x.get("tc_in")], [principal(x.get("proyecto")) for x in filas], [x.get("clip") for x in filas],
-            [x.get("fecha") or "" for x in filas])
+            [x.get("fecha_grabacion") or x.get("fecha") or "" for x in filas])
 
 
 if __name__ == "__main__":

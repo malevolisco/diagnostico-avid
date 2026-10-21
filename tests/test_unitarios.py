@@ -387,6 +387,119 @@ class ProyectoMes(unittest.TestCase):
                                                    "Q_PIEZAS_2018-12": ["PIEZA SISMO"], "SIN_PROYECTO_2018-12": ["H"]})
 
 
+class OrdenYParalelo(unittest.TestCase):
+    """Orden estricto por fecha y hora (desempate por timecode), varios clips a la vez y selección de proyectos."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self._orig = (eb.ejecutar_ffmpeg, eb.duracion_ffprobe)
+
+    def tearDown(self):
+        eb.ejecutar_ffmpeg, eb.duracion_ffprobe = self._orig
+        eb.PARAR.clear()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_mismo_segundo_desempata_por_timecode(self):
+        mxf = {"a": {"modificado": "2019-09-16 10:52:26"}, "b": {"modificado": "2019-09-16 10:52:26"}, "c": {"modificado": "2019-09-16 10:52:25"}}
+        cs = [{"nombre": "0016Q3", "fichero_video": "a", "ficheros": ["a"], "timecode": "14:02:10:00"},
+              {"nombre": "00016R", "fichero_video": "b", "ficheros": ["b"], "timecode": "13:58:00;12"},
+              {"nombre": "ZZZ", "fichero_video": "c", "ficheros": ["c"], "timecode": "23:00:00:00"}]
+        self.assertEqual([c["nombre"] for c in sorted(cs, key=lambda c: eb.orden_cronologico(c, mxf))], ["ZZZ", "00016R", "0016Q3"])
+
+    def test_clips_a_la_vez(self):
+        self.assertGreaterEqual(eb.clips_a_la_vez({"clips_a_la_vez": "auto"}), 1)
+        self.assertLessEqual(eb.clips_a_la_vez({"clips_a_la_vez": "auto"}), 6)
+        self.assertEqual(eb.clips_a_la_vez({"clips_a_la_vez": 3}), 3)
+        self.assertEqual(eb.clips_a_la_vez({"clips_a_la_vez": "x"}), 1)
+
+    def preparar(self, n, falla=None):
+        mxf, clips = {}, []
+        for i in range(n):
+            v = "MXF/C%02dV01.mxf" % i
+            mxf[v] = {"ruta": v, "modificado": "2019-09-16 10:%02d:00" % i,
+                      "pistas": [{"tipo": "video", "codec": "dvvideo", "ancho": 720, "alto": 480, "fps": "30000/1001",
+                                  "pix_fmt": "yuv411p", "field_order": "bb"}]}
+            clips.append({"clave": "K%d" % i, "nombre": "CLIP %02d" % i, "ficheros": [v], "fichero_video": v, "num_audio": 0,
+                          "duracion": DUR, "bytes": 1000, "timecode": None, "proyectos": ["P%d" % (i % 2)]})
+        self.en_marcha, self.maximo = 0, 0
+        cerrojo = threading.Lock()
+
+        def ejecutar(cmd, timeout):
+            with cerrojo:
+                self.en_marcha += 1
+                self.maximo = max(self.maximo, self.en_marcha)
+            try:
+                time.sleep(0.05)
+                if falla:
+                    falla(cmd)
+                if eb.PARAR.is_set():
+                    raise eb.Detenido()
+                Path(cmd[-1]).write_bytes(b"mxf")
+                return True, ""
+            finally:
+                with cerrojo:
+                    self.en_marcha -= 1
+        eb.ejecutar_ffmpeg = ejecutar
+        eb.duracion_ffprobe = lambda ffprobe, ruta: DUR if Path(ruta).name.startswith("seg_") else DUR * n
+        return mxf, clips
+
+    def test_convierte_varios_a_la_vez_y_une_en_orden(self):
+        mxf, clips = self.preparar(6)
+        cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+        cfg["clips_a_la_vez"] = 3
+        destino = self.tmp / "brutos"
+        destino.mkdir()
+        unidos = []
+        orig_unir = eb.unir_segmentos
+        eb.unir_segmentos = lambda segs, salida, *a: (unidos.extend(Path(s).name for s in segs), salida.write_bytes(b"x"), (True, None, []))[2]
+        try:
+            res = eb.exportar_proyecto("P", list(reversed(clips)), mxf, self.tmp, destino, "ffmpeg", "ffprobe", lambda m: None, cfg)
+        finally:
+            eb.unir_segmentos = orig_unir
+        self.assertEqual((res["modo"], res["incluidos"], res["estado"]), ("convertir", 6, "OK"))
+        self.assertEqual(self.maximo, 3)  # tres ffmpeg a la vez
+        self.assertEqual(unidos, ["seg_%05d.mxf" % i for i in range(1, 7)])  # en orden cronológico, no en el de llegada
+
+    def test_detener_con_varios_a_la_vez(self):
+        def falla(cmd):
+            if "C02V01" in " ".join(map(str, cmd)):
+                eb.PARAR.set()
+        mxf, clips = self.preparar(8, falla)
+        cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+        cfg["clips_a_la_vez"] = 3
+        destino = self.tmp / "brutos"
+        destino.mkdir()
+        with self.assertRaises(eb.Detenido):
+            eb.exportar_proyecto("P", clips, mxf, self.tmp, destino, "ffmpeg", "ffprobe", lambda m: None, cfg)
+        self.assertFalse(list(destino.glob("_tmp_*")))
+        self.assertEqual(self.en_marcha, 0)
+
+    def test_solo_proyectos_elegidos_y_se_conservan_los_de_antes(self):
+        mxf, clips = self.preparar(4)
+        cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+        destino = self.tmp / "brutos"
+        eb.unir_segmentos, orig = (lambda segs, salida, *a: (salida.write_bytes(b"x"), (True, None, []))[1]), eb.unir_segmentos
+        try:
+            eb.duracion_ffprobe = lambda ffprobe, ruta: DUR if Path(ruta).name.startswith("seg_") else DUR * 2
+            res = eb.exportar_todo(clips, {}, list(mxf.values()), self.tmp, destino, "ffmpeg", "ffprobe", lambda m: None, cfg, proyectos=["P1"])
+            self.assertEqual([r["proyecto"] for r in res], ["P1_2019-09"])
+            res = eb.exportar_todo(clips, {}, list(mxf.values()), self.tmp, destino, "ffmpeg", "ffprobe", lambda m: None, cfg, proyectos=["P0"])
+            self.assertEqual([r["proyecto"] for r in res], ["P0_2019-09"])
+        finally:
+            eb.unir_segmentos = orig
+        guardado = json.loads((destino / "brutos_resultado.json").read_text(encoding="utf-8"))
+        self.assertEqual(sorted(r["proyecto"] for r in guardado), ["P0_2019-09", "P1_2019-09"])
+
+    @unittest.skipIf(da is None, "sin pyavb")
+    def test_lista_rapida_de_proyectos(self):
+        for f in ["MEXICO/MEXICO.avp", "MEXICO/MEXICO Bin.avb", "MEXICO/Trash/viejo.avb", "PANAMA 2019/PANAMA 2019.avp",
+                  "PANAMA 2019/b/c.avb", "suelto.avb", "Avid MediaFiles/MXF/1/no.avp"]:
+            (self.tmp / f).parent.mkdir(parents=True, exist_ok=True)
+            (self.tmp / f).write_bytes(b"")
+        lista = da.listar_proyectos(self.tmp)
+        self.assertEqual([(p["nombre"], p["bins"]) for p in lista], [("(bins sin proyecto)", 1), ("MEXICO", 2), ("PANAMA 2019", 1)])
+
+
 class XdcamHD50(unittest.TestCase):
     """formato_salida=xdcam_hd50 (por defecto): MPEG-2 4:2:2 50 Mb/s 1920x1080 25i 16:9."""
 

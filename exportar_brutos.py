@@ -46,6 +46,7 @@ import subprocess
 import threading
 import time
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 LOG = logging.getLogger("diagnostico")
@@ -98,6 +99,8 @@ CONFIG_DEFECTO = {
         "desentrelazar": "auto",
         "_nota": "Solo con formato_salida = auto y cuando un bruto mezcla formatos. auto = el formato mayoritario del proyecto (no cambia NTSC a PAL ni SD a HD). Códec MPEG-2 4:2:2 (tipo XDCAM/IMX). desentrelazar: auto = solo si hay que reescalar | si | no"
     },
+    "clips_a_la_vez": "auto",
+    "_clips_a_la_vez": "Cuántos clips se convierten a la vez (cada uno es un ffmpeg). auto = núcleos del procesador menos uno, hasta 6. 1 = de uno en uno",
     "verificar_decodificando": False,
     "_verificar_decodificando": "true = tras unir, decodifica el bruto entero para comprobarlo (lento, muy seguro)"
 }
@@ -282,6 +285,23 @@ def fecha_media(c, mxf_por_ruta):
     return None
 
 
+def orden_cronologico(c, mxf_por_ruta):
+    """Orden estricto: fecha y hora del fichero de media (al segundo); si coinciden, el timecode original del clip
+    (en un volcado de tarjeta caen varios clips en el mismo segundo) y después el nombre. Sin fecha, al final."""
+    f = fecha_media(c, mxf_por_ruta)
+    return (f is None, f or dt.datetime.min, str(c.get("timecode") or "").replace(";", ":"), c["nombre"])
+
+
+def clips_a_la_vez(cfg):
+    n = cfg.get("clips_a_la_vez", "auto")
+    if str(n) == "auto":
+        return max(1, min(6, (os.cpu_count() or 2) - 1))
+    try:
+        return max(1, int(n))
+    except (TypeError, ValueError):
+        return 1
+
+
 def _juntar_pequenas(tandas, minimo_seg, max_seg=24 * 3600):
     """Junta cada tanda con menos de minimo_seg de material con la tanda vecina más cercana en el
     tiempo, si está a menos de max_seg. tandas: listas de (fecha, clip) ordenadas por fecha."""
@@ -425,7 +445,7 @@ def grupos_por_proyecto_mes(clips, cruce, mxf_por_ruta, cfg):
     grupos = []
     for proyecto in sorted(por_proyecto):
         for familia, cs in por_proyecto[proyecto].items():
-            cs = sorted(cs, key=lambda c: (fecha(c) is None, fecha(c) or dt.datetime.min, c["nombre"], c.get("timecode") or ""))
+            cs = sorted(cs, key=lambda c: orden_cronologico(c, mxf_por_ruta))
             con_fecha = [c for c in cs if fecha(c)]
             sin_fecha = [c for c in cs if not fecha(c)]
             nombres = []
@@ -871,7 +891,7 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
     destino = Path(destino)
     timeouts = set(timeouts or ())
     if not ordenado:  # en agrupar=dias el reparto ya los da agrupados por proyecto
-        cs = sorted(cs, key=lambda c: (fecha_media(c, mxf_por_ruta) or dt.datetime.min, c["nombre"], c.get("timecode") or ""))
+        cs = sorted(cs, key=lambda c: orden_cronologico(c, mxf_por_ruta))
     plan = plan_proyecto(cs, mxf_por_ruta, cfg, modo_forzado)
     pref = cfg.get("prefijo_fichero", "BRUTO_")
     res = {"proyecto": proyecto, "modo": plan["modo"], "reintento": modo_forzado is not None, "pistas_audio": plan["pistas_audio"],
@@ -909,7 +929,16 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
     tmp.mkdir()
     salida = destino / ("%s%s.mxf" % (pref, base_fichero))
     uniendo = False
+    pool = None
     try:
+        # Convirtiendo, varios clips a la vez (cada segmento es independiente; se unen después en orden). Copiando,
+        # de uno en uno: es rápido y el reintento copia -> convertir decide clip a clip.
+        futuros = {}
+        n_pool = clips_a_la_vez(cfg) if plan["modo"] == "convertir" else 1
+        if n_pool > 1:
+            pool = ThreadPoolExecutor(n_pool)
+            futuros = {i: pool.submit(hacer_segmento, c, i, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg)
+                       for i, c in enumerate(cs, 1) if c.get("fichero_video") and c.get("clave") not in timeouts}
         segmentos, filas = [], []
         frames = 0  # se acumulan frames, no segundos, para no arrastrar redondeos en el shotlist
         inicio = tc_a_frames(timecode_inicio(cfg, plan["fps"]), plan["fps"])
@@ -925,7 +954,7 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
                 filas.append(fila)
                 continue
             progreso("  %s: clip %d/%d  %s" % (proyecto, i, len(cs), c["nombre"]))
-            seg, err, cmd = hacer_segmento(c, i, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg)
+            seg, err, cmd = futuros[i].result() if i in futuros else hacer_segmento(c, i, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg)
             if not seg:
                 if err == TIEMPO_AGOTADO:
                     timeouts.add(c.get("clave"))
@@ -951,6 +980,8 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
             res["incluidos"] += 1
             filas.append(fila)
 
+        if pool:
+            pool.shutdown(wait=True)
         acumulado = frames / plan["fps"]
         if segmentos:
             progreso("  %s: uniendo %d clips..." % (proyecto, len(segmentos)))
@@ -981,6 +1012,8 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
         else:
             res["estado"] = "sin clips de vídeo exportables"
     except Detenido:  # el proyecto a medias se descarta: al relanzar se rehace entero
+        if pool:  # PARAR está activado: los ffmpeg en marcha mueren en un segundo y los pendientes no arrancan
+            pool.shutdown(wait=True, cancel_futures=True)
         shutil.rmtree(tmp, ignore_errors=True)
         if uniendo:
             salida.unlink(missing_ok=True)
@@ -1022,10 +1055,17 @@ def ya_exportado(previo, n_clips, destino, firma=None):
     return mxf.exists() and mxf.stat().st_size == previo.get("bytes") and (Path(destino) / previo["shotlist"]).exists()
 
 
-def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir=None):
+def de_proyectos(c, elegidos):
+    """¿El clip es de alguno de los proyectos elegidos? Los que no están en ningún bin cuentan como SIN_PROYECTO."""
+    return bool(set(c.get("proyectos_render" if c.get("render") else "proyectos") or ["SIN_PROYECTO"]) & set(elegidos))
+
+
+def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir=None, proyectos=None):
     """Devuelve una lista con el resultado por proyecto (para el informe). brutos_resultado.json se
     reescribe tras cada proyecto, y al relanzar sobre la misma carpeta se saltan los ya terminados.
-    Si se pulsa Detener, devuelve los proyectos terminados hasta ese momento (PARAR queda activado)."""
+    Si se pulsa Detener, devuelve los proyectos terminados hasta ese momento (PARAR queda activado).
+    proyectos: nombres de los proyectos elegidos (None = todos; "SIN_PROYECTO" = clips sin bin). Los brutos de
+    proyectos no elegidos que ya estaban en brutos_resultado.json se conservan, para hacer el disco en varias veces."""
     destino = Path(destino)
     destino.mkdir(parents=True, exist_ok=True)
     mxf_por_ruta = {m["ruta"]: m for m in mxf}
@@ -1038,7 +1078,17 @@ def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso,
         except Exception as e:
             LOG.warning("brutos_resultado.json anterior ilegible (%s); se exporta todo", e)
 
-    grupos = grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg)
+    if proyectos is not None:
+        elegidos = set(proyectos)
+        if cfg.get("agrupar", "proyecto_mes") == "dias":  # los bloques por días mezclan proyectos: se filtran los clips
+            clips = [c for c in clips if de_proyectos(c, elegidos)]
+        grupos = [g for g in grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg)
+                  if cfg.get("agrupar", "proyecto_mes") == "dias" or g["proyecto"] in elegidos]
+        LOG.info("Proyectos elegidos (%d): %s", len(elegidos), "; ".join(sorted(elegidos)))
+    else:
+        grupos = grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg)
+    de_esta_vez = {g["nombre"] for g in grupos}
+    otros = [r for p, r in previos.items() if p not in de_esta_vez]  # de otras ejecuciones (otros proyectos): se conservan
 
     resultados = []
     LOG.info("Brutos previstos: %d (%s)", len(grupos), "; ".join("%s: %d clips" % (g["nombre"], len(g["clips"])) for g in grupos))
@@ -1064,9 +1114,9 @@ def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso,
             LOG.warning("Exportación detenida por el usuario en %s; quedan %d proyectos", faltan[0], len(faltan))
             # los de una ejecución anterior a los que no se ha llegado se conservan para poder reanudarlos
             with open(ruta_json, "w", encoding="utf-8") as f:
-                json.dump(resultados + [previos[p] for p in faltan if p in previos], f, ensure_ascii=False, indent=1)
+                json.dump(otros + resultados + [previos[p] for p in faltan if p in previos], f, ensure_ascii=False, indent=1)
             return resultados
         resultados.append(res)
         with open(ruta_json, "w", encoding="utf-8") as f:  # tras cada proyecto: un corte no pierde lo ya hecho
-            json.dump(resultados, f, ensure_ascii=False, indent=1)
+            json.dump(otros + resultados, f, ensure_ascii=False, indent=1)
     return resultados

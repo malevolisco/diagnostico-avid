@@ -279,6 +279,33 @@ def es_ruta_media(partes):
     return any(p.lower() in CARPETAS_MEDIA for p in partes)
 
 
+def listar_proyectos(origen):
+    """Lectura rápida para el selector de proyectos: recorre el disco sin entrar en las carpetas de media
+    (Avid MediaFiles) y devuelve [{nombre, carpeta, bins, modificado}] con los mismos nombres que usa el análisis
+    (detectar_proyectos), más "(bins sin proyecto)" si hay bins sueltos. Segundos, aunque el disco sea grande."""
+    origen = Path(origen)
+    ficheros = []
+    for raiz, dirs, nombres in os.walk(origen, onerror=lambda e: LOG.warning("No se puede leer: %s", e)):
+        dirs[:] = [d for d in dirs if d.lower() not in CARPETAS_SISTEMA and d.lower() not in CARPETAS_MEDIA]
+        for nombre in nombres:
+            ext = Path(nombre).suffix.lower()
+            if ext not in (".avp", ".avb"):
+                continue
+            ruta = Path(raiz) / nombre
+            try:
+                mtime = ruta.stat().st_mtime
+            except OSError:
+                continue
+            rel = ruta.relative_to(origen)
+            ficheros.append({"ruta": str(rel), "carpeta": str(rel.parent), "nombre": nombre, "ext": ext, "bytes": 0,
+                             "modificado": dt.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")})
+    salida = []
+    for p in detectar_proyectos(ficheros):
+        fechas = [b["modificado"] for b in p["bins"]]
+        salida.append({"nombre": p["nombre"], "carpeta": p["carpeta"], "bins": p["num_bins"], "modificado": max(fechas) if fechas else ""})
+    return sorted(salida, key=lambda x: x["nombre"].lower())
+
+
 def detectar_proyectos(ficheros):
     """Un proyecto es una carpeta que contiene un .avp. Sus bins son los .avb
     de esa carpeta y subcarpetas (los de Trash se marcan como papelera)."""
@@ -1109,7 +1136,10 @@ def guardar_json(destino, nombre, datos):
 
 
 def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_miniaturas=0, abrir=True, brutos=None,
-             zip_miniaturas=True):
+             zip_miniaturas=True, proyectos_brutos=None):
+    """proyectos_brutos: nombres de los proyectos de los que hacer brutos (None = todos; "SIN_PROYECTO" = clips sin bin).
+    El análisis se hace del disco entero (hace falta para saber qué media es de cada proyecto); las miniaturas,
+    solo de los clips de los proyectos elegidos."""
     origen = Path(origen)
     if not origen.exists():
         raise FileNotFoundError("No existe la carpeta de origen: %s" % origen)
@@ -1158,7 +1188,8 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
 
         if hacer_miniaturas and ffmpeg_ok:
             progreso("5/6 Generando miniaturas...")
-            miniaturas(clips, origen, ffmpeg, destino, progreso, max_miniaturas)
+            elegidos = clips if proyectos_brutos is None or not EXPORT_OK else [c for c in clips if exportar_brutos.de_proyectos(c, proyectos_brutos)]
+            miniaturas(elegidos, origen, ffmpeg, destino, progreso, max_miniaturas)
         else:
             progreso("5/6 Miniaturas omitidas.")
         guardar_json(destino, "clips.json", clips)
@@ -1170,10 +1201,12 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
             if not ffmpeg_ok:
                 progreso("Brutos: omitidos, no hay ffmpeg.")
             else:
-                progreso("Brutos: exportando un MXF por proyecto en %s" % brutos)
+                progreso("Brutos: exportando %s en %s" % ("un MXF por proyecto" if proyectos_brutos is None else
+                                                          "los %d proyectos elegidos" % len(proyectos_brutos), brutos))
                 cfg = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json")
                 resultados_brutos = exportar_brutos.exportar_todo(clips, cruce, mxf, origen, brutos, ffmpeg, ffprobe, progreso, cfg,
-                                                                  miniaturas_dir=destino / "miniaturas" if hacer_miniaturas else None)
+                                                                  miniaturas_dir=destino / "miniaturas" if hacer_miniaturas else None,
+                                                                  proyectos=proyectos_brutos)
                 detenido = PARAR.is_set()  # el análisis está completo: se escribe el informe con los brutos terminados
 
         progreso("6/6 Escribiendo resumen e informe...")
@@ -1227,6 +1260,58 @@ def puede_actualizarse():
     return ACTUALIZAR_OK and getattr(sys, "frozen", False) and os.name == "nt"
 
 
+def brutos_hechos(carpeta):
+    """Proyectos con algún bruto terminado (OK o AVISO) en esa carpeta de brutos, según brutos_resultado.json."""
+    try:
+        res = json.loads((Path(carpeta) / "brutos_resultado.json").read_text(encoding="utf-8"))
+        return {r.get("proyecto_avid") for r in res if str(r.get("estado", "")).startswith(("OK", "AVISO"))}
+    except Exception:
+        return set()
+
+
+def dialogo_proyectos(raiz, lista, marcados, hechos=()):
+    """Ventana con la lista de proyectos para marcar los que se quieren hacer. Devuelve los nombres elegidos
+    (en el orden de la lista) o None si se cancela. marcados: los elegidos antes (None = todos)."""
+    import tkinter as tk
+    from tkinter import ttk
+    filas = [(p["nombre"], "%s   (%d bins%s)%s" % (p["nombre"], p["bins"], ", último cambio " + p["modificado"][:10] if p["modificado"] else "",
+                                                     "   ✓ ya tiene brutos" if p["nombre"] in hechos else ""))
+             for p in lista]
+    filas.append(("SIN_PROYECTO", "SIN_PROYECTO   (clips que no están en ningún bin)%s" % ("   ✓ ya tiene brutos" if "SIN_PROYECTO" in hechos else "")))
+    v = tk.Toplevel(raiz)
+    v.title("Elegir proyectos para los brutos")
+    v.geometry("640x480")
+    v.transient(raiz)
+    ttk.Label(v, text="%d proyectos en el disco. Marca los que quieres hacer ahora (clic para marcar o desmarcar);\n"
+                      "los demás se pueden hacer otro día con la misma carpeta de brutos." % len(lista), padding=8).pack(anchor="w")
+    caja = ttk.Frame(v, padding=(8, 0))
+    caja.pack(fill="both", expand=True)
+    lb = tk.Listbox(caja, selectmode="multiple", activestyle="none", font=("Segoe UI", 10), exportselection=False)
+    sb = ttk.Scrollbar(caja, orient="vertical", command=lb.yview)
+    lb.configure(yscrollcommand=sb.set)
+    lb.pack(side="left", fill="both", expand=True)
+    sb.pack(side="right", fill="y")
+    for i, (nombre, texto) in enumerate(filas):
+        lb.insert("end", texto)
+        if marcados is None or nombre in marcados:
+            lb.selection_set(i)
+    resultado = {"elegidos": None}
+
+    def aceptar():
+        resultado["elegidos"] = [filas[i][0] for i in lb.curselection()]
+        v.destroy()
+    pie = ttk.Frame(v, padding=8)
+    pie.pack(fill="x")
+    ttk.Button(pie, text="Todos", command=lambda: lb.selection_set(0, "end")).pack(side="left")
+    ttk.Button(pie, text="Ninguno", command=lambda: lb.selection_clear(0, "end")).pack(side="left", padx=6)
+    ttk.Button(pie, text="Solo los que faltan", command=lambda: [lb.selection_clear(0, "end")] + [lb.selection_set(i) for i, (n, _) in enumerate(filas) if n not in hechos]).pack(side="left")
+    ttk.Button(pie, text="Cancelar", command=v.destroy).pack(side="right")
+    ttk.Button(pie, text="Aceptar", command=aceptar).pack(side="right", padx=6)
+    v.grab_set()
+    raiz.wait_window(v)
+    return resultado["elegidos"]
+
+
 def lanzar_gui(sin_actualizar=False):
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
@@ -1243,7 +1328,7 @@ def lanzar_gui(sin_actualizar=False):
     hacer_brutos = tk.BooleanVar(value=False)
     brutos = tk.StringVar()
     cola = queue.Queue()
-    estado = {"ocupado": False, "cerrar": False}
+    estado = {"ocupado": False, "cerrar": False, "proyectos": None}
 
     marco = ttk.Frame(raiz, padding=14)
     marco.pack(fill="both", expand=True)
@@ -1259,19 +1344,26 @@ def lanzar_gui(sin_actualizar=False):
                     variable=hacer_brutos).grid(row=6, column=0, columnspan=2, sticky="w", pady=(10, 0))
     ttk.Entry(marco, textvariable=brutos).grid(row=7, column=0, sticky="ew", pady=(2, 10))
     ttk.Button(marco, text="Elegir...", command=lambda: brutos.set(filedialog.askdirectory(title="Carpeta para los brutos") or brutos.get())).grid(row=7, column=1, padx=(8, 0))
+    fila_proy = ttk.Frame(marco)
+    fila_proy.grid(row=8, column=0, columnspan=2, sticky="w")
+    boton_proy = ttk.Button(fila_proy, text="Elegir proyectos...")
+    boton_proy.pack(side="left")
+    texto_proy = tk.StringVar(value="Brutos de todos los proyectos del disco.")
+    ttk.Label(fila_proy, textvariable=texto_proy).pack(side="left", padx=8)
+    origen.trace_add("write", lambda *a: (estado.update(proyectos=None), texto_proy.set("Brutos de todos los proyectos del disco.")))
 
     botones = ttk.Frame(marco)
-    botones.grid(row=8, column=0, columnspan=2, pady=12)
+    botones.grid(row=9, column=0, columnspan=2, pady=12)
     boton = ttk.Button(botones, text="Analizar disco")
     boton.pack(side="left", padx=6)
     boton_parar = ttk.Button(botones, text="Detener", state="disabled")
     boton_parar.pack(side="left", padx=6)
     barra = ttk.Progressbar(marco, mode="indeterminate")
-    barra.grid(row=9, column=0, columnspan=2, sticky="ew")
+    barra.grid(row=10, column=0, columnspan=2, sticky="ew")
     registro = tk.Text(marco, height=14, wrap="word", state="disabled", font=("Consolas", 10))
-    registro.grid(row=10, column=0, columnspan=2, sticky="nsew", pady=(8, 0))
+    registro.grid(row=11, column=0, columnspan=2, sticky="nsew", pady=(8, 0))
     marco.columnconfigure(0, weight=1)
-    marco.rowconfigure(10, weight=1)
+    marco.rowconfigure(11, weight=1)
 
     def escribe(txt):
         registro.configure(state="normal")
@@ -1319,7 +1411,8 @@ def lanzar_gui(sin_actualizar=False):
     def hilo():
         try:
             d, z, resumen = ejecutar(origen.get(), destino.get(), progreso=lambda m: cola.put(("log", m)), hacer_miniaturas=minis.get(),
-                               brutos=brutos.get() if hacer_brutos.get() else None, zip_miniaturas=zip_minis.get())
+                               brutos=brutos.get() if hacer_brutos.get() else None, zip_miniaturas=zip_minis.get(),
+                               proyectos_brutos=estado["proyectos"] if hacer_brutos.get() else None)
             cola.put(("detenido_brutos" if resumen.get("detenido") else "fin", (str(d / "informe.html"), str(z))))
         except Detenido:
             cola.put(("detenido", None))
@@ -1335,6 +1428,9 @@ def lanzar_gui(sin_actualizar=False):
             return
         if not destino.get():
             messagebox.showwarning("Falta el destino", "Elige dónde guardar el informe.")
+            return
+        if hacer_brutos.get() and estado["proyectos"] == []:
+            messagebox.showwarning("Ningún proyecto", "No has elegido ningún proyecto para los brutos. Pulsa \"Elegir proyectos...\".")
             return
         if hacer_brutos.get() and not brutos.get():
             messagebox.showwarning("Falta la carpeta de brutos", "Has marcado exportar brutos: elige la carpeta donde guardarlos (un disco con espacio).")
@@ -1352,6 +1448,32 @@ def lanzar_gui(sin_actualizar=False):
         barra.start(12)
         escribe("— %s —" % ahora_txt())
         threading.Thread(target=hilo, daemon=True).start()
+
+    def elegir_proyectos():
+        if estado["ocupado"]:
+            return
+        if not origen.get() or not Path(origen.get()).exists():
+            messagebox.showwarning("Falta el origen", "Elige primero el disco o la carpeta de Avid.")
+            return
+        raiz.configure(cursor="watch")
+        raiz.update()
+        try:
+            lista = listar_proyectos(origen.get())
+        finally:
+            raiz.configure(cursor="")
+        hechos = brutos_hechos(brutos.get()) if brutos.get() else set()
+        elegidos = dialogo_proyectos(raiz, lista, estado["proyectos"], hechos)
+        if elegidos is None:  # cancelado
+            return
+        todos = [p["nombre"] for p in lista] + ["SIN_PROYECTO"]
+        if set(elegidos) >= set(todos):
+            estado["proyectos"] = None
+            texto_proy.set("Brutos de todos los proyectos del disco.")
+        else:
+            estado["proyectos"] = elegidos
+            texto_proy.set("Brutos de %d de %d proyectos: %s" % (len(elegidos), len(todos), ", ".join(elegidos)[:70] + ("…" if len(", ".join(elegidos)) > 70 else "")))
+            hacer_brutos.set(True)
+        escribe("Proyectos para brutos: %s" % ("todos" if estado["proyectos"] is None else "; ".join(estado["proyectos"])))
 
     def detener():
         if not estado["ocupado"] or PARAR.is_set():
@@ -1376,6 +1498,7 @@ def lanzar_gui(sin_actualizar=False):
 
     boton.configure(command=iniciar)
     boton_parar.configure(command=detener)
+    boton_proy.configure(command=elegir_proyectos)
     raiz.protocol("WM_DELETE_WINDOW", al_cerrar)
     escribe("Programa de diagnóstico de discos Avid (solo lectura). pyavb: %s. ffmpeg: %s."
             % ("OK" if PYAVB_OK else "NO INSTALADO", "OK" if localizar_ffmpeg()[0] else "no encontrado"))
@@ -1402,6 +1525,8 @@ def main():
     ap.add_argument("--no-abrir", action="store_true", help="No abrir el informe en el navegador al terminar")
     ap.add_argument("--brutos", help="Carpeta donde exportar un MXF por proyecto (fase 2)")
     ap.add_argument("--zip-sin-miniaturas", action="store_true", help="El zip para enviar no lleva las miniaturas (el informe local sí)")
+    ap.add_argument("--proyectos", help='Brutos solo de estos proyectos, separados por ";" (SIN_PROYECTO = clips sin bin). Por defecto, todos')
+    ap.add_argument("--listar-proyectos", action="store_true", help="Lista los proyectos de --origen (lectura rápida) y sale")
     ap.add_argument("--sin-actualizar", action="store_true", help="Al abrir la ventana, no buscar versión nueva en GitHub")
     ap.add_argument("--actualizar-ahora", action="store_true", help="Solo .exe: buscar e instalar la última versión sin abrir la ventana ni reabrir")
     args = ap.parse_args()
@@ -1415,12 +1540,19 @@ def main():
         r = actualizar.actualizar(BUILD, carpeta_base(), progreso=print, relanzar=False)
         print(r)
         sys.exit(0 if r in ("al_dia", "cambio_lanzado") else 1)
+    if args.listar_proyectos:
+        if not args.origen:
+            ap.error("--listar-proyectos requiere --origen")
+        for p in listar_proyectos(args.origen):
+            print("%s\t%d bins\t%s" % (p["nombre"], p["bins"], p["modificado"]))
+        return
     if args.sin_gui or (args.origen and args.destino):
         if not (args.origen and args.destino):
             ap.error("--sin-gui requiere --origen y --destino")
         ejecutar(args.origen, args.destino, hacer_miniaturas=not args.sin_miniaturas,
                  max_miniaturas=args.max_miniaturas, abrir=not args.no_abrir, brutos=args.brutos,
-                 zip_miniaturas=not args.zip_sin_miniaturas)
+                 zip_miniaturas=not args.zip_sin_miniaturas,
+                 proyectos_brutos=[x.strip() for x in args.proyectos.split(";") if x.strip()] if args.proyectos else None)
         return
     try:
         lanzar_gui(sin_actualizar=args.sin_actualizar)

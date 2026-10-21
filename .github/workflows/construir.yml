@@ -69,6 +69,13 @@ jobs:
           if ($p.ExitCode -ne 0) { Get-Content salida2/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
           python tests/comprobar_resultado.py salida2 brutos --ffprobe bin/ffprobe.exe --reanudado
 
+      - name: Brutos solo de algunos proyectos (selector)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList '--origen disco_prueba --destino salida4 --brutos brutos_sel --sin-gui --no-abrir --sin-miniaturas --proyectos "NTSC;ABORTO"' -PassThru -Wait -NoNewWindow
+          if ($p.ExitCode -ne 0) { Get-Content salida4/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
+          python -c "import json; r = json.load(open('brutos_sel/brutos_resultado.json', encoding='utf-8')); n = sorted(b['proyecto'] for b in r); print(n); assert n == ['ABORTO_2021-09', 'NTSC_2021-09'], n"
+
       - name: Exportación con agrupar=proyecto y formato auto (por tarjetas, copia, timecode NTSC drop-frame)
         shell: pwsh
         run: |

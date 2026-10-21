@@ -106,6 +106,7 @@ class Reintento(unittest.TestCase):
 
     def exportar(self):
         cfg = eb.cargar_config(self.tmp / "config_brutos.json")
+        cfg["formato_salida"] = "auto"  # DNxHD iguales: copia
         destino = self.tmp / "brutos"
         destino.mkdir()
         return eb.exportar_proyecto("PRUEBA", self.clips, self.mxf_por_ruta, self.tmp, destino, "ffmpeg", "ffprobe",
@@ -201,7 +202,7 @@ class Reparto(unittest.TestCase):
     def setUp(self):
         self.mxf = {}
         self.cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
-        self.cfg["agrupar"] = "proyecto"
+        self.cfg.update(agrupar="proyecto", excluir_importados=False)
 
     def test_carpeta_tarjeta(self):
         self.assertEqual(eb.carpeta_tarjeta(r"D:\TARJETAS\CARD02\CONTENTS\VIDEO\0016Q3.MXF"), "D:/TARJETAS/CARD02")
@@ -265,11 +266,12 @@ class Reparto(unittest.TestCase):
 
 
 class PorDias(unittest.TestCase):
-    """agrupar=dias (por defecto): todo el disco por días seguidos hasta 3 h, sin separar proyectos."""
+    """agrupar=dias: todo el disco por días seguidos hasta 3 h, sin separar proyectos."""
 
     def setUp(self):
         self.mxf = {}
         self.cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+        self.cfg.update(agrupar="dias", horas_por_bruto=3, excluir_importados=False)
 
     def clip(self, nombre, fecha, horas, proyectos=("P",), **extra):
         ruta = "MXF/%s.mxf" % nombre
@@ -320,6 +322,104 @@ class PorDias(unittest.TestCase):
     def test_sin_fecha_al_final(self):
         cs = [self.clip("A", "2018-12-01 20:00:00", 0.5), self.clip("Z", None, 0.5)]
         self.assertEqual(self.nombres(cs), {"2018-12-01": ["A"], "SIN_FECHA": ["Z"]})
+
+
+class ProyectoMes(unittest.TestCase):
+    """agrupar=proyecto_mes (por defecto, correo del Archivo de oct. 2026): sin importados, nombre PROYECTO_AAAA-MM,
+    hasta 2 h y en orden cronológico estricto."""
+
+    def setUp(self):
+        self.mxf = {}
+        self.cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+
+    def clip(self, nombre, fecha, minutos, proyectos=("P",), **extra):
+        ruta = "MXF/%s.mxf" % nombre
+        if fecha:
+            self.mxf[ruta] = {"ruta": ruta, "modificado": fecha}
+        return dict({"clave": "K" + nombre, "nombre": nombre, "ficheros": [ruta], "fichero_video": ruta,
+                     "duracion": minutos * 60, "origen": "Cámara (tarjeta P2)", "proyectos": list(proyectos)}, **extra)
+
+    def nombres(self, cs, cruce=None):
+        return {g["nombre"]: [c["nombre"] for c in g["clips"]] for g in eb.grupos_de_exportacion(cs, cruce or {}, self.mxf, self.cfg)}
+
+    def test_por_defecto(self):
+        self.assertEqual((eb.CONFIG_DEFECTO["agrupar"], eb.CONFIG_DEFECTO["horas_por_bruto"], eb.CONFIG_DEFECTO["formato_salida"],
+                          eb.CONFIG_DEFECTO["excluir_importados"], eb.CONFIG_DEFECTO["prefijo_fichero"]),
+                         ("proyecto_mes", 2, "xdcam_hd50", True, ""))
+
+    def test_importados_y_agencias_fuera(self):
+        cs = [self.clip("0016Q3", "2019-09-16 10:52:26", 1),
+              self.clip("VID_0001", "2019-09-16 11:00:00", 1, origen="Fichero importado",
+                        fichero_origen=r"D:\Documents and Settings\rtve1\Mis documentos\Mis vídeos\VID_0001.mp4"),
+              self.clip("SIN RUTA", "2019-09-16 11:00:00", 1, origen="Fichero importado"),
+              self.clip("REUTERS", "2019-09-16 11:00:00", 1, origen="Agencia Reuters", fichero_origen=r"C:\Downloads\x_RTRMADV_y.MP4"),
+              # MXF importado de una tarjeta P2: el origen dice "Fichero importado" pero la ruta es de tarjeta
+              self.clip("0001AB", "2019-09-16 12:00:00", 1, origen="Fichero importado", fichero_origen=r"E:\CARD01\CONTENTS\VIDEO\0001AB.MXF"),
+              self.clip("X,Dissolve,1", "2019-09-16 12:00:00", 0.1, proyectos=(), render=True)]
+        self.assertEqual(self.nombres(cs), {"P_2019-09": ["0016Q3", "0001AB"]})
+        self.cfg["excluir_importados"] = False
+        self.assertEqual(len(self.nombres(cs)["P_2019-09"]), 5)
+
+    def test_orden_cronologico_estricto(self):
+        # Las fechas de la foto del correo, que salieron desordenadas
+        fechas = ["2019-10-14 20:55:14", "2019-10-09 17:40:36", "2019-09-16 20:26:20", "2019-09-18 17:43:26", "2019-09-04 21:12:18"]
+        cs = [self.clip("C%d" % i, f, 1) for i, f in enumerate(fechas)]
+        g = eb.grupos_de_exportacion(cs, {}, self.mxf, self.cfg)
+        self.assertEqual(len(g), 1)
+        self.assertEqual(g[0]["nombre"], "P_2019-09_a_2019-10")
+        orden = [self.mxf[c["fichero_video"]]["modificado"] for c in g[0]["clips"]]
+        self.assertEqual(orden, sorted(fechas))
+        self.assertTrue(g[0]["ordenado"])
+
+    def test_tope_de_dos_horas(self):
+        # A+B = 110 min; C (20 min) pasaría de 2 h: no se añade, abre el bruto siguiente
+        cs = [self.clip("A", "2019-09-01 10:00:00", 60), self.clip("B", "2019-09-02 10:00:00", 50),
+              self.clip("C", "2019-09-03 10:00:00", 20), self.clip("D", "2019-09-04 10:00:00", 30),
+              self.clip("E", "2019-10-01 10:00:00", 150)]  # más de 2 h por sí solo: va solo
+        self.assertEqual(self.nombres(cs), {"P_2019-09_1": ["A", "B"], "P_2019-09_2": ["C", "D"], "P_2019-10": ["E"]})
+
+    def test_proyectos_piezas_compartidos_y_sin_fecha(self):
+        cruce = {"por_proyecto": [{"proyecto": "Q", "secuencias_nombres": ["PIEZA SISMO"]}]}
+        cs = [self.clip("A", "2018-12-01 20:00:00", 1, proyectos=("Q", "P")),  # compartido: solo con el primero (P)
+              self.clip("B", "2018-12-01 21:00:00", 1, proyectos=("Q",)), self.clip("H", "2018-12-02 09:00:00", 1, proyectos=()),
+              self.clip("PIEZA SISMO", "2018-12-03 10:00:00", 1, proyectos=("Q",)), self.clip("Z", None, 1)]
+        self.assertEqual(self.nombres(cs, cruce), {"P_2018-12": ["A"], "P_SIN_FECHA": ["Z"], "Q_2018-12": ["B"],
+                                                   "Q_PIEZAS_2018-12": ["PIEZA SISMO"], "SIN_PROYECTO_2018-12": ["H"]})
+
+
+class XdcamHD50(unittest.TestCase):
+    """formato_salida=xdcam_hd50 (por defecto): MPEG-2 4:2:2 50 Mb/s 1920x1080 25i 16:9."""
+
+    def plan(self, firmas, field_order="bff"):
+        mxf = {}
+        cs = []
+        for i, (codec, ancho, alto, fps) in enumerate(firmas):
+            v = "MXF/C%d.mxf" % i
+            mxf[v] = {"ruta": v, "pistas": [{"tipo": "video", "codec": codec, "ancho": ancho, "alto": alto, "fps": fps,
+                                              "pix_fmt": "yuv422p" if codec == "mpeg2video" else "yuv411p", "field_order": field_order}]}
+            cs.append({"clave": i, "nombre": "C%d" % i, "ficheros": [v], "fichero_video": v, "num_audio": 2})
+        cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+        return eb.plan_proyecto(cs, mxf, cfg), mxf, cfg
+
+    def test_ntsc_dv_se_convierte_a_25i(self):
+        p, mxf, cfg = self.plan([("dvvideo", 720, 480, "30000/1001")] * 2)
+        self.assertEqual((p["modo"], p["fps"]), ("convertir", 25.0))  # 25 fps: timecode sin drop-frame
+        args = eb.args_video(p, mxf["MXF/C0.mxf"], cfg)
+        vf = args[args.index("-vf") + 1]
+        self.assertTrue(vf.startswith("bwdif=mode=send_field"))  # entrelazado: se separa en campos antes de cambiar de fps
+        for x in ["fps=50", "pad=1920:1080", "interlace=scan=tff", "out_color_matrix=bt709"]:
+            self.assertIn(x, vf)
+        for a, b in [("-c:v", "mpeg2video"), ("-pix_fmt", "yuv422p"), ("-b:v", "50M"), ("-top", "1"), ("-aspect", "16:9")]:
+            self.assertEqual(args[args.index(a) + 1], b)
+        self.assertIn("+ilme+ildct", args)
+
+    def test_progresivo_no_desentrelaza(self):
+        p, mxf, cfg = self.plan([("h264", 1920, 1080, "30000/1001")], field_order="progressive")
+        self.assertFalse(eb.args_video(p, mxf["MXF/C0.mxf"], cfg)[1].startswith("bwdif"))
+
+    def test_solo_copia_si_ya_es_xdcam(self):
+        self.assertEqual(self.plan([("mpeg2video", 1920, 1080, "25/1")] * 2)[0]["modo"], "copia")
+        self.assertEqual(self.plan([("dnxhd", 1920, 1080, "25/1")] * 2)[0]["modo"], "convertir")  # antes se copiaba
 
 
 @unittest.skipIf(da is None, "sin pyavb")
@@ -492,7 +592,7 @@ class Detener(unittest.TestCase):
             guardado = json.loads((destino / "brutos_resultado.json").read_text(encoding="utf-8"))
             self.assertEqual([r["proyecto"] for r in guardado], ["PROY A_T01"])
             self.assertFalse(list(destino.glob("_tmp_*")), "queda la carpeta temporal del proyecto a medias")
-            self.assertFalse((destino / "BRUTO_PROY B_T01.mxf").exists())
+            self.assertFalse((destino / "PROY B_T01.mxf").exists())
         finally:
             eb.ejecutar_ffmpeg, eb.duracion_ffprobe = orig
             shutil.rmtree(tmp, ignore_errors=True)

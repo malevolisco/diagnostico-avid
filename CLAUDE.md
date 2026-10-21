@@ -1,6 +1,6 @@
 # CLAUDE.md — DiagnosticoAvid
 
-Herramienta de Adrián Merinero Sánchez para el Archivo de RTVE: analiza un disco de edición Avid Media Composer completo y exporta un bruto MXF por proyecto. La usa una persona sin conocimientos técnicos (la jefa de Adrián) en Windows, sin Adrián delante. Adrián (documentalista, no programador) es el autor: decide qué hace la herramienta y cómo, y Claude escribe el código siguiendo sus indicaciones; cada cambio se sube a `main` y GitHub construye y prueba el `.exe`.
+Herramienta de Adrián Merinero Sánchez para el Archivo de RTVE: analiza un disco de edición Avid Media Composer completo y exporta un bruto MXF por proyecto. La usa una persona sin conocimientos técnicos (la jefa de Adrián, del Archivo de Informativos) en Windows, sin Adrián delante. Adrián (documentalista, no programador) es el autor: decide qué hace la herramienta y cómo, y Claude escribe el código siguiendo sus indicaciones; cada cambio se sube a `main` y GitHub construye y prueba el `.exe`.
 
 ## Reglas de trabajo con Adrián
 
@@ -17,13 +17,13 @@ Herramienta de Adrián Merinero Sánchez para el Archivo de RTVE: analiza un dis
 | Fichero | Qué es |
 |---|---|
 | `diagnostico_avid.py` | Programa principal: inventario, lectura de bins (pyavb), ffprobe de MXF, cruce bin↔MXF, miniaturas, informe HTML, ventana tkinter y CLI. Fase 1. |
-| `exportar_brutos.py` | Fase 2: brutos MXF OP1a. Por defecto todo el disco por días seguidos hasta 3 h (`BRUTO_2018-12-01_a_2018-12-04`), con agencias y piezas aparte; opcionalmente por proyecto y tarjeta (`agrupar`); copia directa si el formato es uniforme, conversión si no; shotlist xlsx, hoja de contactos. Lo importa el principal. |
+| `exportar_brutos.py` | Fase 2: brutos MXF OP1a. Por defecto un bruto por proyecto y mes (`PROYECTO_2019-09`), hasta 2 h, en orden cronológico, sin importados, piezas aparte, todo en XDCAM HD 50 1080i25 16:9; opcionalmente por días o por proyecto y tarjeta (`agrupar`) y en el formato mayoritario (`formato_salida = auto`); shotlist xlsx, hoja de contactos. Lo importa el principal. |
 | `actualizar.py` | Autoactualización del `.exe` al abrir la ventana: consulta la última release en GitHub, descarga, comprueba y un `.bat` cambia la carpeta conservando `config_*.json`. |
 | `config_brutos.json`, `config_origen.json` | Se crean junto al programa con valores por defecto la primera vez. No están en git. |
 | `tests/crear_disco_prueba.py` | Genera un disco Avid simulado con casos límite (bins con pyavb, MXF OP-Atom con ffmpeg, V y A compartiendo UMID como hace Avid). |
 | `tests/comprobar_resultado.py` | Comprueba un resultado contra valores fijos; sale con 1 si algo no cuadra. `--reanudado` para la segunda ejecución. |
 | `tests/test_unitarios.py` | Timecode drop-frame, reintento copia→convertir con ffmpeg simulado, reanudar, botón Detener, reparto por tarjeta/agencias/piezas, autoactualización con release falsa local. Solo stdlib. |
-| `.github/workflows/construir.yml` | En cada push a `main` (o a mano en otra rama): pruebas unitarias, ffmpeg 7.1.1 fijado, PyInstaller con `build.txt`, disco de prueba, ejecuta el `.exe` dos veces (la segunda debe reanudar) y una tercera con `agrupar = proyecto`, comprueba, prueba la autoactualización con una release falsa local y, solo en `main`, publica release `build-N` con `DiagnosticoAvid_portable.zip`. El repositorio es público (la autoactualización lo necesita sin contraseña). |
+| `.github/workflows/construir.yml` | En cada push a `main` (o a mano en otra rama): pruebas unitarias, ffmpeg 7.1.1 fijado, PyInstaller con `build.txt`, disco de prueba, ejecuta el `.exe` dos veces (la segunda debe reanudar) y una tercera con `agrupar = proyecto` y `formato_salida = auto`, comprueba, prueba la autoactualización con una release falsa local y, solo en `main`, publica release `build-N` con `DiagnosticoAvid_portable.zip`. El repositorio es público (la autoactualización lo necesita sin contraseña). |
 | `construir_exe.bat`, `ejecutar.bat` | Plan B local sin GitHub. |
 | `INSTRUCCIONES.txt` | Para quien ejecuta el programa. Se copia dentro del portable. |
 | `LEEME_tecnico.md` | Cómo funciona por dentro, qué está verificado con datos reales y qué no. |
@@ -52,7 +52,7 @@ Debe terminar con "Análisis OK", "Brutos OK" y las pruebas unitarias en OK. Par
 - Renders de efectos sin bin: Avid los llama `<clip>,<efecto>,<n>` ("PIEZA X,Dissolve,1"). En México: 806 sin bin, 1.100 de 1.200 con bin, ningún clip de material.
 - Rutas antiguas sin UTF-8 en los bins: pyavb las decodifica como Mac Roman; son Windows-1252 (`diagnostico_avid.reparar_ruta`).
 - Los bins se copian entre proyectos: un clip puede estar en varios. `config_brutos.json → clips_compartidos` decide (por defecto solo al primero, orden alfabético).
-- El disco real de la Corresponsalía de México es **NTSC 29,97**: 4 TB, 108 proyectos, 18.847 clips, la mayoría DV 720×480 (13.756), además H.264, DNxHD, MPEG-2; cámaras Panasonic P2 (clips `0016Q3.new.01`), MP4 importados y algo de Reuters. Por eso la conversión por defecto es "formato mayoritario del proyecto", no 1080p25. Cifras y hallazgos en `LEEME_tecnico.md`.
+- El disco real de la Corresponsalía de México es **NTSC 29,97**: 4 TB, 108 proyectos, 18.847 clips, la mayoría DV 720×480 (13.756), además H.264, DNxHD, MPEG-2; cámaras Panasonic P2 (clips `0016Q3.new.01`), MP4 importados y algo de Reuters. El Archivo pide los brutos en XDCAM HD 50 1080i25 16:9 (`formato_salida`): el DV 4:3 va con bandas negras y el NTSC se pasa a 25. Cifras y hallazgos en `LEEME_tecnico.md`.
 - Timecode: los proyectos NTSC usan drop-frame. ffmpeg solo acepta `-timecode hh:mm:ss;ff` (el `;` solo antes de los frames) y aborta si se pide DF con fps de salida 25. Implementado en `exportar_brutos.fmt_tc` / `tc_a_frames` (decisión por los fps de **salida**, `es_df`). Ojo: el minuto 0 de cada decena es completo, así que a 29,97 el primer frame del minuto 1 es el 1800, no el 1798.
 - Nombres de fichero: Windows no admite `:` (el disco simulado lo tenía en un render "Title: 1" y en Windows ese clip no se creaba). El nombre del clip va en `material_package_name`, no en el nombre de fichero.
 - ffmpeg: `mxf_opatom` sirve para generar fixtures; el muxer `mxf` (OP1a) admite `-c copy` de DNxHD, MPEG-2, DV, ProRes, H.264. Con el demuxer `concat` hay que usar `-map 0` o pierde pistas de audio, y la lista debe llevar rutas absolutas.
@@ -62,7 +62,8 @@ Debe terminar con "Análisis OK", "Brutos OK" y las pruebas unitarias en OK. Par
 
 - Las piezas montadas (secuencias) no se reconstruyen: requiere Avid. Se listan en el informe.
 - Audio siempre PCM 24 bits 48 kHz, una pista mono por fichero de Avid; mismo número de pistas en todo el bruto, rellenando con silencio.
-- Brutos (Adrián, oct. 2026, tras ver los 481 del reparto por tarjetas sobre el disco real): **todo el disco por días seguidos hasta 3 h, sin separar proyectos** (`agrupar = dias`, 67 brutos en México), y **dentro de cada bruto los clips agrupados por proyecto**; agencias y piezas renderizadas aparte, también por días; el shotlist dice el proyecto de cada clip. Los renders de efectos (fundidos, picture-in-picture, rótulos) no entran. El reparto por proyecto y tarjeta sigue disponible con `agrupar = proyecto`.
+- Brutos: lo pidió por correo la jefa de Adrián (Archivo de Informativos, 21/10/2026), tras ver los brutos por días: (1) fuera los ficheros importados, "son clips de agencias, internet"; (2) nombre = proyecto + año y mes de los ficheros; (3) máximo 2 h, "si se pasa, que no añada el último" (pasa al bruto siguiente, no se descarta); (4) orden cronológico por la fecha del fichero (en el modo por días salía desordenado); (5) **XDCAM HD 50 1080i25 16:9**. Es `agrupar = proyecto_mes` y `formato_salida = xdcam_hd50` (113 brutos en México). Los renders de efectos no entran; las piezas renderizadas van aparte. Siguen disponibles `agrupar = dias` (todo el disco por días, la decisión anterior de Adrián), `agrupar = proyecto` (tarjetas) y `formato_salida = auto`.
+- Un fichero con ruta de tarjeta (`CONTENTS`, `PRIVATE`…) es material de cámara aunque la columna Origen diga "Fichero importado" (el disco simulado tiene ese caso en el proyecto NTSC).
 - La autoactualización es automática, sin preguntar, al abrir la ventana.
 - El programa nunca escribe en el disco de origen y se niega si el destino está dentro de él.
 - Clips en `Quarantined Files` se incluyen en los brutos pero marcados "incluido (cuarentena)" en el shotlist.

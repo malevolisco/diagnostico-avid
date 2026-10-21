@@ -69,10 +69,10 @@ jobs:
           if ($p.ExitCode -ne 0) { Get-Content salida2/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
           python tests/comprobar_resultado.py salida2 brutos --ffprobe bin/ffprobe.exe --reanudado
 
-      - name: Exportación con agrupar=proyecto (por tarjetas, timecode NTSC)
+      - name: Exportación con agrupar=proyecto y formato auto (por tarjetas, copia, timecode NTSC drop-frame)
         shell: pwsh
         run: |
-          Set-Content dist/DiagnosticoAvid/config_brutos.json '{"agrupar": "proyecto"}' -Encoding utf8NoBOM
+          Set-Content dist/DiagnosticoAvid/config_brutos.json '{"agrupar": "proyecto", "formato_salida": "auto", "excluir_importados": false}' -Encoding utf8NoBOM
           $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--origen disco_prueba --destino salida3 --brutos brutos_proyecto --sin-gui --no-abrir" -PassThru -Wait -NoNewWindow
           if ($p.ExitCode -ne 0) { Get-Content salida3/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
           Remove-Item dist/DiagnosticoAvid/config_brutos.json

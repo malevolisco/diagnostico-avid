@@ -46,25 +46,30 @@ Pasos
    del disco con espacio donde dejarlos.
 5. Pulsa "Analizar disco". En el recuadro de abajo irá apareciendo lo que hace.
    Solo el análisis: de minutos a una hora según el número de ficheros.
-   Con brutos: puede ser de varias horas a una noche entera. No cierres la
+   Con brutos: puede ser de varias horas a varios días. No cierres la
    ventana. El programa impide que el ordenador se suspenda mientras trabaja,
    pero si es un portátil déjalo enchufado.
 6. Al terminar se abre el informe en el navegador y aparece un mensaje con dos
    rutas. En la carpeta de destino habrá:
    - una carpeta  Diagnostico_<disco>_<fecha>  con el informe (informe.html)
    - un fichero   Diagnostico_<disco>_<fecha>.zip
-   Y si se marcó la opción 3, en la carpeta de brutos, todo el material del
-   disco ordenado por fechas, en bloques de días seguidos de hasta 3 horas:
-   - BRUTO_2018-12-01_a_2018-12-04.mxf    lo volcado del 1 al 4 de diciembre
-   - BRUTO_2018-12-12_parte1.mxf          un día con más de 3 horas, en partes
-   - BRUTO_AGENCIAS_<fechas>.mxf          el material de agencias (Reuters...)
-   - BRUTO_PIEZAS_<fechas>.mxf            piezas ya renderizadas
-   Dentro de cada bruto los clips van agrupados por proyecto de Avid: todo un
-   proyecto seguido, luego el siguiente.
+   Y si se marcó la opción 3, en la carpeta de brutos, un bruto por proyecto
+   de Avid y mes, con los clips en orden de fecha y de 2 horas como mucho:
+   - PANAMA 2019_2019-07.mxf              proyecto PANAMA 2019, julio de 2019
+   - PANAMA 2019_2019-07_1.mxf, _2...     si pasa de 2 horas, en varios
+   - HONDURAS_2018-12_a_2019-01.mxf       material de dos meses seguidos
+   - PANAMA 2019_PIEZAS_2019-07.mxf       piezas ya renderizadas
+   - SIN_PROYECTO_<mes>.mxf               clips que no están en ningún bin
+   Todos salen en XDCAM HD 50 (1920x1080, 25i, 16:9). El material en SD 4:3
+   queda con bandas negras a los lados, sin deformar; el NTSC pasa a 25.
    Cada uno con su _shotlist.xlsx (lista de clips con su timecode dentro del
-   bruto y el proyecto de cada clip, en negrita donde empieza uno nuevo) y su
-   _contactos.html (miniaturas).
-   Los fundidos, rótulos y efectos renderizados por Avid no se incluyen.
+   bruto) y su _contactos.html (miniaturas).
+   No se incluyen los ficheros importados (agencias, internet, móvil: los que
+   el informe marca como "Fichero importado" o de agencia) ni los fundidos,
+   rótulos y efectos renderizados por Avid.
+   Convertir a HD es lento: cuenta con unas horas de trabajo del ordenador por
+   cada hora de material. Con un disco grande, varios días: usa "Detener" y
+   vuelve a lanzarlo con las mismas carpetas para seguir donde se quedó.
 7. Envía el fichero .zip del informe. Es pequeño (texto y miniaturas, sin vídeo).
    Si te piden enviarlo sin imágenes, desmarca antes de empezar la casilla
    "Incluir las miniaturas en el zip para enviar".

@@ -500,6 +500,75 @@ class OrdenYParalelo(unittest.TestCase):
         self.assertEqual([(p["nombre"], p["bins"]) for p in lista], [("(bins sin proyecto)", 1), ("MEXICO", 2), ("PANAMA 2019", 1)])
 
 
+class CortesYGrabacion(unittest.TestCase):
+    """Pantalla de cortes (cortes.json), hora de grabación y exportar con un análisis ya hecho."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.mxf = {}
+        self.cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def clip(self, nombre, fecha, minutos, **extra):
+        ruta = "MXF/%s.mxf" % nombre
+        self.mxf[ruta] = {"ruta": ruta, "modificado": fecha}
+        return dict({"clave": "K" + nombre, "nombre": nombre, "ficheros": [ruta], "fichero_video": ruta, "duracion": minutos * 60,
+                     "origen": "Cámara (tarjeta P2)", "proyectos": ["P"]}, **extra)
+
+    def test_manda_la_hora_de_grabacion(self):
+        # Volcados en el mismo segundo; según la cámara B se grabó antes que A. C no tiene hora de grabación.
+        cs = [self.clip("A", "2019-09-16 20:00:00", 1, fecha_grabacion="2019-09-16 18:00:00"),
+              self.clip("B", "2019-09-16 20:00:00", 1, fecha_grabacion="2019-09-16 09:00:00"),
+              self.clip("C", "2019-09-16 12:00:00", 1)]
+        orden = [c["nombre"] for c in sorted(cs, key=lambda c: eb.orden_cronologico(c, self.mxf))]
+        self.assertEqual(orden, ["B", "C", "A"])
+
+    def test_inicios_auto_y_cortes_a_mano(self):
+        cs = [self.clip(n, "2019-09-%02d 10:00:00" % d, m) for n, d, m in [("A", 1, 60), ("B", 2, 50), ("C", 3, 20), ("D", 4, 30), ("E", 5, 40)]]
+        self.assertEqual(eb.inicios_auto(cs, 7200), [2])  # A+B = 110 min; C+D+E = 90 min
+        self.assertEqual(eb.inicios_auto(cs, 7200, desde=3), [])
+        # A mano: el segundo bruto empieza en D (A+B+C = 130 min: pasa de 2 h, se respeta)
+        self.assertEqual([[c["nombre"] for c in t] for t in eb.partir_con_cortes(cs, 7200, ["KD"])], [["A", "B", "C"], ["D", "E"]])
+        # Un corte que ya no está en el análisis: automático
+        self.assertEqual([[c["nombre"] for c in t] for t in eb.partir_con_cortes(cs, 7200, ["KZ"])], [["A", "B"], ["C", "D", "E"]])
+
+    def test_cortes_en_el_reparto_y_en_disco(self):
+        cs = [self.clip(n, "2019-09-%02d 10:00:00" % d, m) for n, d, m in [("A", 1, 60), ("B", 2, 50), ("C", 3, 20)]]
+        eb.guardar_cortes(self.tmp, {"P": ["KB"], "Q": []})
+        cortes = eb.cargar_cortes(self.tmp)
+        self.assertEqual(cortes, {"P": ["KB"]})
+        g = {x["nombre"]: [c["nombre"] for c in x["clips"]] for x in eb.grupos_de_exportacion(cs, {}, self.mxf, self.cfg, cortes)}
+        self.assertEqual(g, {"P_2019-09_1": ["A"], "P_2019-09_2": ["B", "C"]})
+        self.assertEqual(eb.cargar_cortes(self.tmp / "no_existe"), {})
+
+    @unittest.skipIf(da is None, "sin pyavb")
+    def test_leer_fecha_de_grabacion(self):
+        b = da.buscar_fecha_grabacion
+        self.assertEqual(b({"columnas": {"Shoot Date": "15/09/2021", "Shoot Time": "09:15:00"}})[0], eb.dt.datetime(2021, 9, 15, 9, 15))
+        self.assertEqual(b({"comentarios": {"Record Date": "2021-09-15T07:00:01Z"}})[0], eb.dt.datetime(2021, 9, 15, 7, 0, 1))
+        self.assertEqual(b({"columnas": {"Fecha de grabación": "2019:09:16 14:02:10"}})[0], eb.dt.datetime(2019, 9, 16, 14, 2, 10))
+        self.assertEqual(b({"columnas": {"Shoot Date": "15/09/2021"}}), (None, "bin: Shoot Date (sin hora)"))  # sin hora no vale
+        self.assertEqual(b({"columnas": {"Comments": "entrevista 15/09"}}), (None, None))
+        clips = [{"columnas": {"Shoot Date": "09/16/2019", "Shoot Time": "14:02:10:12"}}, {}]
+        r = da.fijar_fechas_grabacion(clips)
+        self.assertEqual((r["clips"], clips[0]["fecha_grabacion"]), (1, "2019-09-16 14:02:10"))
+
+    @unittest.skipIf(da is None, "sin pyavb")
+    def test_buscar_el_ultimo_analisis_del_disco(self):
+        for nombre, origen, fecha in [("Diagnostico_X_20261020_0900", "F:/DISCO 1", "2026-10-20 09:00"),
+                                      ("Diagnostico_X_20261021_0900", "F:/DISCO 1", "2026-10-21 09:00"),
+                                      ("Diagnostico_Y_20261022_0900", "G:/OTRO", "2026-10-22 09:00")]:
+            d = self.tmp / nombre
+            d.mkdir()
+            for f in ("clips.json", "cruce.json", "mxf.json"):
+                (d / f).write_text("[]", encoding="utf-8")
+            (d / "resumen.json").write_text(json.dumps({"origen": origen, "fecha": fecha}), encoding="utf-8")
+        self.assertEqual(da.buscar_analisis(self.tmp, "F:/DISCO 1").name, "Diagnostico_X_20261021_0900")
+        self.assertIsNone(da.buscar_analisis(self.tmp, "H:/NADA"))
+
+
 class XdcamHD50(unittest.TestCase):
     """formato_salida=xdcam_hd50 (por defecto): MPEG-2 4:2:2 50 Mb/s 1920x1080 25i 16:9."""
 

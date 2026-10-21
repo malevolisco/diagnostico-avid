@@ -44,6 +44,13 @@ Pasos
    carpeta. Nunca el propio disco de Avid.
 4. Opción 3 (solo si quieres los brutos): marca la casilla y elige la carpeta
    del disco con espacio donde dejarlos.
+   Para no hacerlos todos de una vez, pulsa "Elegir proyectos...": sale la
+   lista de proyectos del disco (tarda unos segundos) y marcas los que
+   quieres ahora. Los que ya tienen brutos en esa carpeta salen con
+   "✓ ya tiene brutos"; el botón "Solo los que faltan" marca el resto.
+   Otro día, misma carpeta de brutos y eliges los siguientes: los ya hechos
+   no se tocan. El análisis lee siempre el disco entero (hace falta para
+   saber qué vídeo es de cada proyecto).
 5. Pulsa "Analizar disco". En el recuadro de abajo irá apareciendo lo que hace.
    Solo el análisis: de minutos a una hora según el número de ficheros.
    Con brutos: puede ser de varias horas a varios días. No cierres la
@@ -67,9 +74,13 @@ Pasos
    No se incluyen los ficheros importados (agencias, internet, móvil: los que
    el informe marca como "Fichero importado" o de agencia) ni los fundidos,
    rótulos y efectos renderizados por Avid.
-   Convertir a HD es lento: cuenta con unas horas de trabajo del ordenador por
-   cada hora de material. Con un disco grande, varios días: usa "Detener" y
-   vuelve a lanzarlo con las mismas carpetas para seguir donde se quedó.
+   Convertir a HD es lento: el programa convierte varios clips a la vez,
+   pero cuenta con del orden de media hora de ordenador por cada hora de
+   material (depende del PC). Con un disco grande, mejor por proyectos con
+   "Elegir proyectos...", o usa "Detener" y vuelve a lanzarlo con las mismas
+   carpetas para seguir donde se quedó.
+   Los clips van en orden estricto de fecha y hora del fichero (al segundo);
+   si dos coinciden en el mismo segundo, por su timecode.
 7. Envía el fichero .zip del informe. Es pequeño (texto y miniaturas, sin vídeo).
    Si te piden enviarlo sin imágenes, desmarca antes de empezar la casilla
    "Incluir las miniaturas en el zip para enviar".

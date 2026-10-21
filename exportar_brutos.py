@@ -53,17 +53,21 @@ LOG = logging.getLogger("diagnostico")
 CONFIG_DEFECTO = {
     "_comentario": "Parámetros de exportación de brutos. Borra este fichero para volver a los valores por defecto.",
     "modo": "auto",
-    "_modo": "auto = copia directa si todos los clips del proyecto son iguales, si no convierte | copia | convertir",
+    "_modo": "auto = copia directa si todos los clips ya están en el formato de salida, si no convierte | copia | convertir",
+    "formato_salida": "xdcam_hd50",
+    "_formato_salida": "xdcam_hd50 = siempre XDCAM HD422 50 Mb/s, 1920x1080, 25i, 16:9 (lo pide el Archivo; el SD 4:3 va con bandas negras a los lados y el NTSC pasa a 25) | auto = formato mayoritario de cada bruto (ver convertir)",
     "pistas_audio": "max",
     "_pistas_audio": "max = tantas como el clip que más tenga (tope 8) | un número fijo | 0 = sin audio",
     "timecode_inicio": "00:00:00:00",
     "_timecode_inicio": "TC del primer frame del bruto. Escríbelo siempre hh:mm:ss:ff; si el bruto sale a 29,97 o 59,94 se usa drop-frame (hh:mm:ss;ff)",
     "incluir_huerfanos": True,
     "_incluir_huerfanos": "Los clips que no están en ningún bin van a brutos SIN_PROYECTO (también partidos por tarjeta)",
-    "agrupar": "dias",
-    "_agrupar": "dias = todo el disco por días seguidos hasta horas_por_bruto, sin separar proyectos | proyecto = cada proyecto por tarjetas, con agencias, importados y piezas aparte",
-    "horas_por_bruto": 3,
-    "_horas_por_bruto": "agrupar=dias: se juntan días seguidos hasta esta duración; un día que la supere se parte en _parte1, _parte2...",
+    "agrupar": "proyecto_mes",
+    "_agrupar": "proyecto_mes = cada proyecto en orden cronológico, en brutos de hasta horas_por_bruto, con nombre PROYECTO_AAAA-MM | dias = todo el disco por días seguidos, sin separar proyectos | proyecto = cada proyecto por tarjetas",
+    "horas_por_bruto": 2,
+    "_horas_por_bruto": "Duración máxima de un bruto (proyecto_mes y dias). El clip que la pasaría no se añade: abre el bruto siguiente",
+    "excluir_importados": True,
+    "_excluir_importados": "true = fuera de los brutos los ficheros importados (agencias, internet, móvil...): origen 'Fichero importado' o de agencia, o un fichero que el bin guarda con ruta y no viene de una tarjeta",
     "dia_empieza_hora": 6,
     "_dia_empieza_hora": "agrupar=dias: lo volcado antes de esta hora cuenta como del día anterior (volcados de madrugada)",
     "partir_por_tarjeta": True,
@@ -84,7 +88,7 @@ CONFIG_DEFECTO = {
     "_renders_en_piezas": "Los renders de efectos (fundidos, picture-in-picture, rótulos) no son material: false = no entran en ningún bruto | true = van con las piezas",
     "clips_compartidos": "primero",
     "_clips_compartidos": "Un clip que está en varios proyectos: primero = solo en el bruto del primer proyecto (orden alfabético) | todos = en cada bruto",
-    "prefijo_fichero": "BRUTO_",
+    "prefijo_fichero": "",
     "convertir": {
         "codec": "mpeg2video",
         "ancho": "auto",
@@ -92,7 +96,7 @@ CONFIG_DEFECTO = {
         "fps": "auto",
         "bitrate": "50M",
         "desentrelazar": "auto",
-        "_nota": "Solo se usa cuando un proyecto mezcla formatos. auto = el formato mayoritario del proyecto (no cambia NTSC a PAL ni SD a HD). Códec MPEG-2 4:2:2 (tipo XDCAM/IMX). desentrelazar: auto = solo si hay que reescalar | si | no"
+        "_nota": "Solo con formato_salida = auto y cuando un bruto mezcla formatos. auto = el formato mayoritario del proyecto (no cambia NTSC a PAL ni SD a HD). Códec MPEG-2 4:2:2 (tipo XDCAM/IMX). desentrelazar: auto = solo si hay que reescalar | si | no"
     },
     "verificar_decodificando": False,
     "_verificar_decodificando": "true = tras unir, decodifica el bruto entero para comprobarlo (lento, muy seguro)"
@@ -106,6 +110,8 @@ class Detenido(Exception):
 
 
 CODECS_COPIABLES = {"dnxhd", "mpeg2video", "dvvideo", "prores", "h264"}
+# XDCAM HD422 50 Mb/s 1080i25: MPEG-2 4:2:2 long GOP, entrelazado (primero el campo superior), 16:9.
+XDCAM_HD50 = {"codec": "mpeg2video", "ancho": 1920, "alto": 1080, "fps": "25/1", "pix_fmt": "yuv422p"}
 MAX_PISTAS = 8
 
 
@@ -348,11 +354,97 @@ def es_pieza(c, secuencias, rx=None):
     return bool(secuencias) and bool({_normal(c.get("nombre")), _normal(fichero)} & secuencias - {""})
 
 
+def es_importado(c, cfg):
+    """Fichero importado (agencias, internet, móvil...). Manda la ruta que guarda el bin: si es de una tarjeta de
+    cámara (CONTENTS, PRIVATE, DCIM...) es material de cámara aunque el origen diga 'Fichero importado' (un MXF
+    de P2 importado de la tarjeta); si no, es importado. Sin ruta, lo dice el origen. Agencia, siempre fuera."""
+    origen = str(c.get("origen") or "")
+    if origen.startswith(tuple(cfg.get("origenes_agencia") or ())):
+        return True
+    if c.get("fichero_origen"):
+        return not carpeta_tarjeta(c["fichero_origen"])
+    return origen.startswith("Fichero importado")
+
+
+def excluido(c, cfg):
+    return bool(cfg.get("excluir_importados", True)) and es_importado(c, cfg)
+
+
 def grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg):
     """Reparte los clips en brutos. Devuelve [{nombre, base, proyecto, tipo, contenido, clips}]."""
-    if cfg.get("agrupar", "dias") == "dias":
+    agrupar = cfg.get("agrupar", "proyecto_mes")
+    if agrupar == "dias":
         return grupos_por_dias(clips, cruce, mxf_por_ruta, cfg)
-    return grupos_por_proyecto(clips, cruce, mxf_por_ruta, cfg)
+    if agrupar == "proyecto":
+        return grupos_por_proyecto(clips, cruce, mxf_por_ruta, cfg)
+    return grupos_por_proyecto_mes(clips, cruce, mxf_por_ruta, cfg)
+
+
+def trozos_hasta(cs, tope):
+    """Parte una lista ya ordenada en trozos seguidos de hasta tope segundos (solo cuenta el vídeo). El clip que
+    pasaría del tope no se añade: abre el trozo siguiente. Un clip que por sí solo lo pasa va solo."""
+    duracion = lambda lista: sum(c.get("duracion") or 0 for c in lista if c.get("fichero_video"))
+    trozos, trozo = [], []
+    for c in cs:
+        if trozo and duracion(trozo) + duracion([c]) > tope:
+            trozos.append(trozo)
+            trozo = []
+        trozo.append(c)
+    if trozo:
+        trozos.append(trozo)
+    return trozos
+
+
+def grupos_por_proyecto_mes(clips, cruce, mxf_por_ruta, cfg):
+    """agrupar=proyecto_mes (por defecto, pedido por el Archivo en oct. 2026): cada proyecto en orden cronológico
+    (fecha del fichero de media), en brutos de hasta horas_por_bruto, llamados PROYECTO_AAAA-MM (o
+    PROYECTO_AAAA-MM_a_AAAA-MM si abarca varios meses; _1, _2... si se repite el nombre). Piezas renderizadas
+    aparte (PROYECTO_PIEZAS_...). Fuera: renders de efectos e importados (excluir_importados)."""
+    tope = 3600 * float(cfg.get("horas_por_bruto", 2))
+    politica = cfg.get("clips_compartidos", "primero")
+    secuencias = {p["proyecto"]: {_normal(n) for n in p.get("secuencias_nombres", [])} for p in (cruce or {}).get("por_proyecto", [])}
+    rx = re.compile(cfg["piezas_regex"]) if cfg.get("piezas_regex") else None
+    por_proyecto = defaultdict(lambda: {"material": [], "piezas": []})
+    for c in clips:
+        render = bool(c.get("render"))
+        if render and not cfg.get("renders_en_piezas", False):
+            continue
+        proys = sorted(c.get("proyectos_render" if render else "proyectos") or [])
+        if politica == "primero" and proys:
+            proys = proys[:1]
+        if not proys:
+            if not cfg.get("incluir_huerfanos", True):
+                continue
+            proys = ["SIN_PROYECTO"]
+        for p in proys:
+            if render or (cfg.get("piezas_aparte", True) and es_pieza(c, secuencias.get(p, set()), rx)):
+                por_proyecto[p]["piezas"].append(c)
+            elif not excluido(c, cfg):
+                por_proyecto[p]["material"].append(c)
+    fecha = lambda c: fecha_media(c, mxf_por_ruta)
+    grupos = []
+    for proyecto in sorted(por_proyecto):
+        for familia, cs in por_proyecto[proyecto].items():
+            cs = sorted(cs, key=lambda c: (fecha(c) is None, fecha(c) or dt.datetime.min, c["nombre"], c.get("timecode") or ""))
+            con_fecha = [c for c in cs if fecha(c)]
+            sin_fecha = [c for c in cs if not fecha(c)]
+            nombres = []
+            for t in trozos_hasta(con_fecha, tope):
+                desde, hasta = fecha(t[0]).strftime("%Y-%m"), fecha(t[-1]).strftime("%Y-%m")
+                nombres.append((desde if desde == hasta else desde + "_a_" + hasta, t))
+            nombres += [("SIN_FECHA", t) for t in trozos_hasta(sin_fecha, tope)]
+            repetidos = Counter(n for n, _ in nombres)
+            vistos = Counter()
+            for meses, t in nombres:
+                vistos[meses] += 1
+                sufijo = meses + ("_%d" % vistos[meses] if repetidos[meses] > 1 else "")
+                nombre = proyecto + ("_PIEZAS_" if familia == "piezas" else "_") + sufijo
+                fechas = [fecha(c) for c in t if fecha(c)]
+                periodo = (fechas[0].strftime("%d/%m/%Y") + ("" if fechas[-1].date() == fechas[0].date() else " – " + fechas[-1].strftime("%d/%m/%Y"))) if fechas else "sin fecha"
+                contenido = "%s%s · %d clips" % ("piezas renderizadas · " if familia == "piezas" else "", periodo, len(t))
+                grupos.append({"nombre": nombre, "base": nombre_seguro(proyecto, 50) + nombre[len(proyecto):], "proyecto": proyecto,
+                               "tipo": familia, "contenido": contenido, "clips": t, "ordenado": True})
+    return grupos
 
 
 def _dia(fecha, cfg):
@@ -432,6 +524,8 @@ def grupos_por_dias(clips, cruce, mxf_por_ruta, cfg):
         secs = set().union(*(secuencias.get(p, set()) for p in c.get("proyectos") or [])) if c.get("proyectos") else set()
         if cfg.get("piezas_aparte", True) and es_pieza(c, secs, rx):
             familias["piezas"].append(c)
+        elif excluido(c, cfg):
+            continue
         elif cfg.get("agencias_aparte", True) and prefijos and str(c.get("origen") or "").startswith(prefijos):
             familias["agencias"].append(c)
         else:
@@ -485,7 +579,7 @@ def grupos_por_proyecto(clips, cruce, mxf_por_ruta, cfg):
         normales, renders = por_proyecto[proyecto]["normales"], por_proyecto[proyecto]["renders"]
         base = nombre_seguro(proyecto, 50)
         piezas = [c for c in normales if cfg.get("piezas_aparte", True) and es_pieza(c, secuencias.get(proyecto, set()), rx)]
-        resto = [c for c in normales if c not in piezas]
+        resto = [c for c in normales if c not in piezas and not excluido(c, cfg)]
         agencias = [c for c in resto if cfg.get("agencias_aparte", True) and prefijos and str(c.get("origen") or "").startswith(prefijos)]
         resto = [c for c in resto if c not in agencias]
         importados = [c for c in resto if cfg.get("importados_aparte", True) and c.get("fichero_origen")
@@ -541,10 +635,16 @@ def plan_proyecto(clips, mxf_por_ruta, cfg, modo_forzado=None):
 
     uniforme = len(firmas) == 1
     codec = next(iter(firmas))[0] if firmas else None
+    xdcam = cfg.get("formato_salida", "xdcam_hd50") == "xdcam_hd50"
+    if xdcam:  # solo se copia lo que ya está en XDCAM HD 50 1080i25
+        x = XDCAM_HD50
+        copiable = uniforme and next(iter(firmas)) == (x["codec"], x["ancho"], x["alto"], x["fps"], x["pix_fmt"])
+    else:
+        copiable = uniforme and codec in CODECS_COPIABLES
     modo = cfg.get("modo", "auto")
     if modo == "auto":
-        modo = "copia" if (uniforme and codec in CODECS_COPIABLES) else "convertir"
-    elif modo == "copia" and not (uniforme and codec in CODECS_COPIABLES):
+        modo = "copia" if copiable else "convertir"
+    elif modo == "copia" and not copiable:
         LOG.warning("Se pidió copia pero los clips no son uniformes o el códec no es copiable; se convierte.")
         modo = "convertir"
     if modo_forzado:
@@ -558,6 +658,11 @@ def plan_proyecto(clips, mxf_por_ruta, cfg, modo_forzado=None):
 
     mayoritaria = firmas.most_common(1)[0][0] if firmas else (None, 1920, 1080, "25/1", None)
     cv = cfg["convertir"]
+    if xdcam:
+        destino = {"ancho": XDCAM_HD50["ancho"], "alto": XDCAM_HD50["alto"], "fps_txt": "25", "xdcam": True}
+        return {"modo": modo, "pistas_audio": pistas, "fps": 25.0, "destino": destino,
+                "firmas": [{"codec": k[0], "resolucion": "%sx%s" % (k[1], k[2]), "fps": k[3], "clips": v} for k, v in firmas.items()],
+                "clips_video": len(con_video), "clips_solo_audio": len(clips) - len(con_video)}
     destino = {
         "ancho": int(cv["ancho"]) if str(cv.get("ancho", "auto")) != "auto" else int(mayoritaria[1] or 1920),
         "alto": int(cv["alto"]) if str(cv.get("alto", "auto")) != "auto" else int(mayoritaria[2] or 1080),
@@ -572,12 +677,31 @@ def plan_proyecto(clips, mxf_por_ruta, cfg, modo_forzado=None):
             "clips_video": len(con_video), "clips_solo_audio": len(clips) - len(con_video)}
 
 
+def filtros_xdcam(entrelazado):
+    """A 1920x1080 25i 16:9 desde cualquier origen: desentrelaza a campos (59,94 o 50 imágenes/s), pasa a 50,
+    encaja sin deformar según la relación de aspecto de pantalla (el SD 4:3 queda 1440x1080 con bandas negras),
+    convierte el color de SD (BT.601) a HD (BT.709) y vuelve a entrelazar, primero el campo superior."""
+    f = ["bwdif=mode=send_field:deint=all"] if entrelazado else []
+    f += ["fps=50",
+          "scale=w='trunc(min(1920,1080*dar)/2)*2':h='trunc(min(1080,1920/dar)/2)*2':flags=lanczos:out_color_matrix=bt709:out_range=tv",
+          "pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black", "setsar=1", "interlace=scan=tff:lowpass=linear", "setfield=tff"]
+    return f
+
+
 def args_video(plan, mxf_video, cfg):
     if plan["modo"] == "copia":
         return ["-c:v", "copy"]
+    pv = next((p for p in mxf_video.get("pistas", []) if p["tipo"] == "video"), {})
+    if plan["destino"].get("xdcam"):
+        entrelazado = (pv.get("field_order") or "progressive") not in ("progressive", "unknown", None)
+        return ["-vf", ",".join(filtros_xdcam(entrelazado)),
+                "-c:v", "mpeg2video", "-pix_fmt", "yuv422p", "-profile:v", "0", "-level:v", "2",
+                "-b:v", "50M", "-minrate", "50M", "-maxrate", "50M", "-bufsize", "17825792", "-rc_init_occupancy", "17825792",
+                "-g", "12", "-bf", "2", "-flags", "+ilme+ildct", "-top", "1", "-dc", "10", "-intra_vlc", "1", "-non_linear_quant", "1",
+                "-qmin", "1", "-qmax", "12", "-sc_threshold", "1000000000", "-aspect", "16:9",
+                "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"]
     cv = cfg["convertir"]
     d = plan["destino"]
-    pv = next((p for p in mxf_video.get("pistas", []) if p["tipo"] == "video"), {})
     filtros = []
     des = cv.get("desentrelazar", "auto")
     entrelazado = (pv.get("field_order") or "progressive") not in ("progressive", "unknown", None)

@@ -3,7 +3,7 @@
 """
 Comprueba el resultado de una ejecución del programa sobre el disco de prueba.
 
-Uso:  python tests/comprobar_resultado.py CARPETA_INFORME CARPETA_BRUTOS [--ffprobe RUTA] [--reanudado] [--agrupar dias|proyecto]
+Uso:  python tests/comprobar_resultado.py CARPETA_INFORME CARPETA_BRUTOS [--ffprobe RUTA] [--reanudado] [--agrupar proyecto_mes|proyecto]
 Sale con código 1 si algo no cuadra, para que el flujo de GitHub falle.
 --reanudado: tras una segunda ejecución sobre la misma carpeta de brutos, todos
 los proyectos deben venir marcados como reanudados (no se han vuelto a exportar).
@@ -29,7 +29,8 @@ def main():
     ap.add_argument("brutos")
     ap.add_argument("--ffprobe", default=shutil.which("ffprobe"))
     ap.add_argument("--reanudado", action="store_true")
-    ap.add_argument("--agrupar", choices=["dias", "proyecto"], default="dias", help="el agrupar de config_brutos.json con el que se exportó")
+    ap.add_argument("--agrupar", choices=["proyecto_mes", "proyecto"], default="proyecto_mes",
+                    help="proyecto_mes = config por defecto (XDCAM HD 50, sin importados) | proyecto = agrupar proyecto, formato auto, con importados")
     a = ap.parse_args()
 
     carpetas = glob.glob(str(Path(a.informe) / "Diagnostico_*"))
@@ -68,12 +69,14 @@ def main():
         fallo("no hay brutos_resultado.json")
     res = json.loads(res_path.read_text(encoding="utf-8"))
     por = {b["proyecto"]: b for b in res}
-    if a.agrupar == "dias":
-        # Todo el disco por días seguidos hasta 3 h: un bloque del 10 al 15/09 con todo el material (13 clips con vídeo;
-        # el "2017 07 13" compartido va una sola vez; mezcla formatos, así que se convierte), y aparte la agencia y la
-        # pieza renderizada. Los dos renders de efectos (título con bin, fundido sin bin) no entran.
-        esperado_brutos = {"2021-09-10_a_2021-09-15": ("convertir", 13, 26.0), "AGENCIAS_2021-09-15": ("copia", 1, 2.0),
-                           "PIEZAS_2021-09-15": ("copia", 1, 2.0)}
+    if a.agrupar == "proyecto_mes":
+        # Lo que pidió el Archivo (oct. 2026): por proyecto, PROYECTO_AAAA-MM, todo convertido a XDCAM HD 50 1080i25 16:9.
+        # Fuera la agencia (SISMO, por la ruta del bin) y el vídeo de móvil importado. La pieza, aparte. NTSC entra:
+        # sus MXF se importaron de una tarjeta (CONTENTS) aunque el origen diga "Fichero importado".
+        # SIN_PROYECTO: huérfano 2 s + cuarentena 1 s + los 2 "APROX B" ambiguos de 2 s. Renders de efectos, fuera.
+        esperado_brutos = {"15 SEPT CENTROAMERICA_2021-09": ("convertir", 3, 7.0), "15 SEPT CENTROAMERICA_PIEZAS_2021-09": ("convertir", 1, 2.0),
+                           "ABORTO_2021-09": ("convertir", 2, 4.0), "APROX_2021-09": ("convertir", 1, 2.0),
+                           "NTSC_2021-09": ("convertir", 2, 4.0), "SIN_PROYECTO_2021-09": ("convertir", 4, 7.0)}
     else:
         # Un bruto por tarjeta (_Tnn_fecha), y aparte agencias, importados y piezas. 15 SEPT: el clip "2017 07 13" es del día 10
         # (otra tarjeta); el de Reuters lo dice la ruta del bin; la pieza se llama como la secuencia. El vídeo de móvil
@@ -103,18 +106,25 @@ def main():
                 fallo("bruto %s: pistas %s, esperadas 1 vídeo + %d audio" % (proy, out, b["pistas_audio"]))
             tc = subprocess.run([a.ffprobe, "-v", "error", "-show_entries", "format_tags=timecode", "-of", "default=nw=1:nk=1", str(mxf)],
                                 capture_output=True, text=True).stdout.strip()
-            sep = ";" if proy.startswith("NTSC") else ":"  # drop-frame solo a 29,97
+            sep = ";" if proy.startswith("NTSC") and a.agrupar == "proyecto" else ":"  # drop-frame solo si sale a 29,97
             if len(tc) != 11 or tc[8] != sep:
                 fallo("bruto %s: timecode %r, esperado con '%s' antes de los frames" % (proy, tc, sep))
-        tcs, orden = tc_shotlist(Path(a.brutos) / b["shotlist"])
-        proyectos = set(orden)
-        if a.agrupar == "dias" and not proy.startswith(("AGENCIAS", "PIEZAS")):
-            if not {"NTSC", "ABORTO", "SIN_PROYECTO"} <= proyectos:
-                fallo("shotlist %s: debería decir el proyecto de cada clip; dice %s" % (proy, sorted(proyectos)))
-            seguidos = [p for i, p in enumerate(orden) if i == 0 or p != orden[i - 1]]
-            if len(seguidos) != len(proyectos) or seguidos[-1] != "SIN_PROYECTO":
-                fallo("shotlist %s: los clips deberían ir agrupados por proyecto (sin proyecto al final): %s" % (proy, seguidos))
-        sep = ";" if proy.startswith("NTSC") else ":"
+            if a.agrupar == "proyecto_mes":
+                v = subprocess.run([a.ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                                    "stream=codec_name,profile,width,height,pix_fmt,field_order,r_frame_rate,display_aspect_ratio",
+                                    "-of", "default=nw=1", str(mxf)], capture_output=True, text=True).stdout.split()
+                v = dict(x.split("=", 1) for x in v if "=" in x)
+                xdcam = {"codec_name": "mpeg2video", "profile": "4:2:2", "width": "1920", "height": "1080", "pix_fmt": "yuv422p",
+                         "field_order": "tt", "r_frame_rate": "25/1", "display_aspect_ratio": "16:9"}
+                if any(v.get(k) != x for k, x in xdcam.items()):
+                    fallo("bruto %s: vídeo %s, esperado XDCAM HD 50 1080i25 16:9 %s" % (proy, v, xdcam))
+        tcs, _, clips, fechas = tc_shotlist(Path(a.brutos) / b["shotlist"])
+        if a.agrupar == "proyecto_mes":
+            if fechas != sorted(fechas):
+                fallo("shotlist %s: no está en orden cronológico: %s" % (proy, fechas))
+            if {"SISMO 15 SEPT", "MOVIL 15 SEPT"} & set(clips):
+                fallo("shotlist %s: lleva importados (%s)" % (proy, clips))
+        sep = ";" if proy.startswith("NTSC") and a.agrupar == "proyecto" else ":"
         if not tcs or any(len(t) != 11 or t[8] != sep for t in tcs):
             fallo("shotlist %s: timecodes %r, esperado '%s' antes de los frames" % (proy, tcs, sep))
     if a.reanudado:
@@ -125,18 +135,20 @@ def main():
 
 
 def tc_shotlist(ruta):
-    """(TC de inicio de los clips incluidos, proyecto principal de cada fila en orden), del xlsx o, si no había
-    openpyxl, del csv de respaldo. "15 SEPT (también en HONDURAS)" cuenta como 15 SEPT."""
+    """(TC de inicio de los clips incluidos, proyecto principal, clip y fecha de cada fila en orden), del xlsx o, si
+    no había openpyxl, del csv de respaldo. "15 SEPT (también en HONDURAS)" cuenta como 15 SEPT."""
     principal = lambda t: str(t or "").split(" (también en ")[0].strip()
     if ruta.suffix == ".xlsx":
         from openpyxl import load_workbook
         filas = list(load_workbook(ruta, read_only=True).active.iter_rows(values_only=True))
-        col, colp = filas[0].index("TC inicio (bruto)"), filas[0].index("Proyecto")
-        return [f[col] for f in filas[1:] if f[col]], [principal(f[colp]) for f in filas[1:]]
+        col, colp, colc, colf = (filas[0].index(x) for x in ("TC inicio (bruto)", "Proyecto", "Clip", "Fecha fichero"))
+        return ([f[col] for f in filas[1:] if f[col]], [principal(f[colp]) for f in filas[1:]], [f[colc] for f in filas[1:]],
+                [str(f[colf] or "") for f in filas[1:]])
     import csv
     with open(ruta, encoding="utf-8-sig", newline="") as f:
         filas = list(csv.DictReader(f, delimiter=";"))
-    return [x["tc_in"] for x in filas if x.get("tc_in")], [principal(x.get("proyecto")) for x in filas]
+    return ([x["tc_in"] for x in filas if x.get("tc_in")], [principal(x.get("proyecto")) for x in filas], [x.get("clip") for x in filas],
+            [x.get("fecha") or "" for x in filas])
 
 
 if __name__ == "__main__":

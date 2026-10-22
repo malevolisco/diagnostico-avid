@@ -18,6 +18,8 @@ import sys
 from pathlib import Path
 
 
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # la consola de Windows (cp1252) no tiene chino
+
 def fallo(msg):
     print("FALLO:", msg)
     sys.exit(1)
@@ -43,8 +45,9 @@ def main():
             fallo("falta %s" % f)
     r = json.loads((carpeta / "resumen.json").read_text(encoding="utf-8"))
     # offline: CLIP OFFLINE + los 2 "APROX B" ambiguos. clips_fisicos: 9 + 2 NTSC + 3 APROX + agencia + pieza
-    # + importado + render sin bin. huerfanos: HUERFANO, SOLOAUDIO, CUARENTENA y los 2 "APROX B" (el render no cuenta).
-    esperado = {"proyectos": 4, "bins": 6, "bins_ilegibles": 1, "offline": 3, "renders_en_bins": 1, "clips_compartidos": 1, "clips_fisicos": 18,
+    # + importado + render sin bin + 4 de China. huerfanos: HUERFANO, SOLOAUDIO, CUARENTENA y los 2 "APROX B" (el render no cuenta).
+    # China: 2 bins, uno en una ruta de más de 260 caracteres (en Windows hay que leerlo con \\?\).
+    esperado = {"proyectos": 5, "bins": 8, "bins_ilegibles": 1, "offline": 3, "renders_en_bins": 1, "clips_compartidos": 1, "clips_fisicos": 22,
                 "huerfanos": 5}
     for k, v in esperado.items():
         if r.get(k) != v:
@@ -63,6 +66,14 @@ def main():
         fallo("fecha de grabación: %r clips, esperados 2 (NTSC, columnas Shoot Date/Time del bin)" % grab.get("clips"))
     if r.get("mxf_error"):
         fallo("%d MXF con error de lectura" % r["mxf_error"])
+    no_legibles = [x["ruta"].replace("\\", "/") for x in r.get("no_legibles", [])]
+    if no_legibles != ["ABORTO/Bin corrupto.avb"]:
+        fallo("no legibles %r, esperado solo el bin corrupto" % no_legibles)
+    clips_china = {c["nombre"]: c["origen"] for c in json.loads((carpeta / "clips.json").read_text(encoding="utf-8"))
+                   if c["nombre"] in ("entrevista 北京", "DJI_0012", "C0380", "新闻 CCTV 0916")}
+    if clips_china != {"entrevista 北京": "Cámara (fichero importado)", "DJI_0012": "Cámara (fichero importado)",
+                       "C0380": "Cámara (fichero importado)", "新闻 CCTV 0916": "Agencia (bin de agencias)"}:
+        fallo("China: nombres u origen %r (nombres en chino leídos del bin, cámara propia y bin de agencias)" % clips_china)
     if not glob.glob(str(carpeta / "miniaturas" / "*.jpg")):
         fallo("no hay miniaturas")
     print("Análisis OK: %d proyectos, %d clips físicos, cruce %s" % (r["proyectos"], r["clips_fisicos"], r["modo_coincidencia"]))
@@ -78,7 +89,10 @@ def main():
         # sus MXF se importaron de una tarjeta (CONTENTS) aunque el origen diga "Fichero importado".
         # SIN_PROYECTO: huérfano 2 s + cuarentena 1 s + los 2 "APROX B" ambiguos de 2 s. Renders de efectos, fuera.
         # El bruto de piezas (15 SEPT CENTROAMERICA PIEZAS SEPTIEMBRE DE 2021) no se exporta: exportar_piezas = false
+        # China: DNxHD 1080i50 recodificado sin separar campos; el dron y la A7 importados de una carpeta del PC son material;
+        # el vídeo del bin de agencias, fuera.
         esperado_brutos = {"15 SEPT CENTROAMERICA SEPTIEMBRE DE 2021": ("convertir", 3, 7.0),
+                           "20260916_CHINA 北京 SEPTIEMBRE DE 2021": ("convertir", 3, 6.0),
                            "ABORTO SEPTIEMBRE DE 2021": ("convertir", 2, 4.0), "APROX SEPTIEMBRE DE 2021": ("convertir", 1, 2.0),
                            "NTSC SEPTIEMBRE DE 2021": ("convertir", 2, 4.0), "SIN PROYECTO SEPTIEMBRE DE 2021": ("convertir", 4, 7.0)}
     else:
@@ -89,6 +103,10 @@ def main():
         esperado_brutos = {"15 SEPT CENTROAMERICA_T01_2021-09-10": ("copia", 1, 2.0), "15 SEPT CENTROAMERICA_T02_2021-09-15": ("copia", 2, 5.0),
                            "15 SEPT CENTROAMERICA_AGENCIAS": ("copia", 1, 2.0),
                            "15 SEPT CENTROAMERICA_IMPORTADOS": ("copia", 1, 2.0),
+                           # China: el dron y la A7 (importados de una carpeta del PC, material propio) son una tanda de volcado;
+                           # la entrevista, de la tarjeta J: (XDROOT). DNxHD 1080i50 igual en todo: copia sin recomprimir.
+                           "20260916_China 北京_T01_2021-09-15": ("copia", 2, 4.0), "20260916_China 北京_T02_2021-09-15": ("copia", 1, 2.0),
+                           "20260916_China 北京_AGENCIAS": ("copia", 1, 2.0),
                            "ABORTO_T01_2021-09-15": ("convertir", 2, 4.0), "APROX_T01_2021-09-15": ("copia", 1, 2.0),
                            "NTSC_T01_2021-09-15": ("copia", 1, 2.0), "NTSC_T02_2021-09-15": ("copia", 1, 2.0),
                            "SIN_PROYECTO_T01_2021-09-15": ("copia", 4, 7.0)}
@@ -130,8 +148,10 @@ def main():
             # NTSC: los dos se volcaron en el mismo segundo; las columnas "Shoot Date/Time" del bin dicen que NTSC 2 se grabó antes
             if proy.startswith("NTSC") and clips != ["NTSC 2", "NTSC 1"]:
                 fallo("shotlist %s: orden %s, esperado por hora de grabación ['NTSC 2', 'NTSC 1']" % (proy, clips))
-            if {"SISMO 15 SEPT", "MOVIL 15 SEPT"} & set(clips):
-                fallo("shotlist %s: lleva importados (%s)" % (proy, clips))
+            if {"SISMO 15 SEPT", "MOVIL 15 SEPT", "新闻 CCTV 0916"} & set(clips):
+                fallo("shotlist %s: lleva importados o agencias (%s)" % (proy, clips))
+            if "CHINA" in proy and sorted(clips) != ["C0380", "DJI_0012", "entrevista 北京"]:
+                fallo("shotlist %s: clips %s, esperados la entrevista, el dron y la A7" % (proy, clips))
         sep = ";" if proy.startswith("NTSC") and a.agrupar == "proyecto" else ":"
         if not tcs or any(len(t) != 11 or t[8] != sep for t in tcs):
             fallo("shotlist %s: timecodes %r, esperado '%s' antes de los frames" % (proy, tcs, sep))

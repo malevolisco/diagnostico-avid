@@ -677,6 +677,51 @@ class OrdenYParalelo(unittest.TestCase):
         self.assertTrue(all(e["bruto"] == "P0 SEPTIEMBRE DE 2019" for e in eventos))
         self.assertIn("resultado", eventos[-1])
 
+    def disco_que_se_va(self, despues_de):
+        """ffmpeg simulado en el que el disco de origen desaparece tras despues_de segmentos: los siguientes fallan como
+        lo haría ffmpeg con el fichero ya inaccesible, y origen_disponible dice que no está."""
+        disco = {"ok": True, "hechos": 0}
+        simulado = eb.ejecutar_ffmpeg
+
+        def ejecutar(cmd, timeout):
+            if not disco["ok"]:
+                return False, "No such file or directory"
+            disco["hechos"] += 1
+            disco["ok"] = disco["hechos"] < despues_de
+            return simulado(cmd, timeout)
+        eb.ejecutar_ffmpeg = ejecutar
+        orig = eb.origen_disponible
+        eb.origen_disponible = lambda origen: disco["ok"]
+        self.addCleanup(setattr, eb, "origen_disponible", orig)
+
+    def test_disco_desconectado_entre_brutos(self):
+        """Se para como con Detener: el bruto terminado se queda en brutos_resultado.json y el siguiente no se empieza."""
+        cfg = dict(json.loads(json.dumps(eb.CONFIG_DEFECTO)), clips_a_la_vez=1)
+        mxf, clips = self.preparar(4)
+        self.disco_que_se_va(despues_de=2)  # los dos clips de P0 (en el reparto, P0 va antes que P1)
+        eb.unir_segmentos, orig = (lambda segs, salida, *a: (salida.write_bytes(b"x"), (True, None, []))[1]), eb.unir_segmentos
+        self.addCleanup(setattr, eb, "unir_segmentos", orig)
+        cfg["ficha_tecnica"] = False
+        eb.duracion_ffprobe = lambda ffprobe, ruta: DUR
+        with self.assertRaises(eb.OrigenPerdido) as e:
+            eb.exportar_todo(clips, {"por_proyecto": []}, list(mxf.values()), self.tmp, self.tmp / "brutos", "ffmpeg", "ffprobe",
+                             lambda m: None, cfg)
+        self.assertIn("misma letra", str(e.exception))
+        hechos = json.loads((self.tmp / "brutos" / "brutos_resultado.json").read_text(encoding="utf-8"))
+        self.assertEqual([r["proyecto"] for r in hechos], ["P0 SEPTIEMBRE DE 2019"])
+        self.assertFalse(any(x.name.startswith("_tmp_") for x in (self.tmp / "brutos").iterdir()))
+
+    def test_disco_desconectado_a_mitad_de_un_bruto(self):
+        """El bruto a medias no se termina con huecos: se descarta, como con Detener, y no queda marcado como hecho."""
+        cfg = dict(json.loads(json.dumps(eb.CONFIG_DEFECTO)), clips_a_la_vez=1, ficha_tecnica=False)
+        mxf, clips = self.preparar(4)
+        self.disco_que_se_va(despues_de=1)
+        with self.assertRaises(eb.OrigenPerdido):
+            eb.exportar_todo(clips, {"por_proyecto": []}, list(mxf.values()), self.tmp, self.tmp / "brutos", "ffmpeg", "ffprobe",
+                             lambda m: None, cfg)
+        self.assertEqual(json.loads((self.tmp / "brutos" / "brutos_resultado.json").read_text(encoding="utf-8")), [])
+        self.assertEqual([x.name for x in (self.tmp / "brutos").iterdir()], ["brutos_resultado.json"])
+
     @unittest.skipIf(da is None, "sin pyavb")
     def test_lista_rapida_de_proyectos(self):
         for f in ["MEXICO/MEXICO.avp", "MEXICO/MEXICO Bin.avb", "MEXICO/Trash/viejo.avb", "PANAMA 2019/PANAMA 2019.avp",
@@ -965,6 +1010,78 @@ class Detener(unittest.TestCase):
         finally:
             eb.ejecutar_ffmpeg, eb.duracion_ffprobe = orig
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class DiscosDeChina(unittest.TestCase):
+    """Disco de la Corresponsalía de Pekín (oct. 2026): material propio importado desde una carpeta del PC, bins de
+    agencias, DNxHD 1080i50 y nombres en chino."""
+
+    def setUp(self):
+        self.cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+
+    def test_ficheros_de_camara(self):
+        for f in [r"D:\China\北京 0916\DJI_0012.MP4", "C0380.MP4", "MVI_1234.MOV", "GX010045.MP4", "P1000123.MOV", "A001C002_220916_R1AB.mov",
+                  "20260916_C0001.mp4"]:
+            self.assertTrue(eb.es_fichero_de_camara(f, self.cfg), f)
+        for f in ["IMG_1234.MOV", "CCTV 新闻 0916.mp4", "Reuters_xi.mp4", "descarga.mp4", "", None]:
+            self.assertFalse(eb.es_fichero_de_camara(f, self.cfg), f)
+
+    def test_camara_propia_importada_de_una_carpeta_es_material(self):
+        dji = {"origen": "Fichero importado", "fichero_origen": r"C:\Users\RTVE\Desktop\China\DJI_0012.MP4"}
+        movil = {"origen": "Fichero importado", "fichero_origen": r"C:\Users\RTVE\Desktop\China\IMG_1234.MOV"}
+        tarjeta = {"origen": "Fichero importado", "fichero_origen": r"J:\XDROOT\Clip\C0001.MXF"}
+        self.assertFalse(eb.es_importado(dji, self.cfg))
+        self.assertTrue(eb.es_importado(movil, self.cfg))
+        self.assertFalse(eb.es_importado(tarjeta, self.cfg))
+        self.assertIsNone(eb.motivo_descarte(dji, self.cfg))
+        self.assertEqual(eb.motivo_descarte(movil, self.cfg), "importado")
+
+    def test_bins_de_agencias(self):
+        for b in ["20260916 agencias.avb", "AGENCIA.avb", "Reuters 16-09.avb", "CCTV.avb", "xinhua 0917"]:
+            self.assertTrue(eb.es_bin_de_agencia(b, self.cfg), b)
+        for b in ["20260916 brutos.avb", "Capturas.avb", "Rodaje Pekín.avb", "mapas.avb"]:
+            self.assertFalse(eb.es_bin_de_agencia(b, self.cfg), b)
+
+    @unittest.skipIf(da is None, "sin pyavb")
+    def test_origen_segun_el_bin(self):
+        importado = {"origen": "Fichero importado", "fichero_origen": r"C:\descargas\CCTV 新闻.mp4"}
+        da.origen_segun_bin(importado, "20260916 agencias.avb", self.cfg)
+        self.assertEqual(importado["origen"], "Agencia (bin de agencias)")
+        self.assertEqual(eb.motivo_descarte(importado, self.cfg), "agencia")
+        propio = {"origen": "Fichero importado", "fichero_origen": r"C:\China\DJI_0012.MP4"}
+        da.origen_segun_bin(dict(propio), "20260916 agencias.avb", self.cfg)  # en un bin de agencias, lo de cámara sigue siendo propio
+        da.origen_segun_bin(propio, "20260916 agencias.avb", self.cfg)
+        self.assertEqual(propio["origen"], "Cámara (fichero importado)")
+        reuters = {"origen": "Agencia Reuters", "fichero_origen": r"C:\\descargas\\2026-09-16T120000Z_1_X_RTR_A_1-CHINA.MP4"}
+        da.origen_segun_bin(reuters, "20260916 agencias.avb", self.cfg)
+        self.assertEqual(reuters["origen"], "Agencia Reuters")
+        normal = {"origen": "Sin determinar", "fichero_origen": None, "nombre": "entrevista"}
+        da.origen_segun_bin(normal, "Rodaje.avb", self.cfg)
+        self.assertEqual(normal["origen"], "Sin determinar")
+
+    def test_1080i50_no_se_desentrelaza(self):
+        dnxhd = {"tipo": "video", "ancho": 1920, "alto": 1080, "fps": "25/1", "field_order": "tt"}
+        self.assertTrue(eb.es_1080i25(dnxhd))
+        for otro in [dict(dnxhd, fps="30000/1001"), dict(dnxhd, field_order="bb"), dict(dnxhd, field_order="progressive"), dict(dnxhd, ancho=1440)]:
+            self.assertFalse(eb.es_1080i25(otro), otro)
+        args = eb.args_video({"modo": "convertir", "destino": {"xdcam": True}}, {"pistas": [dnxhd]}, self.cfg)
+        filtros = args[args.index("-vf") + 1]
+        self.assertNotIn("bwdif", filtros)
+        self.assertNotIn("interlace", filtros)
+        self.assertIn("setfield=tff", filtros)
+        self.assertIn("color_primaries=bt709", filtros)
+        dv = {"tipo": "video", "ancho": 720, "alto": 480, "fps": "30000/1001", "field_order": "bb"}
+        filtros = eb.args_video({"modo": "convertir", "destino": {"xdcam": True}}, {"pistas": [dv]}, self.cfg)
+        self.assertIn("bwdif", filtros[filtros.index("-vf") + 1])
+
+    def test_rutas_largas_solo_en_windows(self):
+        larga = "C:\\" + "\\".join(["北京 0916 entrevista larga con nombre"] * 10) + "\\DJI_0012.MP4"
+        if os.name == "nt":
+            self.assertTrue(eb.ruta_larga(larga).startswith("\\\\?\\"))
+            self.assertEqual(eb.ruta_larga("\\\\servidor\\" + "x" * 250), "\\\\?\\UNC\\servidor\\" + "x" * 250)
+        else:
+            self.assertEqual(eb.ruta_larga(larga), larga)
+        self.assertEqual(eb.ruta_larga("corta"), "corta")
 
 
 try:

@@ -15,7 +15,10 @@ proyecto cuyo bin no coincide por identificador (cruce aproximado por
 nombre y duración, con dos clips ambiguos), dos tarjetas por fecha y dos por
 carpeta de tarjeta, un clip de agencia (Reuters), una pieza renderizada, un
 vídeo de móvil importado y un render de fundido que no está en ningún bin
-(como los 806 del disco real de México).
+(como los 806 del disco real de México). Y un proyecto como los de la
+Corresponsalía de Pekín: nombres en chino, DNxHD 1080i50, material propio
+importado desde una carpeta del PC (DJI_, C0380), un bin de agencias y una
+carpeta de bins con una ruta de más de 260 caracteres.
 Las fechas de la media se fijan (15/09/2021 10:00, y un clip el día 10) para
 que los nombres de los brutos sean siempre los mismos.
 
@@ -32,6 +35,18 @@ import sys
 from pathlib import Path
 
 import avb
+
+
+def larga(ruta):
+    """En Windows, las rutas de más de 260 caracteres necesitan el prefijo \\\\?\\ para crearlas."""
+    texto = os.path.abspath(str(ruta))
+    return "\\\\?\\" + texto if os.name == "nt" and not texto.startswith("\\\\?\\") else texto
+
+
+def en_bin(texto):
+    """pyavb escribe los nombres en Mac Roman, que no tiene chino. Un Avid moderno guarda UTF-8: se escriben los bytes
+    UTF-8 tal cual (el programa los reconoce al leer el bin)."""
+    return texto.encode("utf-8").decode("mac_roman") if not texto.isascii() and not all(ord(c) < 256 for c in texto) else texto
 
 
 def main():
@@ -56,8 +71,10 @@ def main():
                              capture_output=True, text=True, check=True).stdout
         return json.loads(out)["format"]["tags"]["material_package_umid"][2:]
 
-    def mkv(nombre, out, dur, size="1920x1080", br="120M", fps="25", codec="dnxhd"):
+    def mkv(nombre, out, dur, size="1920x1080", br="120M", fps="25", codec="dnxhd", entrelazado=False):
         extra = ["-profile:v", "0", "-level:v", "2"] if codec == "mpeg2video" else []  # MPEG-2 4:2:2 (tipo IMX)
+        if entrelazado:  # 1080i50, primero el campo superior (como el DNxHD 120 de los discos de China)
+            extra += ["-vf", "setfield=tff", "-flags", "+ildct+ilme", "-top", "1"]
         subprocess.run([args.ffmpeg, "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=%s:rate=%s" % (size, fps),
                         "-t", str(dur), "-c:v", codec, "-b:v", br, "-pix_fmt", "yuv422p"] + extra + ["-f", "mxf_opatom",
                         "-metadata", "material_package_name=%s" % nombre, str(out)], check=True)
@@ -89,14 +106,14 @@ def main():
         f = avb.file.AVBFile()
         for nombre, u, *extra in clips:
             m = f.create.Composition(mob_type="MasterMob")
-            m.name = nombre
+            m.name = en_bin(nombre)
             m.length = extra[0] if extra else 75
             if len(extra) > 1:
                 src = f.create.Composition(mob_type="SourceMob")
-                src.name, src.length, src.mob_id, src.tracks = nombre, m.length, avb.mobid.MobID.new(), []
+                src.name, src.length, src.mob_id, src.tracks = en_bin(nombre), m.length, avb.mobid.MobID.new(), []
                 d = f.create.CDCIDescriptor()
                 loc = f.create.WinFileLocator()
-                loc.path = loc.path_utf8 = extra[1]
+                loc.path, loc.path_utf8 = en_bin(extra[1]), extra[1]
                 d.locator = loc
                 src.descriptor = d
                 f.content.add_mob(src)
@@ -123,8 +140,8 @@ def main():
             c.name = s
             c.length = 1250
             f.content.add_mob(c)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        f.write(str(path))
+        os.makedirs(larga(path.parent), exist_ok=True)
+        f.write(larga(path))
 
     # Proyecto uniforme (1080p DNxHD): copia directa. Un clip sin audio, uno offline
     # y un render de título (precompute) con media física, que no debe ir al bruto.
@@ -182,6 +199,28 @@ def main():
     (P / "APROX.avp").write_bytes(b"avp")
     falso = "060A2B340101010501010D001300000000000000000000000000000000000%03X"
     bin_con(P / "APROX Bin.avb", [("APROX A", falso % 0xA01, 50), ("APROX B", falso % 0xB01, 50), ("APROX B", falso % 0xB02, 50)])
+
+    # Corresponsalía de Pekín (disco real de oct. 2026): proyecto con nombre en chino, todo DNxHD 1080i50 (se recodifica
+    # sin separar campos). La entrevista viene de una tarjeta Sony (XDROOT); el dron y la Sony A7 se copiaron a una
+    # carpeta del PC antes de importarlos (son material propio por el nombre del fichero). En el bin de agencias, un
+    # vídeo de la televisión china (fuera de los brutos). El bin de rodaje está en una ruta de más de 260 caracteres.
+    i50 = dict(entrelazado=True)
+    c1 = clip("entrevista 北京", "5F00C001", 2, **i50)
+    c2 = clip("DJI_0012", "5F00C002", 2, audios=0, **i50)
+    c3 = clip("C0380", "5F00C003", 2, **i50)
+    c4 = clip("新闻 CCTV 0916", "5F00C004", 2, **i50)
+    P = D / "20260916_China 北京"
+    P.mkdir()
+    (P / "20260916_China 北京.avp").write_bytes(b"avp")
+    for cache in ("SearchData", "Statistics", "WaveformCache"):
+        (P / cache).mkdir()
+    hondo = P / "Bins de rodaje de la corresponsalía en Pekín 北京 entrevistas recursos y planos de dron del 16 de septiembre" \
+        / "Material de cámara propia volcado desde la tarjeta y desde el ordenador portátil 北京 0916 segunda jornada de rodaje"
+    bin_con(hondo / "20260916 rodaje 北京.avb",
+            [("entrevista 北京", c1, 50, r"J:\XDROOT\Clip\C0001.MXF"),
+             ("DJI_0012", c2, 50, r"C:\Users\corresponsal\Desktop\China 0916\dron\DJI_0012.MP4"),
+             ("C0380", c3, 50, r"D:\北京\A7III\C0380.MP4")])
+    bin_con(P / "20260916 agencias.avb", [("新闻 CCTV 0916", c4, 50, r"C:\Users\corresponsal\Downloads\CCTV 新闻 0916.mp4")])
 
     # Huérfano con vídeo, solo-audio huérfano y fichero en cuarentena.
     clip("HUERFANO", "AAAA0001", 2, audios=1)

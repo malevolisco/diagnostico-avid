@@ -135,6 +135,19 @@ Se crea con valores por defecto al primer uso. Claves: `formato_salida` (`xdcam_
 - Rutas de Windows antiguas sin UTF-8: pyavb las lee como Mac Roman ("Mis vÌdeos", "IÒigo"); se recodifican como Windows-1252 (1.012 clips).
 - Dos bins (`TARJETA 1/2 POPOCATEPETL.avb`) dan "not a avb file"; hay copias `… POPO OK.avb` que sí se leen.
 
+## Discos de China (Corresponsalía de Pekín, oct. 2026)
+
+Por un disco real de la corresponsalía de Pekín (carpetas de proyecto `AAAAMMDD_China …`, DNxHD 120 1080i50 con 8 pistas, tarjetas Sony XDROOT, material de dron y de Sony A7 importado desde el PC y un bin `… agencias.avb`):
+
+- **Material propio importado desde una carpeta del PC** (`es_fichero_de_camara`, `camara_propia_regex`): un fichero importado cuyo nombre es de cámara (DJI_0012, C0380, MVI_, GX…, P1000123, DSC_, A001C002) es material aunque el bin no guarde una ruta de tarjeta. El informe lo marca "Cámara (fichero importado)". Los del móvil (IMG_) siguen siendo importados. Adrián: "son material propio claro".
+- **Bins de agencias** (`es_bin_de_agencia`, `bins_agencia_regex`): lo que hay en un bin que se llama "agencia(s)", Reuters, AFP, EFE, AP, EBU/Eurovisión, Xinhua, CCTV o CGTN y no es de cámara cuenta como agencia ("Agencia (bin de agencias)"): fuera de los brutos y en "Fuera del bruto".
+- **1080i50 nativo** (`es_1080i25`): si el origen ya es 1920×1080, 25 imágenes/s, entrelazado con el campo superior primero, se recodifica a XDCAM sin separar campos ni volver a entrelazar (`filtros_xdcam(nativo=True)`): más rápido y sin la pérdida de ese paso. Comprobado con un DNxHD 1080i50 de prueba: sale conforme.
+- **Disco que se desconecta** (`OrigenPerdido`, subclase de `Detenido`): se comprueba la raíz del disco antes de cada bruto y cuando un clip falla. Si no está, se para como con Detener (lo terminado se queda, lo a medias se descarta, `brutos_resultado.json` permite seguir) y la ventana lo explica. Nunca se termina un bruto con huecos por un disco que se ha ido ni se marca como hecho. Durante el análisis se comprueba tras el inventario, los bins y los MXF (sin el disco, los MXF parecerían dañados). En "Analizar y exportar seguido" se escribe antes el informe, para poder seguir con Exportar.
+- **Ficheros que no se pueden leer** (`no_legible`): inventario, bins y MXF apuntan cada fallo; `resumen.json → no_legibles` y una tabla al final del informe, con un aviso. Un sector dañado durante la exportación deja el clip en ERROR en el shotlist y el bruto sigue (como antes).
+- **Rutas de más de 260 caracteres** (`ruta_larga`): en Windows se recorre el disco con el prefijo `\\?\` y se abren bins, MXF, miniaturas, segmentos y fotogramas del visor con él. ffmpeg 7.1 lo admite.
+- **Chino**: pyavb 1.4 lee los textos de los bins como Mac Roman; si en realidad son UTF-8, se recuperan (`texto_bin`: se vuelve a los bytes y, si son UTF-8 válido, se leen así; el Mac Roman con acentos de verdad casi nunca lo es). Salidas de ffmpeg leídas siempre como UTF-8 con sustitución; la consola de la línea de comandos sustituye lo que no puede escribir en vez de fallar.
+- **Disco simulado**: proyecto `20260916_China 北京` con la entrevista de una tarjeta XDROOT, el dron y la A7 importados del PC, un vídeo de CCTV en el bin de agencias y un bin en una ruta de más de 260 caracteres. Se prueba en cada build en el Windows de GitHub.
+
 ## Verificado con datos reales (bins del proyecto 15 SEPT CENTROAMERICA, Media Composer 23.12.6)
 
 - pyavb lee los bins reales, incluido uno de 10 MB con 1.100 clips, en segundos.
@@ -145,6 +158,7 @@ Se crea con valores por defecto al primer uso. Claves: `formato_salida` (`xdcam_
 
 ## Qué sigue sin verificar
 
+- **Disco real de China**: todo lo anterior se ha probado con el disco simulado. Sin verificar: cómo guarda Avid los nombres en chino en los bins (se aceptan UTF-8 y Mac Roman), los nombres reales de fichero de todas las cámaras que usan en Pekín (se amplía `camara_propia_regex`), qué otros nombres de bin de agencias usan, y el comportamiento con un disco con sectores dañados de verdad (se ha probado con errores de lectura simulados).
 - **XDCAM HD 50**: comprobado con ffprobe y la ficha técnica (MPEG-2 4:2:2, 1920×1080, `field_order=tt`, 25, 16:9, 50 Mb/s, BT.709), con MediaInfo ("XDCAM HD422") y con un clip real DVCPRO50 16:9 de la Corresponsalía (sale a cuadro entero). Sin comprobar: que el sistema del Archivo lo ingeste sin problemas (ffmpeg escribe un OP1a correcto, pero no se ha validado contra la norma RDD 9 completa ni con la norma técnica de ingesta del Archivo, que aún no tenemos) y la calidad del paso de NTSC a 25 con material real en movimiento. Hacer un bruto corto y probarlo en el Archivo antes de lanzar un disco entero.
 - **Montaje con material real**: la pantalla se ha probado con el disco simulado (pantalla virtual en Linux con Python 3.12 y Pillow). Sin probar: en Windows con un bruto real de 2 h (cientos de clips) y el tiempo de los fotogramas del visor en el PC de la jefa; en Linux, ~1 s por minuto de DV.
 - **Aspecto de la ventana en Windows**: `tests/probar_interfaz.py` recorre las tres páginas en cada build de GitHub (analizar, montar, exportar) y guarda capturas en el artefacto `capturas_ventana`; con Segoe UI las medidas cambian algo respecto a Linux. Sin probar en una pantalla con escalado (125 %, 150 %) como la de muchos portátiles.

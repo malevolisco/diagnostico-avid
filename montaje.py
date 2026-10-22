@@ -338,7 +338,7 @@ def sacar_fotogramas(ffmpeg, ruta_video, carpeta_visor, clave, timeout=1800):
     tmp = salida.with_suffix(".tmp")
     # -skip_frame nokey: en MPEG-2/H.264 solo se decodifican las imágenes clave (3-4 veces más rápido; para 1 por
     # segundo sobra). En DV, DNxHD o ProRes todas lo son. Medido: ~1 s por minuto de DV, ~10 KB por fotograma.
-    cmd = [ffmpeg, "-v", "error", "-y", "-skip_frame", "nokey", "-i", str(ruta_video), "-map", "0:v:0", "-an",
+    cmd = [ffmpeg, "-v", "error", "-y", "-skip_frame", "nokey", "-i", eb.ruta_larga(ruta_video), "-map", "0:v:0", "-an",
            "-vf", "fps=1,scale=480:270:force_original_aspect_ratio=decrease,pad=480:270:(ow-iw)/2:(oh-ih)/2:black,setsar=1",
            "-q:v", "10", "-f", "mjpeg", str(tmp)]
     try:

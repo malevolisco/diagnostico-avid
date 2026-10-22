@@ -360,6 +360,8 @@ class App:
         try:
             d, z, resumen = da.ejecutar(progreso=lambda m: self.cola.put(("log", m)), **datos)
             self.cola.put(("detenido_brutos" if resumen.get("detenido") else "fin", (str(d / "informe.html"), str(z))))
+        except da.OrigenPerdido as e:  # antes que Detenido, que es su clase madre
+            self.cola.put(("error", str(e)))
         except da.Detenido:
             self.cola.put(("detenido", None))
         except Exception as e:
@@ -783,6 +785,8 @@ class App:
                                              solo_brutos=solo, evento=lambda ev: self.cola.put(("evento", ev)))
             ok = sum(1 for b in res if str(b["estado"]).startswith("OK"))
             self.cola.put(("exportado", (len(res), ok, da.PARAR.is_set(), brutos)))
+        except da.OrigenPerdido as e:
+            self.cola.put(("error", str(e)))
         except da.Detenido:
             self.cola.put(("exportado", (0, 0, True, brutos)))
         except Exception as e:

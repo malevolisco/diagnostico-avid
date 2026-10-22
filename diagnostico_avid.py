@@ -77,6 +77,38 @@ def comprobar_parar():
     if PARAR.is_set():
         raise Detenido()
 
+
+if EXPORT_OK:
+    OrigenPerdido, comprobar_origen, ruta_larga = exportar_brutos.OrigenPerdido, exportar_brutos.comprobar_origen, exportar_brutos.ruta_larga
+else:  # pragma: no cover
+    class OrigenPerdido(Detenido):
+        pass
+
+    def comprobar_origen(origen, analizando=False):
+        pass
+
+    def ruta_larga(ruta, siempre=False):
+        return str(ruta)
+
+NO_LEGIBLES = []  # [{ruta, fase, error}] de lo que no se ha podido leer en el último análisis (para el informe)
+
+
+def no_legible(ruta, fase, error):
+    """Apunta un fichero o carpeta que no se ha podido leer (sector dañado, permisos, nombre imposible...)."""
+    if ruta is None:
+        ruta = getattr(error, "filename", None) or "?"
+    ruta = str(ruta)
+    if ruta.startswith("\\\\?\\"):
+        ruta = ruta[4:]
+    texto = str(getattr(error, "strerror", None) or error)[:200]
+    LOG.warning("No se puede leer (%s) %s: %s", fase, ruta, texto)
+    NO_LEGIBLES.append({"ruta": ruta, "fase": fase, "error": texto})
+
+
+def relativa(carpeta, raiz):
+    """Ruta de una carpeta de os.walk respecto a la raíz del recorrido (las dos como texto, con o sin \\\\?\\)."""
+    return str(carpeta)[len(str(raiz)):].lstrip("\\/")
+
 try:
     import avb  # pyavb
     PYAVB_OK = True
@@ -233,20 +265,20 @@ def clasificar_origen(reglas, nombre, fichero_origen):
 
 def inventariar(origen, progreso):
     """Recorre todo el disco. Devuelve lista de dicts con cada fichero."""
-    origen = Path(origen)
+    raiz_disco = ruta_larga(origen, siempre=True)  # en Windows, \\?\ para poder leer rutas de más de 260 caracteres
     ficheros = []
     n = 0
-    for raiz, dirs, nombres in os.walk(origen, onerror=lambda e: LOG.warning("No se puede leer: %s", e)):
+    for raiz, dirs, nombres in os.walk(raiz_disco, onerror=lambda e: no_legible(None, "carpeta", e)):
         comprobar_parar()
         dirs[:] = [d for d in dirs if d.lower() not in CARPETAS_SISTEMA]
         for nombre in nombres:
             ruta = Path(raiz) / nombre
+            rel = Path(relativa(raiz, raiz_disco), nombre)
             try:
                 st = ruta.stat()
             except OSError as e:
-                LOG.warning("No se puede leer %s: %s", ruta, e)
+                no_legible(str(rel), "inventario", e)
                 continue
-            rel = ruta.relative_to(origen)
             ficheros.append({
                 "ruta": str(rel),
                 "carpeta": str(rel.parent),
@@ -281,9 +313,9 @@ def listar_proyectos(origen):
     """Lectura rápida para el selector de proyectos: recorre el disco sin entrar en las carpetas de media
     (Avid MediaFiles) y devuelve [{nombre, carpeta, bins, modificado}] con los mismos nombres que usa el análisis
     (detectar_proyectos), más "(bins sin proyecto)" si hay bins sueltos. Segundos, aunque el disco sea grande."""
-    origen = Path(origen)
+    raiz_disco = ruta_larga(origen, siempre=True)
     ficheros = []
-    for raiz, dirs, nombres in os.walk(origen, onerror=lambda e: LOG.warning("No se puede leer: %s", e)):
+    for raiz, dirs, nombres in os.walk(raiz_disco, onerror=lambda e: LOG.warning("No se puede leer: %s", e)):
         dirs[:] = [d for d in dirs if d.lower() not in CARPETAS_SISTEMA and d.lower() not in CARPETAS_MEDIA]
         for nombre in nombres:
             ext = Path(nombre).suffix.lower()
@@ -294,7 +326,7 @@ def listar_proyectos(origen):
                 mtime = ruta.stat().st_mtime
             except OSError:
                 continue
-            rel = ruta.relative_to(origen)
+            rel = Path(relativa(raiz, raiz_disco), nombre)
             ficheros.append({"ruta": str(rel), "carpeta": str(rel.parent), "nombre": nombre, "ext": ext, "bytes": 0,
                              "modificado": dt.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")})
     salida = []
@@ -368,10 +400,24 @@ def material(umid_hex):
     return (umid_hex or "")[-32:]
 
 
+def texto_bin(texto):
+    """pyavb lee los textos de los bins como Mac Roman. Si en realidad son UTF-8 (nombres en chino de un Avid moderno),
+    salen "åå¬": se vuelven a los bytes originales y, si son UTF-8 válido, se leen como UTF-8. Un texto Mac Roman de
+    verdad con acentos ("ESPAÑA" = 45 53 50 41 84 41) casi nunca es UTF-8 válido, así que se queda como estaba."""
+    if not texto or not isinstance(texto, str) or texto.isascii():
+        return texto
+    try:
+        return texto.encode("mac_roman").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return texto
+
+
 def reparar_ruta(texto):
     """Rutas de Windows guardadas sin UTF-8 (Avid antiguo): pyavb las lee como Mac Roman y salen
     "Mis vÌdeos", "IÒigo". Se recodifican como Windows-1252 ("Mis vídeos", "Iñigo"). Solo rutas de
     Windows ("D:\\..." o "D//..."); las de Mac se dejan como están."""
+    if texto_bin(texto) != texto:
+        return texto_bin(texto)
     if not texto or not re.match(r"^[A-Za-z](:|//)", str(texto)):
         return texto
     try:
@@ -466,7 +512,7 @@ def columnas_usuario(mob):
     """Columnas de usuario del bin (las que Avid guarda en _USER: 'Shoot Date', comentarios...)."""
     try:
         u = mob.attributes.get("_USER") if getattr(mob, "attributes", None) is not None else None
-        return {str(k): str(v)[:200] for k, v in (u or {}).items() if str(v).strip()}
+        return {texto_bin(str(k)): texto_bin(str(v))[:200] for k, v in (u or {}).items() if str(v).strip()}
     except Exception:
         return {}
 
@@ -543,21 +589,35 @@ def fijar_fechas_grabacion(clips):
     return res
 
 
-def leer_bin(ruta_abs, reglas_origen=()):
-    """Lee un bin con pyavb. Devuelve dict con clips y secuencias o error."""
+def origen_segun_bin(item, nombre_bin, cfg):
+    """Ajusta el origen de un clip con lo que dice el bin además de config_origen.json: en un bin de agencias
+    ('20260916 agencias.avb'), lo que no es de cámara es de agencia; un fichero importado que se llama como los de
+    una cámara (DJI_0012.MP4, C0380.MP4) es material propio aunque se copiara a una carpeta del PC antes de importarlo."""
+    if not cfg:
+        return
+    if str(item.get("origen") or "").startswith("Agencia"):  # ya se sabe cuál (Reuters...): se deja
+        return
+    if exportar_brutos.es_bin_de_agencia(nombre_bin, cfg) and not exportar_brutos.es_de_camara(item, cfg):
+        item["origen"] = "Agencia (bin de agencias)"
+    elif item.get("origen") in ("Fichero importado", "Sin determinar") and exportar_brutos.es_fichero_de_camara(item.get("fichero_origen"), cfg):
+        item["origen"] = "Cámara (fichero importado)"
+
+
+def leer_bin(ruta_abs, reglas_origen=(), cfg=None):
+    """Lee un bin con pyavb. Devuelve dict con clips y secuencias o error. cfg (config_brutos): para origen_segun_bin."""
     res = {"ok": False, "error": None, "clips": [], "secuencias": [], "otros": 0}
     if not PYAVB_OK:
         res["error"] = "pyavb no está instalado"
         return res
     try:
-        with avb.open(str(ruta_abs)) as f:
+        with avb.open(ruta_larga(ruta_abs)) as f:
             for mob in f.content.mobs:
                 try:
                     tipo = mob.mob_type
                     er = edit_rate_de(mob) or 25.0
                     length = int(getattr(mob, "length", 0) or 0)
                     item = {
-                        "nombre": mob.name or "",
+                        "nombre": texto_bin(mob.name or ""),
                         "tipo": tipo,
                         "uso": getattr(mob, "usage", None),
                         "uso_codigo": getattr(mob, "usage_code", None),
@@ -575,6 +635,7 @@ def leer_bin(ruta_abs, reglas_origen=()):
                         item["volumenes"] = sorted({x["volumen"] for x in item["fuentes"] if x["volumen"]})
                         item["fichero_origen"] = next((x["fichero_origen"] for x in item["fuentes"] if x["fichero_origen"]), None)
                         item["origen"], item["origen_detalle"] = clasificar_origen(reglas_origen, item["nombre"], item["fichero_origen"])
+                        origen_segun_bin(item, Path(ruta_abs).name, cfg)
                         item["columnas"] = columnas_usuario(mob)
                         res["clips"].append(item)
                     elif tipo == "CompositionMob":
@@ -593,6 +654,7 @@ def leer_bin(ruta_abs, reglas_origen=()):
 def leer_bins(proyectos, origen, progreso):
     bins_out = []
     reglas = cargar_patrones_origen()
+    cfg = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json") if EXPORT_OK else None
     total = sum(p["num_bins"] for p in proyectos)
     i = 0
     for p in proyectos:
@@ -600,7 +662,9 @@ def leer_bins(proyectos, origen, progreso):
             comprobar_parar()
             i += 1
             progreso("Bins: %d/%d  %s" % (i, total, b["nombre"]))
-            r = leer_bin(Path(origen) / b["ruta"], reglas)
+            r = leer_bin(Path(origen) / b["ruta"], reglas, cfg)
+            if not r["ok"] and PYAVB_OK:
+                no_legible(b["ruta"], "bin", r["error"])
             r.update({"proyecto": p["nombre"], "ruta": b["ruta"], "nombre": b["nombre"], "papelera": b["papelera"]})
             bins_out.append(r)
     LOG.info("Bins leídos: %d (%d con error)", len(bins_out), sum(1 for b in bins_out if not b["ok"]))
@@ -669,7 +733,9 @@ def analizar_mxf(ficheros, origen, ffprobe, progreso):
     hechos = 0
 
     def trabajo(f):
-        datos, err = ffprobe_json(ffprobe, Path(origen) / f["ruta"])
+        datos, err = ffprobe_json(ffprobe, ruta_larga(Path(origen) / f["ruta"]))
+        if err:
+            no_legible(f["ruta"], "MXF", err)
         partes = [p.lower() for p in Path(f["ruta"]).parts]
         base = {"ruta": f["ruta"], "nombre": f["nombre"], "bytes": f["bytes"], "modificado": f["modificado"],
                 "en_cuarentena": "quarantined files" in partes, "en_creating": "creating" in partes,
@@ -920,15 +986,15 @@ def miniaturas(clips, origen, ffmpeg, destino, progreso, maximo=0):
     def trabajo(idx, c):
         salida = carpeta / ("%05d_%s.jpg" % (idx, nombre_seguro(c["nombre"], 40)))
         pos = max(0.0, (c["duracion"] or 0) * 0.10)
-        cmd = [ffmpeg, "-v", "error", "-y", "-ss", "%.2f" % pos, "-i", str(Path(origen) / c["fichero_video"]),
+        cmd = [ffmpeg, "-v", "error", "-y", "-ss", "%.2f" % pos, "-i", ruta_larga(Path(origen) / c["fichero_video"]),
                "-frames:v", "1", "-vf", "scale=%d:-2" % MINIATURA_ANCHO, "-q:v", "4", str(salida)]
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, **flags_subproceso())
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, **flags_subproceso())
             if r.returncode == 0 and salida.exists():
                 return c, "miniaturas/" + salida.name
             # segundo intento desde el principio (clips muy cortos); cmd[5] es la posición de -ss
             cmd[5] = "0"
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, **flags_subproceso())
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, **flags_subproceso())
             if r.returncode == 0 and salida.exists():
                 return c, "miniaturas/" + salida.name
             LOG.warning("Sin miniatura %s: %s", c["nombre"], (r.stderr or "").strip()[:200])
@@ -970,6 +1036,9 @@ def construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmp
     ilegibles = [b for b in bins if not b["ok"]]
     if ilegibles:
         avisos.append(("aviso", "%d bins no se han podido leer (ver bins.json). Candidatos a abrirlos en Avid." % len(ilegibles)))
+    if NO_LEGIBLES:
+        avisos.append(("aviso", "%d ficheros o carpetas no se han podido leer (sectores dañados, permisos, nombres o rutas imposibles): "
+                                "lista al final del informe y en no_legibles del resumen. No entran en los brutos." % len(NO_LEGIBLES)))
     errores_mxf = [m for m in mxf if m["error"]]
     if errores_mxf:
         avisos.append(("aviso", "%d ficheros MXF dan error al leerse: posible corrupción o copia incompleta." % len(errores_mxf)))
@@ -1059,6 +1128,7 @@ def construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmp
         "productos": dict(Counter(m.get("producto") for m in mxf if m.get("producto")).most_common(10)),
         "comentarios_mxf": dict(tags_comentario),
         "avisos": [{"nivel": n, "texto": t} for n, t in avisos],
+        "no_legibles": list(NO_LEGIBLES),
     }
 
 
@@ -1122,6 +1192,9 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
     for a in r["avisos"]:
         h.append("<div class='aviso %s'>%s</div>" % (a["nivel"], esc(a["texto"])))
 
+    no_leidos = r.get("no_legibles") or []
+    if no_leidos:
+        h.append("<p class='muted'>%d ficheros o carpetas no se han podido leer: ver <a href='#no_legibles'>la lista</a>.</p>" % len(no_leidos))
     h.append("<h2>Proyectos</h2><table><tr><th>Proyecto</th><th class='n'>Bins</th><th class='n'>Clips en bin</th><th class='n'>Con media</th><th class='n'>Offline</th><th class='n'>Compartidos</th><th class='n'>Secuencias</th><th class='n'>Duración</th><th class='n'>GB</th><th>Formatos</th></tr>")
     for p in cruce["por_proyecto"]:
         fm = " ".join("<span class='tag'>%s %s %s (%d)</span>" % (esc(f["codec"]), esc(f["resolucion"]), esc(f["fps"]), f["clips"]) for f in p["formatos"])
@@ -1205,6 +1278,15 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
                  "picture-in-picture). Junto a cada bruto: shotlist Excel con el timecode de cada clip, hoja de contactos HTML, ficha técnica "
                  "(Formato: comprobado sobre el fichero exportado) y MD5.</p>")
 
+    if no_leidos:
+        h.append("<h2 id='no_legibles'>Ficheros que no se han podido leer</h2><p class='muted'>Puede ser un sector dañado del disco, "
+                 "un permiso o un nombre o ruta que Windows no admite. Si son muchos y seguidos, el disco puede estar fallando: "
+                 "conviene copiarlo cuanto antes.</p><table><tr><th>Fichero o carpeta</th><th>Al</th><th>Error</th></tr>")
+        for x in no_leidos[:1000]:
+            h.append("<tr><td>%s</td><td>%s</td><td>%s</td></tr>" % (esc(x["ruta"]), esc(x["fase"]), esc(x["error"])))
+        h.append("</table>")
+        if len(no_leidos) > 1000:
+            h.append("<p class='muted'>... y %d más (todos en resumen.json).</p>" % (len(no_leidos) - 1000))
     h.append("<footer>Generado por diagnostico_avid.py v%s, %s. No se ha modificado nada en el disco de origen.</footer></main></body></html>" % (VERSION, esc(BUILD)))
     (destino / "informe.html").write_text("\n".join(h), encoding="utf-8")
 
@@ -1264,17 +1346,21 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
         progreso("Inicio. Destino: %s" % destino)
 
         progreso("1/6 Inventariando el disco...")
+        NO_LEGIBLES.clear()
         ficheros = inventariar(origen, progreso)
+        comprobar_origen(origen, analizando=True)
         escribir_inventario_csv(ficheros, destino)
 
         progreso("2/6 Detectando proyectos y leyendo bins...")
         proyectos = detectar_proyectos(ficheros)
         bins = leer_bins(proyectos, origen, progreso)
+        comprobar_origen(origen, analizando=True)
         guardar_json(destino, "proyectos.json", proyectos)
         guardar_json(destino, "bins.json", bins)
 
         progreso("3/6 Analizando ficheros MXF...")
         mxf = analizar_mxf(ficheros, origen, ffprobe, progreso) if ffmpeg_ok else []
+        comprobar_origen(origen, analizando=True)  # si no, los MXF sin leer parecerían dañados
         guardar_json(destino, "mxf.json", mxf)
 
         progreso("4/6 Reconstruyendo clips y cruzando con los bins...")
@@ -1292,6 +1378,7 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
 
         resultados_brutos = None
         detenido = False
+        perdido = None
         if brutos:
             if not ffmpeg_ok:
                 progreso("Brutos: omitidos, no hay ffmpeg.")
@@ -1299,10 +1386,13 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
                 progreso("Brutos: exportando %s en %s" % ("un MXF por proyecto" if proyectos_brutos is None else
                                                           "los %d proyectos elegidos" % len(proyectos_brutos), brutos))
                 cfg = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json")
-                resultados_brutos = exportar_brutos.exportar_todo(clips, cruce, mxf, origen, brutos, ffmpeg, ffprobe, progreso, cfg,
-                                                                  miniaturas_dir=destino / "miniaturas" if hacer_miniaturas else None,
-                                                                  proyectos=proyectos_brutos)
-                detenido = PARAR.is_set()  # el análisis está completo: se escribe el informe con los brutos terminados
+                try:
+                    resultados_brutos = exportar_brutos.exportar_todo(clips, cruce, mxf, origen, brutos, ffmpeg, ffprobe, progreso, cfg,
+                                                                      miniaturas_dir=destino / "miniaturas" if hacer_miniaturas else None,
+                                                                      proyectos=proyectos_brutos)
+                except OrigenPerdido as e:  # el análisis está completo: se escribe el informe y luego se avisa
+                    perdido, resultados_brutos = e, []
+                detenido = PARAR.is_set() or perdido is not None  # el informe lleva los brutos terminados
 
         progreso("6/6 Escribiendo resumen e informe...")
         resumen = construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmpeg_ok)
@@ -1314,8 +1404,8 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
                 resumen["avisos"].append({"nivel": "error", "texto": "%d brutos con problemas: %s" % (len(fallos), ", ".join(b["proyecto"] for b in fallos))})
         if detenido:
             resumen["detenido"] = True
-            resumen["avisos"].insert(0, {"nivel": "error", "texto": "Exportación de brutos DETENIDA a mano: solo están los brutos de la tabla del final. "
-                                                                   "Para seguir, relanzar con las mismas carpetas: los terminados no se repiten."})
+            resumen["avisos"].insert(0, {"nivel": "error", "texto": "%s Para seguir, exportar con las mismas carpetas: los terminados no se repiten."
+                                         % (str(perdido) if perdido else "Exportación de brutos DETENIDA a mano: solo están los brutos de la tabla del final.")})
         guardar_json(destino, "resumen.json", resumen)
         informe_html(resumen, proyectos, bins, clips, cruce, destino)
 
@@ -1329,12 +1419,17 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
 
         progreso("Terminado. Informe: %s" % (destino / "informe.html"))
         progreso("ZIP para enviar: %s" % zip_path)
+        if perdido:  # informe y análisis guardados: la página Exportar puede seguir cuando vuelva el disco
+            raise perdido
         if abrir:
             try:
                 webbrowser.open((destino / "informe.html").as_uri())
             except Exception:
                 pass
         return destino, zip_path, resumen
+    except OrigenPerdido as e:
+        LOG.error("%s", e)
+        raise
     except Detenido:
         LOG.warning("Análisis detenido por el usuario antes de terminar: no hay informe.")
         raise
@@ -1538,6 +1633,9 @@ def main():
     ap.add_argument("--actualizar-ahora", action="store_true", help="Solo .exe: buscar e instalar la última versión sin abrir la ventana ni reabrir")
     args = ap.parse_args()
 
+    for flujo in (sys.stdout, sys.stderr):  # la consola de Windows (cp1252) no tiene chino: "?" en vez de un fallo
+        if flujo is not None and hasattr(flujo, "reconfigure"):
+            flujo.reconfigure(errors="replace")
     if sys.stderr is not None:  # en el .exe sin consola no hay salida estándar
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     if args.actualizar_ahora:

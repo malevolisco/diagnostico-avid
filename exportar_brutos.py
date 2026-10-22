@@ -79,6 +79,10 @@ CONFIG_DEFECTO = {
     "_tarjeta_minimo_minutos": "Una tanda con menos de estos minutos de material se junta con la tanda más cercana del mismo origen (si está a menos de 24 h). 0 = no juntar",
     "importados_aparte": True,
     "_importados_aparte": "Los ficheros importados (MP4 de descargas, móvil, agencias no reconocidas...: el bin guarda su ruta y no es una tarjeta) van al bruto _IMPORTADOS del proyecto",
+    "camara_propia_regex": r"^(DJI_\d{3,5}|C\d{4}|MAH\d{5}|MVI_\d{4}|GH\d{6}|GX\d{6}|GOPR\d{4}|GP\d{6}|DSC_?\d{4}|P\d{7}|A\d{3}C\d{3}|\d{8}_C\d{3,4})(\D|$)",
+    "_camara_propia_regex": "Ficheros de cámara propia importados desde una carpeta del PC (no desde la tarjeta): son material aunque el bin no guarde una ruta de tarjeta. Se mira el nombre del fichero que guarda el bin. Por defecto: dron DJI, Sony (C0001), Canon (MVI_), GoPro, Panasonic (P1000123), Nikon (DSC_), Zoom (MAH), ARRI/Blackmagic (A001C002). Los del móvil (IMG_) siguen siendo importados",
+    "bins_agencia_regex": r"agencia|reuters|\bafp\b|\befe\b|\bap\b|eurovisi|\bebu\b|xinhua|\bcctv\b|\bcgtn\b",
+    "_bins_agencia_regex": "Bins cuyo nombre indica material de agencia (p. ej. '20260916 agencias.avb'): lo que hay en ellos y no es de cámara cuenta como agencia",
     "agencias_aparte": True,
     "origenes_agencia": ["Agencia"],
     "_origenes_agencia": "Clips cuyo origen (según config_origen.json) empieza por alguno de estos textos van al bruto _AGENCIAS del proyecto",
@@ -124,6 +128,42 @@ PARAR = threading.Event()  # lo activa el botón Detener de la ventana
 
 class Detenido(Exception):
     """El usuario ha pulsado Detener."""
+
+
+class OrigenPerdido(Detenido):
+    """El disco de origen ha desaparecido (desconectado, se ha dormido, cable flojo). Se trata como Detener (lo
+    terminado se conserva, lo que estaba a medias se descarta y al volver a exportar se sigue), pero se avisa."""
+
+    def __init__(self, origen, analizando=False):
+        super().__init__("Se ha perdido el disco de origen (%s): ¿se ha desconectado? Vuelve a conectarlo con la misma letra y %s"
+                         % (origen, "vuelve a analizarlo (el análisis empieza de cero)." if analizando else
+                            "pulsa Exportar: los brutos terminados se conservan y se sigue por el que faltaba."))
+
+
+def origen_disponible(origen):
+    """¿Se puede leer la carpeta raíz del disco de origen?"""
+    try:
+        os.listdir(ruta_larga(origen))
+        return True
+    except OSError:
+        return False
+
+
+def comprobar_origen(origen, analizando=False):
+    if not origen_disponible(origen):
+        raise OrigenPerdido(origen, analizando)
+
+
+def ruta_larga(ruta, siempre=False):
+    """En Windows, las rutas de más de 260 caracteres solo se pueden abrir con el prefijo "\\\\?\\" (carpetas de proyecto
+    con nombres largos, en chino...). En Linux o con rutas cortas, la misma ruta. ffmpeg (5.1 o más) las admite igual."""
+    texto = str(ruta)
+    if os.name != "nt" or texto.startswith("\\\\?\\"):
+        return texto
+    absoluta = os.path.abspath(texto)  # lo que cuenta es la ruta completa: "disco_prueba\\..." puede ser corta y la real no
+    if len(absoluta) < 240 and not siempre:
+        return texto
+    return "\\\\?\\UNC\\" + absoluta[2:] if absoluta.startswith("\\\\") else "\\\\?\\" + absoluta
 
 
 CODECS_COPIABLES = {"dnxhd", "mpeg2video", "dvvideo", "prores", "h264"}
@@ -261,7 +301,7 @@ def detalle_error(clip, fase, cmd, err):
 def duracion_ffprobe(ffprobe, ruta):
     cmd = [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(ruta)]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, **flags_subproceso())
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, **flags_subproceso())
         return float(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
     except Exception:
         return None
@@ -402,15 +442,48 @@ def es_pieza(c, secuencias, rx=None):
     return bool(secuencias) and bool({_normal(c.get("nombre")), _normal(fichero)} & secuencias - {""})
 
 
+def es_fichero_de_camara(fichero, cfg):
+    """¿El fichero que guarda el bin se llama como los de una cámara (DJI_0012.MP4, C0380.MP4...)? Para el material
+    propio importado desde una carpeta del PC en vez de desde la tarjeta (camara_propia_regex)."""
+    base = re.split(r"[\\/]+", str(fichero or ""))[-1]
+    base = re.sub(r"\.[A-Za-z0-9]{2,4}$", "", base)
+    rx = cfg.get("camara_propia_regex", CONFIG_DEFECTO["camara_propia_regex"])
+    try:
+        return bool(base and rx and re.search(rx, base, re.IGNORECASE))
+    except re.error as e:
+        LOG.error("camara_propia_regex no válida (%s); no se aplica", e)
+        return False
+
+
+def es_bin_de_agencia(nombre_bin, cfg):
+    """¿El nombre del bin dice que es de agencias? ('20260916 agencias.avb')."""
+    base = re.sub(r"\.avb$", "", re.split(r"[\\/]+", str(nombre_bin or ""))[-1], flags=re.IGNORECASE)
+    rx = cfg.get("bins_agencia_regex", CONFIG_DEFECTO["bins_agencia_regex"])
+    try:
+        return bool(base and rx and re.search(rx, base, re.IGNORECASE))
+    except re.error as e:
+        LOG.error("bins_agencia_regex no válida (%s); no se aplica", e)
+        return False
+
+
+def es_de_camara(c, cfg):
+    """Material de cámara según el bin: ruta de tarjeta (CONTENTS, PRIVATE, DCIM...), nombre de fichero de cámara
+    o un origen de cámara en config_origen.json (p. ej. los nombres de clip de P2)."""
+    return bool(carpeta_tarjeta(c.get("fichero_origen")) or es_fichero_de_camara(c.get("fichero_origen"), cfg)
+                or str(c.get("origen") or "").startswith("Cámara"))
+
+
 def es_importado(c, cfg):
-    """Fichero importado (agencias, internet, móvil...). Manda la ruta que guarda el bin: si es de una tarjeta de
-    cámara (CONTENTS, PRIVATE, DCIM...) es material de cámara aunque el origen diga 'Fichero importado' (un MXF
-    de P2 importado de la tarjeta); si no, es importado. Sin ruta, lo dice el origen. Agencia, siempre fuera."""
+    """Fichero importado (agencias, internet, móvil...). Agencia, siempre fuera. Material de cámara (es_de_camara),
+    nunca: un MXF de P2 importado de la tarjeta, o un DJI_0012.MP4 copiado a una carpeta del PC antes de importarlo.
+    Si no, con ruta en el bin es importado; sin ruta, lo dice el origen."""
     origen = str(c.get("origen") or "")
     if origen.startswith(tuple(cfg.get("origenes_agencia") or ())):
         return True
+    if es_de_camara(c, cfg):
+        return False
     if c.get("fichero_origen"):
-        return not carpeta_tarjeta(c["fichero_origen"])
+        return True
     return origen.startswith("Fichero importado")
 
 
@@ -737,8 +810,7 @@ def grupos_por_proyecto(clips, cruce, mxf_por_ruta, cfg):
         resto = [c for c in normales if c not in piezas and not excluido(c, cfg)]
         agencias = [c for c in resto if cfg.get("agencias_aparte", True) and prefijos and str(c.get("origen") or "").startswith(prefijos)]
         resto = [c for c in resto if c not in agencias]
-        importados = [c for c in resto if cfg.get("importados_aparte", True) and c.get("fichero_origen")
-                      and not carpeta_tarjeta(c["fichero_origen"])]
+        importados = [c for c in resto if cfg.get("importados_aparte", True) and es_importado(c, cfg)]
         resto = [c for c in resto if c not in importados]
         if resto and cfg.get("partir_por_tarjeta", True):
             tarjetas = partir_por_tarjeta(resto, mxf_por_ruta, cfg)
@@ -922,17 +994,30 @@ def plan_proyecto(clips, mxf_por_ruta, cfg, modo_forzado=None):
             "clips_video": len(con_video), "clips_solo_audio": len(clips) - len(con_video)}
 
 
-def filtros_xdcam(entrelazado):
+# ffmpeg 7.1 toma el color de los fotogramas y no de -color_primaries/-color_trc: sin esto, la cabecera MPEG-2 sale con
+# primarias y transferencia "sin especificar" (lo detectó la ficha técnica en el Windows de GitHub)
+COLOR_BT709 = "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv"
+
+
+def es_1080i25(pista_video):
+    """¿El vídeo ya es 1920x1080 a 25 imágenes/s entrelazado con el campo superior primero (p. ej. el DNxHD 120
+    1080i50 de los discos de China)? Entonces no hace falta separar campos ni volver a entrelazar."""
+    pv = pista_video or {}
+    return (pv.get("ancho"), pv.get("alto")) == (1920, 1080) and abs(fps_num(pv.get("fps")) - 25) < 0.01 and pv.get("field_order") == "tt"
+
+
+def filtros_xdcam(entrelazado, nativo=False):
     """A 1920x1080 25i 16:9 desde cualquier origen: desentrelaza a campos (59,94 o 50 imágenes/s), pasa a 50,
     encaja sin deformar según la relación de aspecto de pantalla (el SD 4:3 queda 1440x1080 con bandas negras),
-    convierte el color de SD (BT.601) a HD (BT.709) y vuelve a entrelazar, primero el campo superior."""
+    convierte el color de SD (BT.601) a HD (BT.709) y vuelve a entrelazar, primero el campo superior.
+    nativo: el origen ya es 1080i25 con el campo superior primero (es_1080i25): solo se recodifica, sin tocar los
+    campos (más rápido y sin la pérdida de separar y volver a juntar)."""
+    if nativo:
+        return ["setfield=tff", "setsar=1", COLOR_BT709]
     f = ["bwdif=mode=send_field:deint=all"] if entrelazado else []
     f += ["fps=50",
           "scale=w='trunc(min(1920,1080*dar)/2)*2':h='trunc(min(1080,1920/dar)/2)*2':flags=lanczos:out_color_matrix=bt709:out_range=tv",
-          "pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black", "setsar=1", "interlace=scan=tff:lowpass=linear", "setfield=tff",
-          # ffmpeg 7.1 toma el color de los fotogramas y no de -color_primaries/-color_trc: sin esto, la cabecera MPEG-2
-          # sale con primarias y transferencia "sin especificar" (lo detectó la ficha técnica en el Windows de GitHub)
-          "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv"]
+          "pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black", "setsar=1", "interlace=scan=tff:lowpass=linear", "setfield=tff", COLOR_BT709]
     return f
 
 
@@ -942,7 +1027,7 @@ def args_video(plan, mxf_video, cfg):
     pv = next((p for p in mxf_video.get("pistas", []) if p["tipo"] == "video"), {})
     if plan["destino"].get("xdcam"):
         entrelazado = (pv.get("field_order") or "progressive") not in ("progressive", "unknown", None)
-        return ["-vf", ",".join(filtros_xdcam(entrelazado)),
+        return ["-vf", ",".join(filtros_xdcam(entrelazado, es_1080i25(pv))),
                 "-c:v", "mpeg2video", "-pix_fmt", "yuv422p", "-profile:v", "0", "-level:v", "2",
                 "-b:v", "50M", "-minrate", "50M", "-maxrate", "50M", "-bufsize", "17825792", "-rc_init_occupancy", "17825792",
                 "-g", "12", "-bf", "2", "-flags", "+ilme+ildct", "-top", "1", "-dc", "10", "-intra_vlc", "1", "-non_linear_quant", "1",
@@ -979,8 +1064,8 @@ def hacer_segmento(clip, idx, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, nomb
     shotlist: lufs, pico, ganancia, aviso_audio. Devuelve (ruta | None, error, comando)."""
     info = {} if info is None else info
     salida = tmp / (nombre or "seg_%05d.mxf" % idx)
-    video = Path(origen) / clip["fichero_video"]
-    audios = [Path(origen) / r for r in clip["ficheros"] if r != clip["fichero_video"]
+    video = ruta_larga(Path(origen) / clip["fichero_video"])
+    audios = [ruta_larga(Path(origen) / r) for r in clip["ficheros"] if r != clip["fichero_video"]
               and any(p["tipo"] == "audio" for p in mxf_por_ruta.get(r, {}).get("pistas", []))]
     n = plan["pistas_audio"]
     enrutado = list(cfg.get("enrutado_audio") or [])
@@ -1264,6 +1349,7 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
                                                                                     None, infos.setdefault(i, {}))
             fila.update(infos.get(i, {}))
             if not seg:
+                comprobar_origen(origen)  # si es que se ha ido el disco, no se sigue haciendo un bruto con huecos
                 if err == TIEMPO_AGOTADO:
                     timeouts.add(c.get("clave"))
                     fila["estado"] = "ERROR (tiempo agotado)"
@@ -1513,6 +1599,7 @@ def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso,
         try:
             if PARAR.is_set():
                 raise Detenido()
+            comprobar_origen(origen)
             if ya_exportado(previos.get(proyecto), len(cs), destino, firma_bruto(cs, cfg)):
                 res = dict(previos[proyecto], reanudado=True)
                 if evento:
@@ -1525,14 +1612,18 @@ def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso,
                                         movidos=g.get("movidos"), quitados=g.get("quitados"), evento=evento)
                 res["reanudado"] = False
             res.update({"proyecto_avid": g["proyecto"], "tipo": g["tipo"], "contenido": g["contenido"]})
-        except Detenido:
+        except Detenido as e:
             faltan = [x["nombre"] for x in grupos[n_proy - 1:]]
-            progreso("Exportación detenida. Terminados: %d de %d brutos. Al relanzar con las mismas carpetas sigue por %s."
-                     % (len(resultados), len(grupos), faltan[0]))
-            LOG.warning("Exportación detenida por el usuario en %s; quedan %d proyectos", faltan[0], len(faltan))
+            perdido = isinstance(e, OrigenPerdido)
+            progreso("%s Terminados: %d de %d brutos. Al relanzar con las mismas carpetas sigue por %s."
+                     % (e if perdido else "Exportación detenida.", len(resultados), len(grupos), faltan[0]))
+            LOG.warning("Exportación %s en %s; quedan %d proyectos", "parada: se ha perdido el disco de origen" if perdido
+                        else "detenida por el usuario", faltan[0], len(faltan))
             # los de una ejecución anterior a los que no se ha llegado se conservan para poder reanudarlos
             with open(ruta_json, "w", encoding="utf-8") as f:
                 json.dump(otros + resultados + [previos[p] for p in faltan if p in previos], f, ensure_ascii=False, indent=1)
+            if perdido:  # que la ventana lo diga claro; lo hecho ya está guardado
+                raise
             return resultados
         resultados.append(res)
         with open(ruta_json, "w", encoding="utf-8") as f:  # tras cada proyecto: un corte no pierde lo ya hecho

@@ -24,6 +24,8 @@ import montaje  # noqa: E402
 SEPT, ABORTO = "15 SEPT CENTROAMERICA", "ABORTO"
 
 
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # la consola de Windows (cp1252) no tiene chino
+
 def preparar(analisis, brutos):
     leer = lambda n: json.loads((Path(analisis) / n).read_text(encoding="utf-8"))
     clips, cruce, mxf = leer("clips.json"), leer("cruce.json"), leer("mxf.json")

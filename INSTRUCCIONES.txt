@@ -146,7 +146,11 @@ clips en orden de fecha y de 2 horas como mucho:
    - .md5: huella del fichero, para comprobar que una copia es idéntica.
    No se incluyen los ficheros importados (agencias, internet, móvil: los que
    el informe marca como "Fichero importado" o de agencia) ni los fundidos,
-   rótulos y efectos renderizados por Avid.
+   rótulos y efectos renderizados por Avid. Lo de un bin que se llame
+   "agencias" (por ejemplo "20260916 agencias.avb") cuenta como agencia.
+   Sí entra el material de cámara propia aunque se copiara al ordenador
+   antes de importarlo (dron DJI_0012, Sony C0380...): el informe lo marca
+   como "Cámara (fichero importado)".
    Convertir a HD es lento: el programa convierte varios clips a la vez,
    pero cuenta con del orden de media hora de ordenador por cada hora de
    material (depende del PC). Con un disco grande, mejor por proyectos con
@@ -177,6 +181,20 @@ Para seguir otro día (o si se cortó por un apagón, un disco que se
 desconectó...): abre el programa con LAS MISMAS carpetas y pulsa
 "Exportar" en la página 3. Usa el análisis ya hecho y los brutos que ya
 estaban terminados no se vuelven a hacer: sigue por donde se quedó.
+
+Si el disco se desconecta o tiene sectores dañados
+--------------------------------------------------
+- Si el disco de Avid se desconecta (cable, concentrador USB, se duerme)
+  mientras exporta, el programa se para solo y lo dice: los brutos
+  terminados se quedan y el que estaba a medias se descarta (nunca deja un
+  bruto con huecos). Vuelve a conectarlo con LA MISMA LETRA y pulsa
+  "Exportar": sigue por donde se quedó. Si se desconecta mientras analiza,
+  hay que volver a analizar.
+- Los ficheros que no se pueden leer (sector dañado, permisos, nombre o
+  ruta imposibles) no paran el programa: salen en un aviso y en una lista
+  al final del informe. Si son muchos y seguidos, el disco puede estar
+  fallando: cópialo cuanto antes.
+- Nombres en chino y rutas muy largas: se leen sin problema.
 
 Si algo falla
 -------------

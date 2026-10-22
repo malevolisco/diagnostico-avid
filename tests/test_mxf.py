@@ -74,6 +74,29 @@ class AcabadoProfesional(unittest.TestCase):
         r = subprocess.run([FFMPEG, "-v", "error", "-i", str(cero), "-f", "null", "-"], capture_output=True)
         self.assertEqual(r.stderr, b"")  # sigue decodificando sin errores
 
+    def test_dnxhd_1080i50_se_recodifica_sin_tocar_los_campos(self):
+        """Como el material de los discos de China (DNxHD 120 1080i50): sale XDCAM conforme sin separar campos."""
+        fuente = self.tmp / "dnxhd.mxf"
+        subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=25:d=2", "-vf", "setfield=tff",
+                        "-c:v", "dnxhd", "-b:v", "120M", "-pix_fmt", "yuv422p", "-flags", "+ildct+ilme", "-top", "1", "-f", "mxf", str(fuente)],
+                       check=True, capture_output=True)
+        r = subprocess.run([FFPROBE, "-v", "error", "-show_streams", "-of", "json", str(fuente)], capture_output=True, check=True)
+        import json
+        s = json.loads(r.stdout)["streams"][0]
+        pista = {"tipo": "video", "ancho": s["width"], "alto": s["height"], "fps": s["r_frame_rate"], "field_order": s.get("field_order")}
+        self.assertTrue(eb.es_1080i25(pista), pista)
+        video = eb.args_video({"modo": "convertir", "destino": {"xdcam": True}}, {"pistas": [pista]}, {"convertir": {}})
+        self.assertNotIn("bwdif", " ".join(video))
+        salida = self.tmp / "xdcam.mxf"
+        raw = self.tmp / "silencio.s24le"
+        raw.write_bytes(b"\x00\x00\x00" * 96000)
+        cmd = [FFMPEG, "-v", "error", "-y", "-i", str(fuente)] + sum((["-f", "s24le", "-ar", "48000", "-ac", "1", "-i", str(raw)] for _ in range(4)), [])
+        cmd += ["-map", "0:v"] + sum((["-map", "%d:a" % i] for i in range(1, 5)), []) + video
+        cmd += ["-c:a", "pcm_s24le", "-t", "2", "-timecode", "00:00:00:00", "-f", "mxf", str(salida)]
+        subprocess.run(cmd, check=True, capture_output=True)
+        ok, texto = mxf_util.ficha_tecnica(FFPROBE, salida, {"pistas": 4, "tc": "00:00:00:00", "duracion": 2.0})
+        self.assertTrue(ok, texto)
+
     def test_ficha_tecnica(self):
         ok, texto = mxf_util.ficha_tecnica(FFPROBE, self.mxf, {"pistas": 4, "tc": "10:00:00:00", "duracion": 2.0, "tc_gop": True})
         self.assertTrue(ok, texto)

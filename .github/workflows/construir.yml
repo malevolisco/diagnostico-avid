@@ -23,9 +23,6 @@ jobs:
       - name: Dependencias
         run: pip install --only-binary ":all:" pyavb openpyxl pyinstaller
 
-      - name: Pruebas unitarias
-        run: python -m unittest discover -s tests -v
-
       - name: ffmpeg 7.1.1 (build fijada de gyan.dev)
         shell: pwsh
         run: |
@@ -37,6 +34,12 @@ jobs:
           Get-ChildItem ffx -Recurse -Include ffmpeg.exe, ffprobe.exe | Copy-Item -Destination bin
           Remove-Item bin/PONER_AQUI_ffmpeg.txt -ErrorAction SilentlyContinue
           & bin/ffmpeg.exe -version | Select-Object -First 1
+
+      - name: Pruebas unitarias (con el ffmpeg fijado en el PATH)
+        shell: pwsh
+        run: |
+          $env:PATH = "$PWD\bin;" + $env:PATH
+          python -m unittest discover -s tests -v
 
       - name: Número de build
         shell: pwsh
@@ -74,16 +77,16 @@ jobs:
         run: |
           $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList '--origen disco_prueba --destino salida4 --brutos brutos_sel --sin-gui --no-abrir --sin-miniaturas --proyectos "NTSC;ABORTO"' -PassThru -Wait -NoNewWindow
           if ($p.ExitCode -ne 0) { Get-Content salida4/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
-          python -c "import json; r = json.load(open('brutos_sel/brutos_resultado.json', encoding='utf-8')); n = sorted(b['proyecto'] for b in r); print(n); assert n == ['ABORTO_2021-09', 'NTSC_2021-09'], n"
+          python -c "import json; r = json.load(open('brutos_sel/brutos_resultado.json', encoding='utf-8')); n = sorted(b['proyecto'] for b in r); print(n); assert n == ['ABORTO SEPTIEMBRE DE 2021', 'NTSC SEPTIEMBRE DE 2021'], n"
 
-      - name: Exportar con un análisis ya hecho y un corte elegido a mano (pantalla de cortes)
+      - name: Exportar con un análisis ya hecho y un montaje hecho a mano (cortar, reordenar, renombrar, quitar)
         shell: pwsh
         run: |
           $a = (Get-ChildItem -Directory salida/Diagnostico_* | Select-Object -First 1).FullName
-          python tests/probar_cortes.py preparar "$a" brutos_cortes
-          $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--usar-analisis `"$a`" --brutos brutos_cortes --proyectos `"15 SEPT CENTROAMERICA`"" -PassThru -Wait -NoNewWindow
-          if ($p.ExitCode -ne 0) { Get-Content brutos_cortes/exportacion.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
-          python tests/probar_cortes.py comprobar brutos_cortes
+          python tests/probar_montaje.py preparar "$a" brutos_montaje
+          $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--usar-analisis `"$a`" --brutos brutos_montaje --proyectos `"15 SEPT CENTROAMERICA;ABORTO`"" -PassThru -Wait -NoNewWindow
+          if ($p.ExitCode -ne 0) { Get-Content brutos_montaje/exportacion.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
+          python tests/probar_montaje.py comprobar brutos_montaje
 
       - name: Exportación con agrupar=proyecto y formato auto (por tarjetas, copia, timecode NTSC drop-frame)
         shell: pwsh

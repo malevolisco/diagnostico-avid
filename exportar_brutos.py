@@ -85,6 +85,8 @@ CONFIG_DEFECTO = {
     "piezas_aparte": True,
     "piezas_regex": "",
     "_piezas_regex": "Van al bruto _PIEZAS los renders de efectos y los clips que se llaman como una secuencia del proyecto (pieza exportada o mixdown). Aquí se puede añadir una expresión regular sobre el nombre del clip, p. ej. (?i)mixdown|emitid",
+    "exportar_piezas": False,
+    "_exportar_piezas": "Los brutos de piezas renderizadas se reparten pero no se exportan (Adrián, oct. 2026: se descartan). true = se exportan. En la ventana manda la casilla de cada bruto",
     "renders_en_piezas": False,
     "_renders_en_piezas": "Los renders de efectos (fundidos, picture-in-picture, rótulos) no son material: false = no entran en ningún bruto | true = van con las piezas",
     "clips_compartidos": "primero",
@@ -414,6 +416,30 @@ def es_importado(c, cfg):
 
 def excluido(c, cfg):
     return bool(cfg.get("excluir_importados", True)) and es_importado(c, cfg)
+
+
+def motivo_descarte(c, cfg):
+    """Por qué un clip no entra en ningún bruto ("efecto de Avid", "agencia", "importado"), o None si entra."""
+    if c.get("render") and not cfg.get("renders_en_piezas", False):
+        return "efecto de Avid"
+    if excluido(c, cfg):
+        return "agencia" if str(c.get("origen") or "").startswith(tuple(cfg.get("origenes_agencia") or ())) else "importado"
+    return None
+
+
+def descartados_por_proyecto(clips, cruce, mxf_por_ruta, cfg):
+    """{proyecto: [(clip, motivo)]} de lo que se queda fuera de los brutos (para la pantalla de montaje), con las mismas
+    reglas que listas_por_proyecto. Un clip en varios proyectos cuenta con el primero, como allí."""
+    salida = defaultdict(list)
+    for c in clips:
+        motivo = motivo_descarte(c, cfg)
+        if not motivo:
+            continue
+        proys = sorted(c.get("proyectos_render" if c.get("render") else "proyectos") or []) or ["SIN_PROYECTO"]
+        salida[proys[0]].append((c, motivo))
+    for lista in salida.values():
+        lista.sort(key=lambda x: orden_cronologico(x[0], mxf_por_ruta))
+    return dict(salida)
 
 
 def grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg, cortes=None):
@@ -1147,7 +1173,7 @@ def _fila_clip(i, proyecto, c, mxf_por_ruta):
 
 def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir=None,
                       etiqueta="", modo_forzado=None, timeouts=None, motivo_reintento=None, base_fichero=None, ordenado=False,
-                      movidos=None, quitados=None):
+                      movidos=None, quitados=None, evento=None):
     """Exporta el bruto de un proyecto. Devuelve el resultado (dict) para brutos_resultado.json.
 
     En modo copia, si un segmento o la unión fallan por algo que no sea tiempo agotado, se repite
@@ -1157,8 +1183,11 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
     timeouts: claves de clips que ya agotaron el tiempo (no se reintentan).
     proyecto es el nombre del bruto (p. ej. "MEXICO_T02_2021-09-15"); base_fichero, el nombre de
     fichero sin prefijo (por defecto, el nombre del bruto saneado). movidos (claves movidas a mano) y quitados (clips
-    quitados del proyecto) vienen de la pantalla de montaje y solo van al shotlist."""
+    quitados del proyecto) vienen de la pantalla de montaje y solo van al shotlist. evento(dict) recibe el avance:
+    {"bruto", "estado": empezando | convirtiendo | uniendo | comprobando | terminado, "clip", "total"}; el de
+    terminado lleva además "resultado" (el dict de brutos_resultado.json)."""
     movidos = set(movidos or ())
+    avisar = (lambda estado, **kw: evento(dict(kw, bruto=proyecto, estado=estado))) if evento else (lambda estado, **kw: None)
     base_fichero = base_fichero or nombre_seguro(proyecto)
     destino = Path(destino)
     timeouts = set(timeouts or ())
@@ -1173,6 +1202,7 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
     if motivo_reintento:
         res["motivo_reintento"] = motivo_reintento
     progreso("Bruto %s: %s (%d clips, modo %s%s)" % (etiqueta, proyecto, len(cs), plan["modo"], ", reintento" if modo_forzado else ""))
+    avisar("empezando", total=len(cs))
 
     # Espacio: estimación conservadora
     bytes_origen = sum(c["bytes"] for c in cs)
@@ -1185,6 +1215,7 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
     if necesario > libre:
         res["estado"] = "SIN ESPACIO: hacen falta ~%.1f GB y hay %.1f GB libres" % (necesario / 1e9, libre / 1e9)
         LOG.error("%s: %s", proyecto, res["estado"])
+        avisar("terminado", resultado=res)
         return res
 
     def reintentar(motivo):
@@ -1193,7 +1224,7 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
         shutil.rmtree(tmp, ignore_errors=True)
         return exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir,
                                  etiqueta, modo_forzado="convertir", timeouts=timeouts, motivo_reintento=motivo, base_fichero=base_fichero,
-                                 ordenado=True, movidos=movidos, quitados=quitados)
+                                 ordenado=True, movidos=movidos, quitados=quitados, evento=evento)
 
     puede_reintentar = plan["modo"] == "copia" and modo_forzado is None
     tmp = destino / ("_tmp_" + base_fichero)
@@ -1228,6 +1259,7 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
                 filas.append(fila)
                 continue
             progreso("  %s: clip %d/%d  %s" % (proyecto, i, len(cs), c["nombre"]))
+            avisar("convirtiendo", clip=i, total=len(cs))
             seg, err, cmd = futuros[i].result() if i in futuros else hacer_segmento(c, i, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg,
                                                                                     None, infos.setdefault(i, {}))
             fila.update(infos.get(i, {}))
@@ -1261,6 +1293,7 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
         acumulado = frames / plan["fps"]
         if segmentos:
             progreso("  %s: uniendo %d clips..." % (proyecto, len(segmentos)))
+            avisar("uniendo")
             uniendo = True
             ok, err, cmd = unir_segmentos(segmentos, salida, ffmpeg, cfg, plan, acumulado)
             if not ok and puede_reintentar and err != TIEMPO_AGOTADO:
@@ -1275,6 +1308,7 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
                 else:
                     res["estado"] = "OK"
                 if res["estado"] == "OK":
+                    avisar("comprobando")
                     acabado_profesional(res, salida, plan, cfg, ffprobe, inicio, acumulado, progreso, proyecto)
                 if cfg.get("verificar_decodificando") and res["estado"] == "OK":
                     progreso("  %s: verificando decodificación completa..." % proyecto)
@@ -1318,6 +1352,7 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
     shutil.rmtree(tmp, ignore_errors=True)
     LOG.info("Bruto %s: %s (%d incluidos, %d fallidos, %.1f s, modo %s%s)", proyecto, res["estado"], res["incluidos"], res["fallidos"],
              res["segundos"], res["modo"], ", reintento" if res["reintento"] else "")
+    avisar("terminado", resultado=res)
     return res
 
 
@@ -1419,14 +1454,16 @@ def grupos_con_montaje(clips, cruce, mxf, mxf_por_ruta, cfg, destino, progreso, 
 
 
 def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir=None, proyectos=None, cortes=None,
-                  montaje=None):
+                  montaje=None, solo_brutos=None, evento=None):
     """Devuelve una lista con el resultado por proyecto (para el informe). brutos_resultado.json se
     reescribe tras cada proyecto, y al relanzar sobre la misma carpeta se saltan los ya terminados.
     Si se pulsa Detener, devuelve los proyectos terminados hasta ese momento (PARAR queda activado).
     proyectos: nombres de los proyectos elegidos (None = todos; "SIN_PROYECTO" = clips sin bin). Los brutos de
     proyectos no elegidos que ya estaban en brutos_resultado.json se conservan, para hacer el disco en varias veces.
     cortes: cortes a mano al estilo antiguo (pruebas); si no se pasan, manda el montaje (montaje.json de la carpeta
-    de brutos, o el que se pase en montaje; un cortes.json antiguo se convierte)."""
+    de brutos, o el que se pase en montaje; un cortes.json antiguo se convierte).
+    solo_brutos: nombres de los brutos marcados en la cola de la ventana (None = todos, salvo los de piezas si
+    exportar_piezas es false). evento: función que recibe el avance de cada bruto (ver exportar_proyecto)."""
     destino = Path(destino)
     destino.mkdir(parents=True, exist_ok=True)
     mxf_por_ruta = {m["ruta"]: m for m in mxf}
@@ -1451,6 +1488,13 @@ def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso,
         elegidos = set(proyectos)
         grupos = [g for g in grupos if cfg.get("agrupar", "proyecto_mes") == "dias" or g["proyecto"] in elegidos]
         LOG.info("Proyectos elegidos (%d): %s", len(elegidos), "; ".join(sorted(elegidos)))
+    if solo_brutos is not None:
+        grupos = [g for g in grupos if g["nombre"] in set(solo_brutos)]
+    elif not cfg.get("exportar_piezas", False):
+        piezas = [g["nombre"] for g in grupos if g["tipo"] == "piezas"]
+        if piezas:
+            LOG.info("Brutos de piezas que no se exportan (exportar_piezas = false): %s", "; ".join(piezas))
+        grupos = [g for g in grupos if g["tipo"] != "piezas"]
     de_esta_vez = {g["nombre"] for g in grupos}
     proyectos_de_esta_vez = {g["proyecto"] for g in grupos}
     # De otras ejecuciones: se conservan los de otros proyectos. Los de estos proyectos que ya no salen (se movieron
@@ -1471,12 +1515,14 @@ def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso,
                 raise Detenido()
             if ya_exportado(previos.get(proyecto), len(cs), destino, firma_bruto(cs, cfg)):
                 res = dict(previos[proyecto], reanudado=True)
+                if evento:
+                    evento({"bruto": proyecto, "estado": "reanudado", "resultado": res})
                 progreso("Bruto %s: %s ya estaba exportado, se salta (reanudado)" % (etiqueta, proyecto))
                 LOG.info("Bruto %s: reanudado (ya exportado en una ejecución anterior)", proyecto)
             else:
                 res = exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir,
                                         etiqueta, base_fichero=g["base"], ordenado=g.get("ordenado", False),
-                                        movidos=g.get("movidos"), quitados=g.get("quitados"))
+                                        movidos=g.get("movidos"), quitados=g.get("quitados"), evento=evento)
                 res["reanudado"] = False
             res.update({"proyecto_avid": g["proyecto"], "tipo": g["tipo"], "contenido": g["contenido"]})
         except Detenido:

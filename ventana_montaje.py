@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-VENTANAS DE MONTAJE Y DE OPCIONES DE EXPORTACIÓN
-================================================
+PÁGINA DE MONTAJE Y OPCIONES AVANZADAS DE EXPORTACIÓN
+=====================================================
 
-- dialogo_montaje: revisar y corregir cada bruto antes de exportar. Visor de fotogramas
-  (1 por segundo, 480x270, sin sonido), línea de tiempo por la que se arrastra, lista de
-  clips y acciones (quitar, mover, cortar, renombrar, deshacer). La lógica está en
-  montaje.py; aquí solo la ventana.
-- dialogo_opciones: panel de opciones de exportación con los valores recomendados, que no
-  deja exportar con un valor no válido.
+- PantallaMontaje: la página "2 · Montaje" de la ventana (interfaz.py). Visor de
+  fotogramas (1 por segundo, 480x270, sin sonido), ficha del clip, línea de tiempo por
+  la que se arrastra, lista de clips y acciones (quitar, mover, cortar, renombrar,
+  deshacer), papelera, clips nuevos y "Fuera del bruto". La lógica está en montaje.py;
+  aquí solo la vista.
+- PanelOpciones / dialogo_opciones: "Opciones avanzadas…" de la página Exportar, con
+  todas las opciones (enrutado, ganancias, prefijo, predeterminados).
 
-Diseño en docs/diseno_montaje_exportacion.md. Necesita Pillow para mostrar los JPEG del
-visor (sin Pillow la ventana funciona, pero sin imagen).
+Diseño en docs/diseno_interfaz.md y docs/diseno_montaje_exportacion.md. Necesita Pillow
+para mostrar los JPEG del visor (sin Pillow la página funciona, pero sin imagen).
 """
 
 import io
@@ -29,7 +30,6 @@ try:
 except Exception:  # pragma: no cover
     PIL_OK = False
 
-AZUL, NARANJA, GRIS, ROJO = "#4a78b5", "#e08a1e", "#9aa3ad", "#c00000"
 VISOR_W, VISOR_H = 480, 270
 
 
@@ -49,148 +49,181 @@ def duracion_visible(c):
 
 
 # ---------------------------------------------------------------------------
-# Pantalla de montaje
+# Página de montaje
 # ---------------------------------------------------------------------------
 
 class PantallaMontaje:
-    def __init__(self, raiz, m, origen, carpeta_visor, ffmpeg, hilos=2, proyectos=None):
+    """Se construye dentro de contenedor (un marco de la ventana). al_cambiar() avisa de que cambió el estado de
+    "cambios sin guardar" (para que la ventana pregunte antes de salir de la página)."""
+
+    def __init__(self, contenedor, m, origen, carpeta_visor, carpeta_brutos, ffmpeg, hilos=2, proyectos=None, al_cambiar=None):
         import tkinter as tk
         from tkinter import ttk
-        self.tk, self.ttk = tk, ttk
-        self.m, self.origen, self.carpeta_visor, self.ffmpeg = m, Path(origen), Path(carpeta_visor), ffmpeg
+        import tema
+        self.tk, self.ttk, self.tema = tk, ttk, tema
+        self.m, self.origen, self.carpeta_visor, self.carpeta_brutos, self.ffmpeg = m, Path(origen), Path(carpeta_visor), carpeta_brutos, ffmpeg
         self.proyectos = [p for p in m.proyectos() if proyectos is None or p in proyectos]
-        self.resultado = None
+        self.al_cambiar = al_cambiar
         self.cambios = False
-        self.p, self.k, self.t = None, 0, 0.0  # proyecto, bruto, segundo del cursor dentro del bruto
-        self.zoom, self.reproduciendo = 1.0, False
+        self.bloqueada = False
+        self.p, self.k, self.t = None, 0, 0.0  # proyecto, bruto, segundo del cabezal dentro del bruto
+        self.zoom, self.reproduciendo, self.vivo = 1.0, False, True
         self.listos, self.pedidos, self.jpegs, self.fotos = {}, set(), {}, {}
+        self.claves_tv = []
         self.cola = queue.Queue()
         self.pool = ThreadPoolExecutor(max(1, hilos)) if ffmpeg else None
 
-        v = self.v = tk.Toplevel(raiz)
-        v.title("Montaje de los brutos")
-        v.geometry("1260x840")
-        v.minsize(1000, 700)
-        v.transient(raiz)
-        arriba = ttk.Frame(v, padding=(8, 8, 8, 0))
-        arriba.pack(fill="x")
-        ttk.Label(arriba, text="Proyecto:").pack(side="left")
-        self.cb_p = ttk.Combobox(arriba, state="readonly", width=60)
-        self.cb_p.pack(side="left", padx=6)
-        self.lbl_p = ttk.Label(arriba, text="")
+        f = self.marco = ttk.Frame(contenedor, style="Fondo.TFrame")
+        f.pack(fill="both", expand=True)
+
+        cab = ttk.Frame(f, style="Cabecera.TFrame", padding=(16, 8))
+        cab.pack(fill="x")
+        ttk.Label(cab, text="Proyecto", style="Tarjeta.Suave.TLabel").pack(side="left")
+        self.cb_p = ttk.Combobox(cab, state="readonly", width=56)
+        self.cb_p.pack(side="left", padx=8)
+        self.lbl_p = ttk.Label(cab, text="", style="Tarjeta.Suave.TLabel")
         self.lbl_p.pack(side="left", padx=6)
+        self.bt_guardar = ttk.Button(cab, text="Guardar", style="Principal.TButton", command=self.guardar)
+        self.bt_guardar.pack(side="right")
+        self.lbl_guardado = ttk.Label(cab, text="", style="Tarjeta.Suave.TLabel")
+        self.lbl_guardado.pack(side="right", padx=10)
 
-        cuerpo = ttk.Frame(v, padding=8)
+        cuerpo = ttk.Frame(f, style="Fondo.TFrame")
         cuerpo.pack(fill="both", expand=True)
-        izq = ttk.Frame(cuerpo, width=340)
+
+        izq = ttk.Frame(cuerpo, style="Panel.TFrame", padding=(12, 10))
         izq.pack(side="left", fill="y")
-        der = ttk.Frame(cuerpo)
-        der.pack(side="left", fill="both", expand=True, padx=(8, 0))
+        ttk.Label(izq, text="BRUTOS", style="Panel.Seccion.TLabel").pack(anchor="w")
+        self.lb_b = tema.lista(izq, width=34, height=8)
+        self.lb_b.pack(fill="both", expand=True, pady=(4, 4))
+        fila = ttk.Frame(izq, style="Panel.TFrame")
+        fila.pack(fill="x")
+        ttk.Button(fila, text="Renombrar…", style="Accion.TButton", command=self.renombrar).pack(side="left")
+        ttk.Button(fila, text="Orden automático", style="Fantasma.TButton", command=self.automatico).pack(side="right")
+        self.lbl_q = ttk.Label(izq, text="PAPELERA", style="Panel.Seccion.TLabel")
+        self.lbl_q.pack(anchor="w", pady=(12, 0))
+        self.lb_q = tema.lista(izq, width=34, height=3, selectmode="extended")
+        self.lb_q.pack(fill="x", pady=(4, 4))
+        ttk.Button(izq, text="Recuperar los marcados", style="Accion.TButton", command=self.recuperar).pack(anchor="w")
+        self.marco_n = ttk.Frame(izq, style="Panel.TFrame")
+        ttk.Label(self.marco_n, text="CLIPS NUEVOS SIN COLOCAR", style="Panel.Aviso.TLabel").pack(anchor="w")
+        self.lb_n = tema.lista(self.marco_n, width=34, height=3, selectmode="extended")
+        self.lb_n.pack(fill="x", pady=(4, 4))
+        ttk.Button(self.marco_n, text="Colocar por fecha", style="Accion.TButton", command=self.colocar).pack(anchor="w")
+        self.lbl_f = ttk.Label(izq, text="FUERA DEL BRUTO", style="Panel.Seccion.TLabel")
+        self.lbl_f.pack(anchor="w", pady=(12, 0))
+        self.lb_f = tema.lista(izq, width=34, height=4)
+        self.lb_f.pack(fill="x", pady=(4, 0))
+        ttk.Label(izq, text="Efectos de Avid, agencias e importados: no entran en ningún bruto.", style="Panel.Suave.TLabel",
+                  wraplength=290).pack(anchor="w", pady=(4, 0))
 
-        ttk.Label(izq, text="Brutos (en rojo, los que pasan del máximo; ✎ nombre a mano):").pack(anchor="w")
-        self.lb_b = tk.Listbox(izq, width=42, height=16, exportselection=False, font=("Segoe UI", 10))
-        self.lb_b.pack(fill="both", expand=True)
-        ttk.Button(izq, text="Renombrar bruto...", command=self.renombrar).pack(fill="x", pady=(4, 0))
-        ttk.Button(izq, text="Volver al orden automático (todo el proyecto)", command=self.automatico).pack(fill="x", pady=(4, 0))
-        ttk.Label(izq, text="Papelera del proyecto (no se exportan):").pack(anchor="w", pady=(10, 0))
-        self.lb_q = tk.Listbox(izq, width=42, height=6, selectmode="extended", exportselection=False)
-        self.lb_q.pack(fill="x")
-        ttk.Button(izq, text="Recuperar los marcados", command=self.recuperar).pack(fill="x", pady=(4, 0))
-        self.lbl_n = ttk.Label(izq, text="", foreground=ROJO)
-        self.lbl_n.pack(anchor="w", pady=(10, 0))
-        self.lb_n = tk.Listbox(izq, width=42, height=4, selectmode="extended", exportselection=False)
-        self.bt_n = ttk.Button(izq, text="Colocar por fecha los marcados", command=self.colocar)
-
-        arriba_d = ttk.Frame(der)
-        arriba_d.pack(fill="x")
-        self.visor = tk.Canvas(arriba_d, width=VISOR_W, height=VISOR_H, bg="#111", highlightthickness=0)
-        self.visor.pack(side="left")
-        info = ttk.Frame(arriba_d, padding=(10, 0))
-        info.pack(side="left", fill="both", expand=True)
-        self.lbl_clip = ttk.Label(info, text="", font=("Segoe UI", 11, "bold"), wraplength=330, justify="left")
-        self.lbl_clip.pack(anchor="w")
-        self.lbl_tc = ttk.Label(info, text="", font=("Consolas", 12))
-        self.lbl_tc.pack(anchor="w", pady=(6, 0))
-        self.lbl_bruto = ttk.Label(info, text="", wraplength=330, justify="left")
-        self.lbl_bruto.pack(anchor="w", pady=(6, 0))
-        ctrl = ttk.Frame(info)
-        ctrl.pack(anchor="w", pady=(12, 0))
-        self.bt_play = ttk.Button(ctrl, text="▶ Avance", command=self.reproducir)
-        self.bt_play.pack(side="left")
-        self.cb_vel = ttk.Combobox(ctrl, state="readonly", width=12, values=["x1", "x10", "x60 (1 min/s)"])
+        centro = ttk.Frame(cuerpo, style="Fondo.TFrame")
+        centro.pack(side="left", fill="both", expand=True)
+        arriba = ttk.Frame(centro, style="Fondo.TFrame")
+        arriba.pack(fill="x")
+        ficha = ttk.Frame(arriba, style="Panel.TFrame", padding=(14, 12))
+        ficha.pack(side="right", fill="y")
+        visor_caja = ttk.Frame(arriba, style="Fondo.TFrame", padding=(16, 10, 16, 6))
+        visor_caja.pack(side="left", fill="both", expand=True)
+        self.visor = tk.Canvas(visor_caja, width=VISOR_W, height=VISOR_H, bg="#0b0b0c", highlightthickness=1, highlightbackground=tema.BORDE)
+        self.visor.pack()
+        ctrl = ttk.Frame(visor_caja, style="Fondo.TFrame")
+        ctrl.pack(pady=(8, 0))
+        ttk.Button(ctrl, text="◀◀", width=4, command=lambda: self.mover_cursor(-10)).pack(side="left")
+        self.bt_play = ttk.Button(ctrl, text="▶  Avance", style="Elegido.TButton", command=self.reproducir)
+        self.bt_play.pack(side="left", padx=4)
+        ttk.Button(ctrl, text="▶▶", width=4, command=lambda: self.mover_cursor(10)).pack(side="left")
+        self.lbl_tc = ttk.Label(ctrl, text="00:00:00:00", style="TC.TLabel")
+        self.lbl_tc.pack(side="left", padx=(16, 8))
+        self.lbl_total = ttk.Label(ctrl, text="", style="Suave.TLabel")
+        self.lbl_total.pack(side="left")
+        self.cb_vel = ttk.Combobox(ctrl, state="readonly", width=5, values=["x1", "x10", "x60"])
         self.cb_vel.current(1)
-        self.cb_vel.pack(side="left", padx=6)
-        ctrl2 = ttk.Frame(info)
-        ctrl2.pack(anchor="w", pady=(6, 0))
-        ttk.Label(ctrl2, text="Línea de tiempo:").pack(side="left")
-        ttk.Button(ctrl2, text="Zoom +", command=lambda: self.ampliar(2)).pack(side="left", padx=(6, 0))
-        ttk.Button(ctrl2, text="Zoom −", command=lambda: self.ampliar(0.5)).pack(side="left", padx=4)
-        self.lbl_foto = ttk.Label(info, text="", foreground="#555")
-        self.lbl_foto.pack(anchor="w", pady=(10, 0))
+        self.cb_vel.pack(side="left", padx=(12, 0))
 
-        lt = ttk.Frame(der)
-        lt.pack(fill="x", pady=(8, 0))
-        self.linea = tk.Canvas(lt, height=74, bg="#f4f5f7", highlightthickness=1, highlightbackground="#ccc")
+        ttk.Label(ficha, text="CLIP", style="Panel.Seccion.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
+        self.lbl_nombre = ttk.Label(ficha, text="", style="Panel.Grande.TLabel", wraplength=270)
+        self.lbl_nombre.grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 8))
+        self.ficha = {}
+        for i, (clave, texto) in enumerate((("fecha", "Grabado"), ("tc", "TC original"), ("dur", "Duración"), ("formato", "Formato"),
+                                            ("audio", "Audio"), ("origen", "Origen"), ("montaje", "Montaje")), 2):
+            ttk.Label(ficha, text=texto, style="Panel.Suave.TLabel").grid(row=i, column=0, sticky="nw", pady=2)
+            self.ficha[clave] = ttk.Label(ficha, text="", style="Panel.TLabel", wraplength=170)
+            self.ficha[clave].grid(row=i, column=1, sticky="w", padx=(10, 0), pady=2)
+        self.lbl_bruto = ttk.Label(ficha, text="", style="Panel.Suave.TLabel", wraplength=270)
+        self.lbl_bruto.grid(row=20, column=0, columnspan=2, sticky="w", pady=(12, 0))
+
+        acc = ttk.Frame(centro, style="Panel.TFrame", padding=(12, 6))
+        acc.pack(fill="x")
+        self.botones = []
+        for texto, orden in (("Quitar", self.quitar), ("Subir", lambda: self.accion("subir")), ("Bajar", lambda: self.accion("bajar")),
+                             ("← Bruto anterior", lambda: self.accion("mover", -1)), ("Bruto siguiente →", lambda: self.accion("mover", 1)),
+                             ("Cortar aquí", self.cortar), ("Deshacer", self.deshacer)):
+            b = ttk.Button(acc, text=texto, style="Accion.TButton", command=orden)
+            b.pack(side="left", padx=(0, 4))
+            self.botones.append(b)
+        ttk.Button(acc, text="+", width=3, style="Fantasma.TButton", command=lambda: self.ampliar(2)).pack(side="right")
+        ttk.Button(acc, text="−", width=3, style="Fantasma.TButton", command=lambda: self.ampliar(0.5)).pack(side="right", padx=4)
+        ttk.Label(acc, text="Zoom", style="Panel.Suave.TLabel").pack(side="right", padx=4)
+
+        lt = ttk.Frame(centro, style="Fondo.TFrame", padding=(12, 6, 12, 0))
+        lt.pack(fill="x")
+        self.linea = tk.Canvas(lt, height=90, bg=tema.CAMPO, highlightthickness=1, highlightbackground=tema.BORDE)
         self.linea.pack(fill="x")
         self.sb_linea = ttk.Scrollbar(lt, orient="horizontal", command=self.linea.xview)
         self.sb_linea.pack(fill="x")
         self.linea.configure(xscrollcommand=self.sb_linea.set)
+        leyenda = ttk.Frame(lt, style="Fondo.TFrame")
+        leyenda.pack(fill="x", pady=(4, 0))
+        for color, texto in ((tema.CLIP, "en orden cronológico"), (tema.ACENTO, "movido a mano")):
+            tk.Frame(leyenda, bg=color, width=10, height=10).pack(side="left", padx=(0, 4))
+            ttk.Label(leyenda, text=texto, style="Suave.TLabel").pack(side="left", padx=(0, 14))
+        ttk.Label(leyenda, text="Clic para ir · Ctrl+clic marca varios · flechas: 1 segundo", style="Suave.TLabel").pack(side="left")
+        self.lbl_foto = ttk.Label(leyenda, text="", style="Suave.TLabel")
+        self.lbl_foto.pack(side="right")
 
-        tabla = ttk.Frame(der)
-        tabla.pack(fill="both", expand=True, pady=(6, 0))
+        tabla = ttk.Frame(centro, style="Fondo.TFrame", padding=(12, 4, 12, 8))
+        tabla.pack(fill="both", expand=True)
         cols = ("n", "clip", "fecha", "dur", "origen", "montaje")
-        self.tv = ttk.Treeview(tabla, columns=cols, show="headings", selectmode="extended", height=10)
-        for c, t, w in zip(cols, ("Nº", "Clip", "Fecha y hora", "Duración", "Origen", "Montaje"), (40, 250, 150, 80, 170, 110)):
+        self.tv = ttk.Treeview(tabla, columns=cols, show="headings", selectmode="extended", height=5)
+        for c, t, w in zip(cols, ("Nº", "CLIP", "FECHA Y HORA", "DURACIÓN", "ORIGEN", "MONTAJE"), (44, 240, 150, 90, 170, 120)):
             self.tv.heading(c, text=t)
             self.tv.column(c, width=w, anchor="w", stretch=c == "clip")
-        self.tv.tag_configure("movido", foreground=NARANJA)
-        self.tv.tag_configure("audio", foreground=GRIS)
+        self.tv.tag_configure("movido", foreground=tema.ACENTO)
+        self.tv.tag_configure("audio", foreground=tema.SUAVE)
         sb = ttk.Scrollbar(tabla, orient="vertical", command=self.tv.yview)
         self.tv.configure(yscrollcommand=sb.set)
         self.tv.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-        acc = ttk.Frame(der)
-        acc.pack(fill="x", pady=(6, 0))
-        for texto, orden in (("Quitar", self.quitar), ("Subir", lambda: self.accion("subir")), ("Bajar", lambda: self.accion("bajar")),
-                             ("← Al bruto anterior", lambda: self.accion("mover", -1)), ("Al bruto siguiente →", lambda: self.accion("mover", 1)),
-                             ("Cortar aquí", self.cortar), ("Deshacer (Ctrl+Z)", self.deshacer)):
-            ttk.Button(acc, text=texto, command=orden).pack(side="left", padx=(0, 4))
-
-        pie = ttk.Frame(v, padding=8)
-        pie.pack(fill="x")
-        self.lbl_estado = ttk.Label(pie, text="")
-        self.lbl_estado.pack(side="left")
-        ttk.Button(pie, text="Guardar y exportar...", command=lambda: self.cerrar("exportar")).pack(side="right")
-        ttk.Button(pie, text="Guardar", command=lambda: self.cerrar("guardado")).pack(side="right", padx=6)
-        ttk.Button(pie, text="Cancelar", command=lambda: self.cerrar(None)).pack(side="right")
-
         self.cb_p.bind("<<ComboboxSelected>>", lambda e: self.elegir_proyecto(self.proyectos[self.cb_p.current()]))
         self.lb_b.bind("<<ListboxSelect>>", self.al_elegir_bruto)
         self.tv.bind("<<TreeviewSelect>>", self.al_elegir_clip)
         self.linea.bind("<Button-1>", self.al_pulsar_linea)
-        self.linea.bind("<B1-Motion>", self.al_pulsar_linea)
+        self.linea.bind("<Control-Button-1>", lambda e: self.al_pulsar_linea(e, sumar=True))
+        self.linea.bind("<B1-Motion>", self.al_arrastrar_linea)
         self.linea.bind("<Configure>", lambda e: self.pintar_linea())
-        v.bind("<Control-z>", lambda e: self.deshacer())
-        v.bind("<Left>", lambda e: self.mover_cursor(-1))
-        v.bind("<Right>", lambda e: self.mover_cursor(1))
-        v.protocol("WM_DELETE_WINDOW", lambda: self.cerrar(None))
+        top = f.winfo_toplevel()
+        self.atajos = [("<Control-z>", lambda e: self.deshacer()), ("<Control-s>", lambda e: self.guardar() if self.activa() else None),
+                       ("<Left>", lambda e: self.mover_cursor(-1)), ("<Right>", lambda e: self.mover_cursor(1))]
+        for tecla, accion in self.atajos:
+            top.bind(tecla, accion, add="+")
         if not PIL_OK:
             self.lbl_foto.configure(text="Falta Pillow: el visor no puede mostrar imágenes.")
-        if not ffmpeg:
+        elif not ffmpeg:
             self.lbl_foto.configure(text="Sin ffmpeg: no se pueden sacar los fotogramas del visor.")
         if m.avisos:
-            self.lbl_estado.configure(text="Avisos: " + " · ".join(m.avisos), foreground=ROJO)
+            self.lbl_guardado.configure(text="Avisos: " + " · ".join(m.avisos), style="Tarjeta.Aviso.TLabel")
         self.pintar_proyectos()
         if self.proyectos:
             self.cb_p.current(0)
             self.elegir_proyecto(self.proyectos[0])
-        v.after(150, self.vaciar_cola)
+        f.after(150, self.vaciar_cola)
 
     # --- datos -------------------------------------------------------------------------------------------------
 
     def bruto(self):
-        bs = self.m.brutos(self.p)
+        bs = self.m.brutos(self.p) if self.p else []
         return bs[min(self.k, len(bs) - 1)] if bs else None
 
     def tramos(self):
@@ -204,7 +237,11 @@ class PantallaMontaje:
 
     def seleccion(self):
         """Claves de los clips marcados en la lista, en orden."""
-        return [self.claves_tv[int(i)] for i in self.tv.selection()]
+        return [self.claves_tv[int(i)] for i in self.tv.selection() if int(i) < len(self.claves_tv)]
+
+    def activa(self):
+        """Si la página está a la vista y se puede tocar (para los atajos de teclado de la ventana)."""
+        return self.vivo and not self.bloqueada and self.marco.winfo_ismapped()
 
     # --- pintar ------------------------------------------------------------------------------------------------
 
@@ -221,31 +258,36 @@ class PantallaMontaje:
             self.cb_p.current(self.proyectos.index(self.p))
 
     def pintar_brutos(self):
+        tema = self.tema
         self.lb_b.delete(0, "end")
-        for n, b in enumerate(self.m.brutos(self.p), 1):
-            self.lb_b.insert("end", "%d. %s%s · %s · %d clips" % (n, "✎ " if b["manual"] else "", b["nombre"], fmt_h(b["segundos"]), len(b["clips"])))
+        for b in self.m.brutos(self.p):
+            self.lb_b.insert("end", "%s%s   %s · %d clips%s" % ("✎ " if b["manual"] else "", b["nombre"], fmt_h(b["segundos"]), len(b["clips"]),
+                                                                "  ·  PASA DE 2 H" if b["largo"] else ""))
             if b["largo"]:
-                self.lb_b.itemconfig("end", foreground=ROJO)
+                self.lb_b.itemconfig("end", foreground=tema.AVISO)
         if self.lb_b.size():
             self.k = min(self.k, self.lb_b.size() - 1)
             self.lb_b.selection_clear(0, "end")
             self.lb_b.selection_set(self.k)
             self.lb_b.see(self.k)
+        papelera = self.m.papelera(self.p)
+        self.lbl_q.configure(text="PAPELERA · %d" % len(papelera))
         self.lb_q.delete(0, "end")
-        for c in self.m.papelera(self.p):
+        for c in papelera:
             self.lb_q.insert("end", c["nombre"])
         nuevos = self.m.nuevos(self.p)
         self.lb_n.delete(0, "end")
         for c in nuevos:
             self.lb_n.insert("end", c["nombre"])
         if nuevos:
-            self.lbl_n.configure(text="Clips nuevos sin colocar (no se exportan):")
-            self.lb_n.pack(fill="x")
-            self.bt_n.pack(fill="x", pady=(4, 0))
+            self.marco_n.pack(fill="x", pady=(12, 0), before=self.lbl_f)
         else:
-            self.lbl_n.configure(text="")
-            self.lb_n.pack_forget()
-            self.bt_n.pack_forget()
+            self.marco_n.pack_forget()
+        fuera = self.m.fuera_del_bruto(self.p)
+        self.lbl_f.configure(text="FUERA DEL BRUTO · %d" % len(fuera))
+        self.lb_f.delete(0, "end")
+        for c, motivo in fuera:
+            self.lb_f.insert("end", "%s — %s" % (c["nombre"], motivo))
         movidos = sum(1 for b in self.m.brutos(self.p) for c in b["clips"] if c.get("clave") in self.m.movidos(self.p))
         self.lbl_p.configure(text="%s%s" % ("Montaje a mano" if self.m.tocado(self.p) else "Reparto automático",
                                             " · %d clips movidos" % movidos if movidos else ""))
@@ -273,21 +315,28 @@ class PantallaMontaje:
         return ancho * self.zoom / total, total
 
     def pintar_linea(self):
-        cv = self.linea
+        tema, cv = self.tema, self.linea
         cv.delete("all")
         pps, total = self.escala()
         movidos = self.m.movidos(self.p) if self.p else set()
-        sel = set(self.seleccion()) if hasattr(self, "claves_tv") else set()
+        sel = set(self.seleccion())
+        paso = max(1, int(total / 6))
+        for s in range(0, int(total) + 1, paso):  # regla de timecodes
+            x = 2 + s * pps
+            cv.create_line(x, 0, x, 8, fill=tema.SUAVE)
+            cv.create_text(x + 3, 2, text=fmt_tc(s), anchor="nw", fill=tema.SUAVE, font=(tema.MONO, 8))
         for c, t, d in self.tramos():
             x0, x1 = 2 + t * pps, 2 + (t + d) * pps
-            color = GRIS if not c.get("fichero_video") else NARANJA if c.get("clave") in movidos else AZUL
-            cv.create_rectangle(x0, 10, max(x1, x0 + 2), 58, fill=color, outline="#000" if c.get("clave") in sel else "#fff",
-                                width=2 if c.get("clave") in sel else 1)
+            color = tema.SUAVE if not c.get("fichero_video") else tema.ACENTO if c.get("clave") in movidos else tema.CLIP
+            marcado = c.get("clave") in sel
+            cv.create_rectangle(x0, 22, max(x1, x0 + 2), 84, fill=color, outline="#ffffff" if marcado else tema.CAMPO, width=2 if marcado else 1)
             if x1 - x0 > 50:
-                cv.create_text(x0 + 4, 34, text=c["nombre"], anchor="w", fill="#fff", font=("Segoe UI", 8), width=x1 - x0 - 6)
+                cv.create_text(x0 + 5, 30, text=c["nombre"], anchor="nw", fill=tema.SOBRE_ACENTO if color == tema.ACENTO else "#ffffff",
+                               font=(tema.LETRA, 8), width=x1 - x0 - 8)
         x = 2 + self.t * pps
-        cv.create_line(x, 2, x, 70, fill=ROJO, width=2)
-        cv.configure(scrollregion=(0, 0, 4 + total * pps, 74))
+        cv.create_line(x, 16, x, 90, fill=tema.CABEZAL, width=2)
+        cv.create_polygon(x - 6, 14, x + 6, 14, x, 22, fill=tema.CABEZAL, outline="")
+        cv.configure(scrollregion=(0, 0, 4 + total * pps, 90))
 
     def donde_cursor(self):
         tramos = self.tramos()
@@ -297,24 +346,37 @@ class PantallaMontaje:
         return None, None, 0
 
     def pintar_visor(self):
+        tema = self.tema
         self.visor.delete("all")
         n, c, dentro = self.donde_cursor()
         b = self.bruto()
         total = sum(d for _, _, d in self.tramos())
-        self.lbl_tc.configure(text="TC en el bruto %s\nde %s en total" % (fmt_tc(self.t), fmt_tc(total)))
+        self.lbl_tc.configure(text=fmt_tc(self.t))
+        self.lbl_total.configure(text="de %s" % fmt_tc(total))
         if b:
-            self.lbl_bruto.configure(text="Bruto %d: %s · %s%s" % (self.k + 1, b["nombre"], fmt_h(b["segundos"]),
-                                                                   " · PASA DEL MÁXIMO" if b["largo"] else ""),
-                                     foreground=ROJO if b["largo"] else "#000")
+            self.lbl_bruto.configure(text="Bruto %d: %s · %s%s" % (self.k + 1, b["nombre"], fmt_h(b["segundos"]), " · PASA DE 2 H" if b["largo"] else ""),
+                                     style="Panel.Aviso.TLabel" if b["largo"] else "Panel.Suave.TLabel")
+        else:
+            self.lbl_bruto.configure(text="")
         if c is None:
-            self.lbl_clip.configure(text="")
+            self.lbl_nombre.configure(text="")
+            for w in self.ficha.values():
+                w.configure(text="")
+            self.visor.create_text(VISOR_W / 2, VISOR_H / 2, fill=tema.SUAVE, text="Sin clips en este bruto")
             return
         f = self.m.fecha(c)
-        self.lbl_clip.configure(text="%d. %s\n%s\nTC original %s" % (n + 1, c["nombre"], f.strftime("%d/%m/%Y %H:%M:%S") if f else "sin fecha",
-                                                                      c.get("timecode") or "—"))
+        movido = c.get("clave") in self.m.movidos(self.p)
+        valores = {"fecha": f.strftime("%d/%m/%Y %H:%M:%S") if f else "sin fecha", "tc": c.get("timecode") or "—",
+                   "dur": fmt_h(duracion_visible(c)),
+                   "formato": " · ".join(str(x) for x in (c.get("codec_video"), c.get("resolucion")) if x) or "—",
+                   "audio": "%s pistas" % (c.get("num_audio") or 0), "origen": c.get("origen") or "—",
+                   "montaje": "movido a mano" if movido else "automático"}
+        self.lbl_nombre.configure(text="%d. %s" % (n + 1, c["nombre"]))
+        for k, w in self.ficha.items():
+            w.configure(text=valores[k], style="Panel.Acento.TLabel" if k == "montaje" and movido else "Panel.TLabel")
         ruta = self.listos.get(c.get("clave"))
         if not ruta or not PIL_OK:
-            self.visor.create_text(VISOR_W / 2, VISOR_H / 2, fill="#bbb", text="Preparando fotogramas..." if self.ffmpeg and PIL_OK else "Sin imagen")
+            self.visor.create_text(VISOR_W / 2, VISOR_H / 2, fill=tema.SUAVE, text="Preparando fotogramas…" if self.ffmpeg and PIL_OK else "Sin imagen")
             return
         jpgs = self.jpegs.get(c.get("clave"))
         if jpgs is None:
@@ -322,13 +384,13 @@ class PantallaMontaje:
             if len(self.jpegs) > 30:
                 self.jpegs.pop(next(iter(self.jpegs)))
         if not jpgs:
-            self.visor.create_text(VISOR_W / 2, VISOR_H / 2, fill="#bbb", text="Sin fotogramas")
+            self.visor.create_text(VISOR_W / 2, VISOR_H / 2, fill=tema.SUAVE, text="Sin fotogramas")
             return
         i = min(int(dentro), len(jpgs) - 1)
         clave = (c.get("clave"), i)
         foto = self.fotos.get(clave)
         if foto is None:
-            foto = self.fotos[clave] = ImageTk.PhotoImage(Image.open(io.BytesIO(jpgs[i])), master=self.v)
+            foto = self.fotos[clave] = ImageTk.PhotoImage(Image.open(io.BytesIO(jpgs[i])), master=self.marco)
             if len(self.fotos) > 64:
                 self.fotos.pop(next(iter(self.fotos)))
         self.visor.create_image(0, 0, image=foto, anchor="nw")
@@ -365,9 +427,11 @@ class PantallaMontaje:
         cs = [c for c, _, _ in self.tramos() if c.get("fichero_video")]
         hechos = sum(1 for c in cs if c.get("clave") in self.listos)
         if PIL_OK and self.ffmpeg:
-            self.lbl_foto.configure(text="Fotogramas de este bruto: %d de %d clips%s" % (hechos, len(cs), "" if hechos == len(cs) else " (se puede ir mirando)"))
+            self.lbl_foto.configure(text="Fotogramas: %d de %d clips%s" % (hechos, len(cs), "" if hechos == len(cs) else " (se puede ir mirando)"))
 
     def vaciar_cola(self):
+        if not self.vivo:
+            return
         hubo = False
         try:
             while True:
@@ -380,8 +444,7 @@ class PantallaMontaje:
         if hubo:
             self.estado_fotogramas()
             self.pintar_visor()
-        if self.v.winfo_exists():
-            self.v.after(200, self.vaciar_cola)
+        self.marco.after(200, self.vaciar_cola)
 
     # --- eventos -----------------------------------------------------------------------------------------------
 
@@ -405,16 +468,31 @@ class PantallaMontaje:
             self.pintar_visor()
         self.pintar_linea()
 
-    def al_pulsar_linea(self, e):
+    def al_pulsar_linea(self, e, sumar=False):
         pps, total = self.escala()
         self.t = max(0.0, min(total, (self.linea.canvasx(e.x) - 2) / pps))
         n, _, _ = self.donde_cursor()
+        if n is not None:
+            if not sumar:
+                self.tv.selection_set(str(n))
+            elif str(n) in self.tv.selection():
+                self.tv.selection_remove(str(n))
+            else:
+                self.tv.selection_add(str(n))
+            self.tv.see(str(n))
         self.pintar_linea()
         self.pintar_visor()
-        if n is not None:
-            self.tv.see(str(n))
+        return "break"
+
+    def al_arrastrar_linea(self, e):
+        pps, total = self.escala()
+        self.t = max(0.0, min(total, (self.linea.canvasx(e.x) - 2) / pps))
+        self.pintar_linea()
+        self.pintar_visor()
 
     def mover_cursor(self, segundos):
+        if not self.vivo or not self.marco.winfo_ismapped():
+            return
         total = sum(d for _, _, d in self.tramos())
         self.t = max(0.0, min(total, self.t + segundos))
         self.pintar_linea()
@@ -429,14 +507,14 @@ class PantallaMontaje:
 
     def reproducir(self):
         self.reproduciendo = not self.reproduciendo
-        self.bt_play.configure(text="⏸ Parar" if self.reproduciendo else "▶ Avance")
+        self.bt_play.configure(text="⏸  Parar" if self.reproduciendo else "▶  Avance")
         if self.reproduciendo:
             self.paso()
 
     def paso(self):
-        if not self.reproduciendo or not self.v.winfo_exists():
+        if not self.reproduciendo or not self.vivo:
             return
-        vel = {0: 1, 1: 10, 2: 60}[self.cb_vel.current()]
+        vel = (1, 10, 60)[max(0, self.cb_vel.current())]
         total = sum(d for _, _, d in self.tramos())
         self.t += vel * 0.2
         if self.t >= total:
@@ -445,19 +523,40 @@ class PantallaMontaje:
         self.pintar_linea()
         self.pintar_visor()
         if self.reproduciendo:
-            self.v.after(200, self.paso)
+            self.marco.after(200, self.paso)
 
     # --- acciones ----------------------------------------------------------------------------------------------
 
+    def bloquear(self, si):
+        """Mientras se analiza o se exporta: se puede mirar, pero no cambiar el montaje."""
+        self.bloqueada = si
+        for b in self.botones + [self.bt_guardar]:
+            b.state(["disabled"] if si else ["!disabled"])
+        if si:
+            self.lbl_guardado.configure(text="Trabajando…: el montaje no se puede cambiar ahora", style="Tarjeta.Acento.TLabel")
+        else:
+            self.lbl_guardado.configure(text="Cambios sin guardar" if self.cambios else "", style="Tarjeta.Acento.TLabel")
+
+    def permitido(self):
+        if self.bloqueada:
+            from tkinter import messagebox
+            messagebox.showinfo("Trabajando", "Espera a que termine el análisis o la exportación para cambiar el montaje.", parent=self.marco)
+        return not self.bloqueada
+
     def hecho(self, mantener=()):
         self.cambios = True
+        self.lbl_guardado.configure(text="Cambios sin guardar", style="Tarjeta.Acento.TLabel")
+        if self.al_cambiar:
+            self.al_cambiar()
         self.refrescar(mantener)
 
     def sin_seleccion(self):
         from tkinter import messagebox
-        messagebox.showinfo("Elige clips", "Marca uno o varios clips en la lista (Ctrl o Mayús para varios).", parent=self.v)
+        messagebox.showinfo("Elige clips", "Marca uno o varios clips en la lista o en la línea de tiempo (Ctrl para varios).", parent=self.marco)
 
     def quitar(self):
+        if not self.permitido():
+            return
         sel = self.seleccion()
         if not sel:
             return self.sin_seleccion()
@@ -465,93 +564,100 @@ class PantallaMontaje:
         self.hecho()
 
     def accion(self, que, delta=None):
+        if not self.permitido():
+            return
         sel = self.seleccion()
         if not sel:
             return self.sin_seleccion()
-        if que == "mover":
-            self.m.mover(self.p, sel, delta)
-            nuevo = self.m.donde(self.p, sel[0])
-            if nuevo is not None:  # se sigue a los clips movidos
-                self.k = nuevo
-                tramo = next(t for c, t, _ in self.tramos() if c.get("clave") == sel[0])
-                self.t = tramo
-        else:
-            getattr(self.m, que)(self.p, sel)
+        try:
+            if que == "mover":
+                self.m.mover(self.p, sel, delta)
+                nuevo = self.m.donde(self.p, sel[0])
+                if nuevo is not None:  # se sigue a los clips movidos
+                    self.k = nuevo
+                    self.t = next((t for c, t, _ in self.tramos() if c.get("clave") == sel[0]), 0.0)
+            else:
+                getattr(self.m, que)(self.p, sel)
+        except ValueError as e:
+            from tkinter import messagebox
+            return messagebox.showinfo("Mover", str(e), parent=self.marco)
         self.hecho(sel)
 
     def cortar(self):
         from tkinter import messagebox
+        if not self.permitido():
+            return
         sel = self.seleccion()
         if len(sel) != 1:
-            return messagebox.showinfo("Cortar", "Marca un solo clip: el bruto acabará justo antes de él.", parent=self.v)
+            return messagebox.showinfo("Cortar", "Marca un solo clip: el bruto acabará justo antes de él.", parent=self.marco)
         self.m.cortar(self.p, sel[0])
         self.hecho()
 
     def renombrar(self):
         from tkinter import messagebox, simpledialog
         b = self.bruto()
-        if not b:
+        if not b or not self.permitido():
             return
-        nombre = simpledialog.askstring("Renombrar bruto", "Nombre del fichero (vacío = el automático):", initialvalue=b["nombre"], parent=self.v)
+        nombre = simpledialog.askstring("Renombrar bruto", "Nombre del fichero (vacío = el automático):", initialvalue=b["nombre"], parent=self.marco)
         if nombre is None:
             return
         errores = eb.validar_nombres([nombre]) if nombre.strip() else []
         if errores:
-            return messagebox.showwarning("Nombre no válido", "\n".join(errores), parent=self.v)
+            return messagebox.showwarning("Nombre no válido", "\n".join(errores), parent=self.marco)
         self.m.renombrar(self.p, self.k, nombre)
         self.hecho()
 
     def recuperar(self):
         papelera = self.m.papelera(self.p)
         sel = [papelera[i].get("clave") for i in self.lb_q.curselection()]
-        if sel:
+        if sel and self.permitido():
             self.m.recuperar(self.p, sel)
             self.hecho()
 
     def colocar(self):
         nuevos = self.m.nuevos(self.p)
         sel = [nuevos[i].get("clave") for i in self.lb_n.curselection()]
-        if sel:
+        if sel and self.permitido():
             self.m.colocar(self.p, sel)
             self.hecho()
 
     def deshacer(self):
-        if self.m.deshacer():
+        if self.activa() and self.m.deshacer():
             self.hecho()
 
     def automatico(self):
         from tkinter import messagebox
+        if not self.p or not self.permitido():
+            return
         if messagebox.askyesno("Orden automático", "¿Deshacer todos los cambios a mano de %s y volver al orden cronológico "
-                                                   "y a los cortes automáticos?" % self.p, parent=self.v):
+                                                   "y a los cortes automáticos?" % self.p, parent=self.marco):
             self.m.volver_automatico(self.p)
             self.k, self.t = 0, 0.0
             self.hecho()
 
-    def cerrar(self, resultado):
-        from tkinter import messagebox
-        if resultado is None and self.cambios and not messagebox.askyesno("Salir sin guardar", "Hay cambios sin guardar. ¿Salir sin guardarlos?",
-                                                                           parent=self.v):
+    def guardar(self, _=None):
+        if not self.vivo or self.bloqueada:
             return
+        self.m.guardar(self.carpeta_brutos)
+        self.cambios = False
+        self.lbl_guardado.configure(text="Guardado en montaje.json", style="Tarjeta.Bien.TLabel")
+        if self.al_cambiar:
+            self.al_cambiar()
+
+    def cerrar(self):
+        """Deja de trabajar (fotogramas, avance) y quita la página."""
+        self.vivo = False
         self.reproduciendo = False
-        self.resultado = resultado
         if self.pool:
             self.pool.shutdown(wait=False, cancel_futures=True)
-        self.v.destroy()
-
-
-def dialogo_montaje(raiz, m, origen, carpeta_visor, carpeta_brutos, ffmpeg, hilos=2, proyectos=None):
-    """Abre la pantalla de montaje. Devuelve "guardado", "exportar" (guardado y pide exportar) o None (cancelado).
-    Al guardar, escribe montaje.json en la carpeta de brutos."""
-    pantalla = PantallaMontaje(raiz, m, origen, carpeta_visor, ffmpeg, hilos, proyectos)
-    pantalla.v.grab_set()
-    raiz.wait_window(pantalla.v)
-    if pantalla.resultado:
-        m.guardar(carpeta_brutos)
-    return pantalla.resultado
+        top = self.marco.winfo_toplevel()
+        for tecla, _ in self.atajos:
+            top.unbind(tecla)
+        self.marco.destroy()
 
 
 # ---------------------------------------------------------------------------
-# Panel de opciones de exportación
+# Opciones avanzadas de exportación
 # ---------------------------------------------------------------------------
 
 FORMATOS = [("xdcam_hd50", "XDCAM HD422 50 Mb/s 1080i25 16:9 (recomendado: lo pide el Archivo)"),
@@ -572,95 +678,96 @@ class PanelOpciones:
     def __init__(self, raiz, cfg, resumen, guardar_predeterminados=None):
         import tkinter as tk
         from tkinter import ttk
+        import tema
         self.tk, self.ttk = tk, ttk
         self.cfg, self.resumen, self.guardar_predeterminados = dict(cfg), resumen, guardar_predeterminados
         self.resultado = None
         v = self.v = tk.Toplevel(raiz)
-        v.title("Opciones de exportación")
+        v.title("Opciones avanzadas de exportación")
         v.geometry("1200x860")
+        v.configure(bg=tema.FONDO)
         v.transient(raiz)
-        marco = ttk.Frame(v, padding=10)
+        marco = ttk.Frame(v, padding=12, style="Fondo.TFrame")
         marco.pack(fill="both", expand=True)
-        izq, der = ttk.Frame(marco), ttk.Frame(marco)
+        izq, der = ttk.Frame(marco, style="Fondo.TFrame"), ttk.Frame(marco, style="Fondo.TFrame")
         izq.pack(side="left", fill="both", expand=True)
-        der.pack(side="left", fill="both", expand=True, padx=(10, 0))
+        der.pack(side="left", fill="both", expand=True, padx=(12, 0))
 
-        f = ttk.LabelFrame(izq, text="Vídeo", padding=8)
+        f = tema.Tarjeta(izq, "Vídeo")
         f.pack(fill="x")
         self.formato = ttk.Combobox(f, state="readonly", width=64, values=[t for _, t in FORMATOS])
         self.formato.pack(anchor="w")
 
-        f = ttk.LabelFrame(izq, text="Timecode", padding=8)
-        f.pack(fill="x", pady=(8, 0))
-        fila = ttk.Frame(f)
+        f = tema.Tarjeta(izq, "Timecode")
+        f.pack(fill="x", pady=(10, 0))
+        fila = ttk.Frame(f, style="Tarjeta.TFrame")
         fila.pack(anchor="w")
-        ttk.Label(fila, text="TC de inicio de cada bruto (hh:mm:ss:ff):").pack(side="left")
+        ttk.Label(fila, text="TC de inicio de cada bruto (hh:mm:ss:ff):", style="Tarjeta.TLabel").pack(side="left")
         self.tc = tk.StringVar()
-        ttk.Entry(fila, textvariable=self.tc, width=14, font=("Consolas", 11)).pack(side="left", padx=6)
-        ttk.Label(f, text="Recomendado 00:00:00:00. El TC interno del vídeo se ajusta al del fichero.", foreground="#555").pack(anchor="w")
+        ttk.Entry(fila, textvariable=self.tc, width=14, font=(tema.MONO, 11)).pack(side="left", padx=6)
+        ttk.Label(f, text="Recomendado 00:00:00:00. El TC interno del vídeo se ajusta al del fichero.", style="Tarjeta.Suave.TLabel").pack(anchor="w", pady=(4, 0))
 
-        f = ttk.LabelFrame(izq, text="Audio: pistas y enrutado", padding=8)
-        f.pack(fill="x", pady=(8, 0))
-        fila = ttk.Frame(f)
+        f = tema.Tarjeta(izq, "Audio: pistas y enrutado")
+        f.pack(fill="x", pady=(10, 0))
+        fila = ttk.Frame(f, style="Tarjeta.TFrame")
         fila.pack(anchor="w")
-        ttk.Label(fila, text="Pistas del bruto:").pack(side="left")
+        ttk.Label(fila, text="Pistas del bruto:", style="Tarjeta.TLabel").pack(side="left")
         self.pistas = ttk.Combobox(fila, state="readonly", width=48, values=[t for _, t in PISTAS])
         self.pistas.pack(side="left", padx=6)
-        ttk.Label(f, text="XDCAM HD422 solo admite 4 u 8 pistas: se redondea y las que falten van en silencio.", foreground="#555").pack(anchor="w")
-        rejilla = ttk.Frame(f)
+        ttk.Label(f, text="XDCAM HD422 solo admite 4 u 8 pistas: se redondea y las que falten van en silencio.", style="Tarjeta.Suave.TLabel").pack(anchor="w", pady=(4, 0))
+        rejilla = ttk.Frame(f, style="Tarjeta.TFrame")
         rejilla.pack(anchor="w", pady=(6, 0))
         self.fuentes, self.ganancias = [], []
-        ttk.Label(rejilla, text="Salida").grid(row=0, column=0, sticky="w")
-        ttk.Label(rejilla, text="Qué lleva").grid(row=0, column=1, sticky="w")
-        ttk.Label(rejilla, text="Ganancia (dB)").grid(row=0, column=2, sticky="w", padx=(8, 0))
+        for col, texto in enumerate(("SALIDA", "QUÉ LLEVA", "GANANCIA (dB)")):
+            ttk.Label(rejilla, text=texto, style="Tarjeta.Seccion.TLabel").grid(row=0, column=col, sticky="w", padx=(0 if col < 2 else 8, 0))
         for k in range(eb.MAX_PISTAS):
-            ttk.Label(rejilla, text="Pista %d" % (k + 1)).grid(row=k + 1, column=0, sticky="w")
+            ttk.Label(rejilla, text="Pista %d" % (k + 1), style="Tarjeta.TLabel").grid(row=k + 1, column=0, sticky="w", padx=(0, 10))
             cb = ttk.Combobox(rejilla, state="readonly", width=18, values=FUENTES)
             cb.grid(row=k + 1, column=1, sticky="w", pady=1)
-            sp = tk.Spinbox(rejilla, from_=-20, to=20, increment=0.5, width=6)
+            sp = ttk.Spinbox(rejilla, from_=-20, to=20, increment=0.5, width=6)
             sp.grid(row=k + 1, column=2, sticky="w", padx=(8, 0))
             self.fuentes.append(cb)
             self.ganancias.append(sp)
 
-        f = ttk.LabelFrame(izq, text="Audio: niveles", padding=8)
-        f.pack(fill="x", pady=(8, 0))
+        f = tema.Tarjeta(izq, "Audio: niveles")
+        f.pack(fill="x", pady=(10, 0))
         self.niveles = tk.StringVar()
         for valor, texto in NIVELES:
-            ttk.Radiobutton(f, text=texto, value=valor, variable=self.niveles).pack(anchor="w")
+            ttk.Radiobutton(f, text=texto, value=valor, variable=self.niveles, style="Tarjeta.TRadiobutton").pack(anchor="w")
 
-        f = ttk.LabelFrame(der, text="Comprobaciones (recomendado: todas)", padding=8)
+        f = tema.Tarjeta(der, "Comprobaciones (recomendado: todas)")
         f.pack(fill="x")
         self.md5, self.ficha, self.medidor = tk.BooleanVar(), tk.BooleanVar(), tk.BooleanVar()
-        ttk.Checkbutton(f, text="MD5 de cada bruto (integridad al copiarlo)", variable=self.md5).pack(anchor="w")
-        ttk.Checkbutton(f, text="Ficha técnica: conforme o no con XDCAM HD422", variable=self.ficha).pack(anchor="w")
-        ttk.Checkbutton(f, text="Medidor de audio: avisa de saturados y casi mudos (no los toca)", variable=self.medidor).pack(anchor="w")
+        for texto, var in (("MD5 de cada bruto (integridad al copiarlo)", self.md5), ("Ficha técnica: conforme o no con XDCAM HD422", self.ficha),
+                           ("Medidor de audio: avisa de saturados y casi mudos (no los toca)", self.medidor)):
+            ttk.Checkbutton(f, text=texto, variable=var, style="Tarjeta.TCheckbutton").pack(anchor="w")
 
-        f = ttk.LabelFrame(der, text="Nombres de los ficheros", padding=8)
-        f.pack(fill="both", expand=True, pady=(8, 0))
-        fila = ttk.Frame(f)
+        f = tema.Tarjeta(der, "Nombres de los ficheros")
+        f.pack(fill="both", expand=True, pady=(10, 0))
+        fila = ttk.Frame(f, style="Tarjeta.TFrame")
         fila.pack(anchor="w")
-        ttk.Label(fila, text="Prefijo (opcional):").pack(side="left")
+        ttk.Label(fila, text="Prefijo (opcional):", style="Tarjeta.TLabel").pack(side="left")
         self.prefijo = tk.StringVar()
         ttk.Entry(fila, textvariable=self.prefijo, width=20).pack(side="left", padx=6)
-        ttk.Label(f, text="Cada bruto se puede renombrar en la pantalla de montaje.", foreground="#555").pack(anchor="w")
-        self.lb_nombres = tk.Listbox(f, height=10)
-        self.lb_nombres.pack(fill="both", expand=True, pady=(4, 0))
+        ttk.Label(f, text="Cada bruto se puede renombrar en la página Montaje.", style="Tarjeta.Suave.TLabel").pack(anchor="w", pady=(4, 0))
+        self.lb_nombres = tema.lista(f, height=10)
+        self.lb_nombres.pack(fill="both", expand=True, pady=(6, 0))
 
-        f = ttk.LabelFrame(der, text="Resumen", padding=8)
-        f.pack(fill="x", pady=(8, 0))
-        self.lbl_resumen = ttk.Label(f, text="", justify="left", wraplength=520)
+        f = tema.Tarjeta(der, "Resumen")
+        f.pack(fill="x", pady=(10, 0))
+        self.lbl_resumen = ttk.Label(f, text="", justify="left", wraplength=520, style="Tarjeta.TLabel")
         self.lbl_resumen.pack(anchor="w")
-        self.lbl_errores = ttk.Label(der, text="", foreground=ROJO, justify="left", wraplength=520)
+        self.lbl_errores = ttk.Label(der, text="", justify="left", wraplength=520, style="Aviso.TLabel")
         self.lbl_errores.pack(anchor="w", pady=(8, 0))
 
-        pie = ttk.Frame(v, padding=10)
+        pie = ttk.Frame(v, padding=12, style="Fondo.TFrame")
         pie.pack(fill="x")
         ttk.Button(pie, text="Restablecer recomendados", command=lambda: self.poner(eb.CONFIG_DEFECTO)).pack(side="left")
         if guardar_predeterminados:
             ttk.Button(pie, text="Guardar como predeterminados", command=self.predeterminados).pack(side="left", padx=6)
-        self.bt_exportar = ttk.Button(pie, text="Exportar", command=self.exportar)
+        self.bt_exportar = ttk.Button(pie, text="Aceptar", style="Principal.TButton", command=self.exportar)
         self.bt_exportar.pack(side="right")
-        ttk.Button(pie, text="Cancelar", command=v.destroy).pack(side="right", padx=6)
+        ttk.Button(pie, text="Cancelar", style="Fantasma.TButton", command=v.destroy).pack(side="right", padx=6)
 
         self.poner(cfg)
         for var in (self.tc, self.niveles, self.md5, self.ficha, self.medidor, self.prefijo):
@@ -719,7 +826,7 @@ class PanelOpciones:
     def revisar(self):
         cfg, errores = self.leer()
         for sp in self.ganancias:
-            sp.configure(state="normal" if cfg["niveles_audio"] == "ganancia" else "disabled")
+            sp.state(["!disabled"] if cfg["niveles_audio"] == "ganancia" else ["disabled"])
         nombres = [cfg["prefijo_fichero"] + n for n in self.resumen["brutos"]]
         errores += eb.validar_opciones(cfg) + eb.validar_nombres(nombres)
         self.lb_nombres.delete(0, "end")
@@ -732,18 +839,13 @@ class PanelOpciones:
         necesario, libre = espacio_necesario(segundos, pistas), self.resumen.get("libre")
         texto = "%d brutos · %s de material · %d pistas de audio\nEspacio necesario: unos %.0f GB" % (
             len(nombres), fmt_h(segundos), pistas, necesario / 1e9)
-        if cfg["formato_salida"] != "xdcam_hd50":
-            texto += " (estimado como XDCAM; en otro formato varía)"
         if libre is not None:
             texto += " · libres en el destino: %.0f GB" % (libre / 1e9)
-            if necesario > libre:
-                errores.append("No cabe: hacen falta unos %.0f GB y hay %.0f GB libres en %s" % (necesario / 1e9, libre / 1e9, self.resumen.get("destino", "el destino")))
-        texto += "\nEl tiempo estimado sale en el registro tras el primer bruto (depende del PC)."
         if cfg["niveles_audio"] == "r128":
             texto += "\nAtención: la normalización cambia el sonido original de cada clip."
         self.lbl_resumen.configure(text=texto)
         self.lbl_errores.configure(text="\n".join(errores))
-        self.bt_exportar.configure(state="disabled" if errores else "normal")
+        self.bt_exportar.state(["disabled"] if errores else ["!disabled"])
         self.errores = errores
         return cfg
 
@@ -763,8 +865,8 @@ class PanelOpciones:
 
 
 def dialogo_opciones(raiz, cfg, resumen, guardar_predeterminados=None):
-    """Panel de opciones. resumen: {"brutos": [nombres], "segundos": float, "pistas_max": int, "libre": bytes|None,
-    "destino": str}. Devuelve la configuración elegida o None si se cancela."""
+    """Opciones avanzadas. resumen: {"brutos": [nombres], "segundos": float, "pistas_max": int, "libre": bytes|None}.
+    Devuelve la configuración elegida o None si se cancela."""
     panel = PanelOpciones(raiz, cfg, resumen, guardar_predeterminados)
     panel.v.grab_set()
     raiz.wait_window(panel.v)

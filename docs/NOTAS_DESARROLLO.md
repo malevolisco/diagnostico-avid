@@ -16,16 +16,19 @@ Estas notas recogen lo que no está en el código: cómo probar, lo aprendido de
 
 | Fichero | Qué es |
 |---|---|
-| `diagnostico_avid.py` | Programa principal: inventario, lectura de bins (pyavb), ffprobe de MXF, cruce bin↔MXF, miniaturas, informe HTML, ventana tkinter y CLI. Fase 1. |
+| `diagnostico_avid.py` | Programa principal: inventario, lectura de bins (pyavb), ffprobe de MXF, cruce bin↔MXF, miniaturas, informe HTML y CLI. Fase 1. |
+| `interfaz.py` | La ventana: tres páginas (Disco, Montaje, Exportar) con barra abajo, cola de exportación con casillas y avance por eventos. Recibe el módulo principal (`lanzar(da)`). |
+| `tema.py` | Tema oscuro (colores, letras, estilos ttk) y componentes: `Tarjeta`, `Seleccion` (4 \| 8), `BarraPaginas`. |
 | `exportar_brutos.py` | Fase 2: brutos MXF OP1a. Por defecto un bruto por proyecto y mes (`PROYECTO_2019-09`), hasta 2 h, en orden cronológico, sin importados, piezas aparte, todo en XDCAM HD 50 1080i25 16:9; opcionalmente por días o por proyecto y tarjeta (`agrupar`) y en el formato mayoritario (`formato_salida = auto`); shotlist xlsx, hoja de contactos. Lo importa el principal. |
 | `montaje.py` | Lógica de la pantalla de montaje (quitar, mover, cortar, renombrar, deshacer; `montaje.json` en la carpeta de brutos) y fotogramas del visor (`.mjpeg` por clip en `<análisis>/visor/`). Sin tkinter. |
-| `ventana_montaje.py` | Ventana de montaje (visor con Pillow, línea de tiempo, lista de clips) y panel de opciones de exportación. |
+| `ventana_montaje.py` | Página de montaje como marco dentro de la ventana (visor con Pillow, línea de tiempo, lista de clips, "Fuera del bruto") y diálogo de opciones avanzadas de exportación. |
 | `mxf_util.py` | Acabado del bruto: TC de las cabeceras GOP igual al del fichero, fecha de creación, ficha técnica XDCAM HD422 y MD5. |
 | `actualizar.py` | Actualización del `.exe` solo al pulsar "Buscar actualización": consulta la última release en GitHub, descarga, comprueba y un `.bat` cambia la carpeta conservando `config_*.json`. |
 | `config_brutos.json`, `config_origen.json` | Se crean junto al programa con valores por defecto la primera vez. No están en git. |
 | `tests/crear_disco_prueba.py` | Genera un disco Avid simulado con casos límite (bins con pyavb, MXF OP-Atom con ffmpeg, V y A compartiendo UMID como hace Avid). |
 | `tests/probar_montaje.py` | Prueba del montaje sin ventana: escribe un `montaje.json` (cortar, reordenar, renombrar, quitar) y comprueba los brutos exportados con `--usar-analisis`. |
 | `tests/test_montaje.py` | Lógica del montaje y fotogramas del visor. |
+| `tests/probar_interfaz.py` | La ventana de principio a fin sobre el disco simulado (analizar, montar, exportar), con capturas. En Linux con xvfb; en GitHub, en Windows. |
 | `tests/test_mxf.py` | TC GOP (comparado con el que escribe ffmpeg), audio intacto, ficha técnica, fecha de creación y MD5. Necesita ffmpeg en el PATH. |
 | `tests/comprobar_resultado.py` | Comprueba un resultado contra valores fijos (también ficha conforme, MD5, TC interno y fecha de creación); sale con 1 si algo no cuadra. `--reanudado` para la segunda ejecución. |
 | `tests/test_unitarios.py` | Timecode drop-frame, reintento copia→convertir con ffmpeg simulado, reanudar, botón Detener, reparto por tarjeta/agencias/piezas, autoactualización con release falsa local. Solo stdlib. |
@@ -78,6 +81,8 @@ Debe terminar con "Análisis OK", "Brutos OK" y las pruebas unitarias en OK. Par
 - Montaje (Adrián, oct. 2026, antes de pasarlo a Ingeniería; diseño en `docs/diseno_montaje_exportacion.md`): tres pasos (analizar; "Montaje..." sobre ese análisis; exportar sin repetirlo con el panel de opciones). En el montaje se ven los brutos con un visor de fotogramas (1/s, 480×270, sin sonido) y una línea de tiempo, y se puede quitar clips (papelera), moverlos dentro del bruto o a otro bruto del mismo proyecto (puede pasar de 2 h: sale en rojo, no se impide), cortar, renombrar y deshacer. Lo que se ve es lo que se exporta (`montaje.json`). Sustituye a "Revisar cortes" (`cortes.json` se convierte).
 - Nombres de los brutos (Adrián, oct. 2026): `PROYECTO MES DE AÑO` en mayúsculas, con el mes en letra y sin guiones; sin fecha, solo el proyecto. Editables por bruto.
 - Opciones de exportación (Adrián, oct. 2026): TC de inicio 00:00:00:00; pistas: las que más haya, redondeadas a 4 u 8 en XDCAM; audio **sin tocar** por defecto, con ganancia por pista o EBU R128 como opciones; MD5, ficha técnica y medidor de audio activados.
+- Ventana (Adrián, 22/10/2026: "más vistosa y más user friendly, más parecido a DaVinci"; diseño en `docs/diseno_interfaz.md`): una sola ventana oscura con tres páginas (Disco, Montaje, Exportar), acento naranja `#e8833a`, tkinter sin componentes nuevos. Se muestran los valores ya elegidos (4 \| 8 pistas marcado según el material) en vez de explicar reglas; lo raro va en "Opciones avanzadas…".
+- Piezas (Adrián, 22/10/2026): bruto aparte, pero sin marcar en la cola y fuera por defecto en línea de comandos (`exportar_piezas = false`). Efectos de Avid, agencias e importados nunca entran en un bruto; el montaje los lista en "Fuera del bruto".
 - Selector de proyectos (ventana y `--proyectos`): el análisis es siempre del disco entero; los brutos, solo de los elegidos; `brutos_resultado.json` conserva los de otras veces para hacer un disco en varias sesiones.
 - La actualización ya no es automática (Adrián, oct. 2026, para que Ingeniería revise una versión fija): solo con el botón "Buscar actualización" del `.exe`.
 - El programa nunca escribe en el disco de origen y se niega si el destino está dentro de él.

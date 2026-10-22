@@ -378,6 +378,16 @@ class ProyectoMes(unittest.TestCase):
               self.clip("E", "2019-10-01 10:00:00", 150)]  # más de 2 h por sí solo: va solo
         self.assertEqual(self.nombres(cs), {"P SEPTIEMBRE DE 2019 1": ["A", "B"], "P SEPTIEMBRE DE 2019 2": ["C", "D"], "P OCTUBRE DE 2019": ["E"]})
 
+    def test_descartados_y_su_motivo(self):
+        cs = [self.clip("0016Q3", "2019-09-16 10:52:26", 1),
+              self.clip("VID_0001", "2019-09-16 11:00:00", 1, origen="Fichero importado", fichero_origen=r"D:\Descargas\VID_0001.mp4"),
+              self.clip("REUTERS", "2019-09-16 11:00:00", 1, origen="Agencia Reuters"),
+              self.clip("0001AB", "2019-09-16 12:00:00", 1, origen="Fichero importado", fichero_origen=r"E:\CARD01\CONTENTS\VIDEO\0001AB.MXF"),
+              self.clip("X,Dissolve,1", "2019-09-16 12:00:00", 0.1, proyectos=(), proyectos_render=["P"], render=True)]
+        d = eb.descartados_por_proyecto(cs, {}, self.mxf, self.cfg)
+        self.assertEqual(sorted((c["nombre"], m) for c, m in d["P"]),
+                         [("REUTERS", "agencia"), ("VID_0001", "importado"), ("X,Dissolve,1", "efecto de Avid")])
+
     def test_proyectos_piezas_compartidos_y_sin_fecha(self):
         cruce = {"por_proyecto": [{"proyecto": "Q", "secuencias_nombres": ["PIEZA SISMO"]}]}
         cs = [self.clip("A", "2018-12-01 20:00:00", 1, proyectos=("Q", "P")),  # compartido: solo con el primero (P)
@@ -626,6 +636,46 @@ class OrdenYParalelo(unittest.TestCase):
             eb.unir_segmentos = orig
         guardado = json.loads((destino / "brutos_resultado.json").read_text(encoding="utf-8"))
         self.assertEqual(sorted(r["proyecto"] for r in guardado), ["P0 SEPTIEMBRE DE 2019", "P1 SEPTIEMBRE DE 2019"])
+
+    def exportar_con_piezas(self, cfg, **kw):
+        mxf, clips = self.preparar(4)
+        cruce = {"por_proyecto": [{"proyecto": "P1", "secuencias_nombres": ["CLIP 03"]}]}  # CLIP 03 es una pieza de P1
+        eb.duracion_ffprobe = lambda ffprobe, ruta: DUR
+        eb.unir_segmentos, orig = (lambda segs, salida, *a: (salida.write_bytes(b"x"), (True, None, []))[1]), eb.unir_segmentos
+        try:
+            cfg["ficha_tecnica"] = False
+            return eb.exportar_todo(clips, cruce, list(mxf.values()), self.tmp, self.tmp / "brutos", "ffmpeg", "ffprobe", lambda m: None,
+                                    cfg, **kw)
+        finally:
+            eb.unir_segmentos = orig
+
+    def test_piezas_no_salen_por_defecto(self):
+        cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+        self.assertFalse(cfg["exportar_piezas"])
+        nombres = [r["proyecto"] for r in self.exportar_con_piezas(cfg)]
+        self.assertEqual(nombres, ["P0 SEPTIEMBRE DE 2019", "P1 SEPTIEMBRE DE 2019"])
+
+    def test_piezas_si_se_piden(self):
+        cfg = dict(json.loads(json.dumps(eb.CONFIG_DEFECTO)), exportar_piezas=True)
+        self.assertIn("P1 PIEZAS SEPTIEMBRE DE 2019", [r["proyecto"] for r in self.exportar_con_piezas(cfg)])
+
+    def test_solo_los_brutos_marcados_en_la_cola(self):
+        cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+        res = self.exportar_con_piezas(cfg, solo_brutos=["P1 PIEZAS SEPTIEMBRE DE 2019", "P0 SEPTIEMBRE DE 2019"])
+        self.assertEqual(sorted(r["proyecto"] for r in res), ["P0 SEPTIEMBRE DE 2019", "P1 PIEZAS SEPTIEMBRE DE 2019"])
+
+    def test_eventos_de_avance(self):
+        cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+        eventos = []
+        self.exportar_con_piezas(cfg, solo_brutos=["P0 SEPTIEMBRE DE 2019"], evento=eventos.append)
+        estados = [e["estado"] for e in eventos]
+        self.assertEqual(estados[0], "empezando")
+        self.assertEqual(estados[-1], "terminado")
+        self.assertIn("uniendo", estados)
+        clips = [(e["clip"], e["total"]) for e in eventos if e["estado"] == "convirtiendo"]
+        self.assertEqual(clips, [(1, 2), (2, 2)])
+        self.assertTrue(all(e["bruto"] == "P0 SEPTIEMBRE DE 2019" for e in eventos))
+        self.assertIn("resultado", eventos[-1])
 
     @unittest.skipIf(da is None, "sin pyavb")
     def test_lista_rapida_de_proyectos(self):
@@ -915,6 +965,33 @@ class Detener(unittest.TestCase):
         finally:
             eb.ejecutar_ffmpeg, eb.duracion_ffprobe = orig
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+try:
+    import tkinter  # noqa: F401
+    TK_OK = True
+except ImportError:  # algunos Python de Linux vienen sin tkinter
+    TK_OK = False
+
+
+@unittest.skipUnless(TK_OK, "sin tkinter")
+class TextosDeLaCola(unittest.TestCase):
+    """Lo que dice cada fila de la cola de la página Exportar según el avance que llega de la exportación."""
+
+    def test_estados(self):
+        import interfaz
+        self.assertEqual(interfaz.texto_estado({"estado": "convirtiendo", "clip": 18, "total": 40}), "Convirtiendo · clip 18 de 40 (45 %)")
+        self.assertEqual(interfaz.texto_estado({"estado": "uniendo"}), "Uniendo los clips")
+        self.assertEqual(interfaz.texto_estado({"estado": "terminado", "resultado": {"estado": "OK"}}), "Terminado")
+        self.assertTrue(interfaz.texto_estado({"estado": "terminado", "resultado": {"estado": "SIN ESPACIO: hacen falta"}}).startswith("SIN ESPACIO"))
+        self.assertEqual(interfaz.texto_estado({"estado": "reanudado", "resultado": {"estado": "OK"}}), "Ya exportado (se salta)")
+
+    def test_comprobacion(self):
+        import interfaz
+        self.assertEqual(interfaz.texto_calidad({"estado": "OK", "conforme": True, "md5": "abc"}), "Conforme · MD5")
+        self.assertEqual(interfaz.texto_calidad({"estado": "AVISO", "conforme": False, "md5": "abc"}), "NO CONFORME")
+        self.assertEqual(interfaz.texto_calidad({"estado": "OK"}), "Hecho")
+        self.assertEqual(interfaz.texto_calidad(None), "—")
 
 
 if __name__ == "__main__":

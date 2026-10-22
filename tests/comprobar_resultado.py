@@ -77,8 +77,8 @@ def main():
         # Fuera la agencia (SISMO, por la ruta del bin) y el vídeo de móvil importado. La pieza, aparte. NTSC entra:
         # sus MXF se importaron de una tarjeta (CONTENTS) aunque el origen diga "Fichero importado".
         # SIN_PROYECTO: huérfano 2 s + cuarentena 1 s + los 2 "APROX B" ambiguos de 2 s. Renders de efectos, fuera.
+        # El bruto de piezas (15 SEPT CENTROAMERICA PIEZAS SEPTIEMBRE DE 2021) no se exporta: exportar_piezas = false
         esperado_brutos = {"15 SEPT CENTROAMERICA SEPTIEMBRE DE 2021": ("convertir", 3, 7.0),
-                           "15 SEPT CENTROAMERICA PIEZAS SEPTIEMBRE DE 2021": ("convertir", 1, 2.0),
                            "ABORTO SEPTIEMBRE DE 2021": ("convertir", 2, 4.0), "APROX SEPTIEMBRE DE 2021": ("convertir", 1, 2.0),
                            "NTSC SEPTIEMBRE DE 2021": ("convertir", 2, 4.0), "SIN PROYECTO SEPTIEMBRE DE 2021": ("convertir", 4, 7.0)}
     else:
@@ -87,7 +87,7 @@ def main():
         # importado va a _IMPORTADOS. Los renders de efectos no entran. NTSC: mismo día pero dos carpetas de tarjeta.
         # SIN_PROYECTO: huérfano 2 s + cuarentena 1 s + los 2 "APROX B" ambiguos de 2 s.
         esperado_brutos = {"15 SEPT CENTROAMERICA_T01_2021-09-10": ("copia", 1, 2.0), "15 SEPT CENTROAMERICA_T02_2021-09-15": ("copia", 2, 5.0),
-                           "15 SEPT CENTROAMERICA_AGENCIAS": ("copia", 1, 2.0), "15 SEPT CENTROAMERICA_PIEZAS": ("copia", 1, 2.0),
+                           "15 SEPT CENTROAMERICA_AGENCIAS": ("copia", 1, 2.0),
                            "15 SEPT CENTROAMERICA_IMPORTADOS": ("copia", 1, 2.0),
                            "ABORTO_T01_2021-09-15": ("convertir", 2, 4.0), "APROX_T01_2021-09-15": ("copia", 1, 2.0),
                            "NTSC_T01_2021-09-15": ("copia", 1, 2.0), "NTSC_T02_2021-09-15": ("copia", 1, 2.0),

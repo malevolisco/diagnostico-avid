@@ -199,6 +199,13 @@ class Guardar(Base):
         self.assertEqual(len(m.avisos), 1)
 
 
+class FueraDelBruto(Base):
+    def test_lista_de_descartados(self):
+        m = montaje.Montaje(self.listas, fecha, 7200, descartados={"P": [(clip("R", "2021-09-01 09:00", 1), "agencia")]})
+        self.assertEqual([(c["nombre"], mo) for c, mo in m.fuera_del_bruto("P")], [("R", "agencia")])
+        self.assertEqual(m.fuera_del_bruto("Q"), [])
+
+
 class Grupos(Base):
     def test_grupos_para_exportar(self):
         m = self.m()

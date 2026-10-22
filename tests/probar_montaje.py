@@ -52,7 +52,6 @@ def comprobar(brutos):
     hechos = {b["proyecto"]: b for b in res if b.get("proyecto_avid") in (SEPT, ABORTO)}
     esperado = {SEPT + " SEPTIEMBRE DE 2021": ["2017 07 13"],
                 "PRUEBA MONTAJE": ["2017 07 21 ESPAÑA", "2017 07 21"],
-                SEPT + " PIEZAS SEPTIEMBRE DE 2021": ["PIEZA 15 SEPT"],
                 ABORTO + " SEPTIEMBRE DE 2021": ["2018-10-30T013549Z"]}
     if sorted(hechos) != sorted(esperado):
         fallos.append("brutos %s, esperados %s" % (sorted(hechos), sorted(esperado)))

@@ -37,13 +37,11 @@ import datetime as dt
 import json
 import logging
 import os
-import queue
 import re
 import shutil
 import subprocess
 import sys
 import threading
-import traceback
 import uuid
 import webbrowser
 import zipfile
@@ -1371,7 +1369,7 @@ def cargar_analisis(carpeta):
     return leer("clips.json"), leer("cruce.json"), leer("mxf.json"), leer("resumen.json")
 
 
-def exportar_desde_analisis(carpeta, brutos, progreso=print, proyectos_brutos=None, cfg=None):
+def exportar_desde_analisis(carpeta, brutos, progreso=print, proyectos_brutos=None, cfg=None, solo_brutos=None, evento=None):
     """Paso 3: brutos a partir de un análisis guardado, sin repetirlo, con el montaje de montaje.json si lo hay y las
     opciones del panel (cfg) o, si no se pasan, las de config_brutos.json.
     El log va a exportacion.log en la carpeta de brutos. Devuelve la lista de resultados."""
@@ -1402,7 +1400,7 @@ def exportar_desde_analisis(carpeta, brutos, progreso=print, proyectos_brutos=No
         LOG.info("Opciones de exportación: %s", json.dumps(exportar_brutos.opciones_bruto(cfg), ensure_ascii=False))
         resultados = exportar_brutos.exportar_todo(clips, cruce, mxf, origen, brutos, ffmpeg, ffprobe, progreso, cfg,
                                                    miniaturas_dir=carpeta / "miniaturas" if (carpeta / "miniaturas").exists() else None,
-                                                   proyectos=proyectos_brutos)
+                                                   proyectos=proyectos_brutos, solo_brutos=solo_brutos, evento=evento)
         ok = sum(1 for b in resultados if str(b["estado"]).startswith("OK"))
         progreso("%s: %d brutos, %d OK. Detalle en %s" % ("Detenido" if PARAR.is_set() else "Terminado", len(resultados), ok, brutos / "brutos_resultado.json"))
         return resultados
@@ -1432,8 +1430,11 @@ def resumen_exportacion(carpeta_analisis, carpeta_brutos, proyectos_brutos=None)
     grupos = exportar_brutos.grupos_con_montaje(clips, cruce, mxf, mxf_por_ruta, cfg, carpeta_brutos, lambda t: None, m)
     if proyectos_brutos is not None:
         grupos = [g for g in grupos if cfg.get("agrupar", "proyecto_mes") == "dias" or g["proyecto"] in set(proyectos_brutos)]
+    seg = lambda cs: sum((c.get("duracion") or 0) for c in cs if c.get("fichero_video"))
+    filas = [{"nombre": g["nombre"], "base": g["base"], "tipo": g["tipo"], "proyecto": g["proyecto"], "segundos": seg(g["clips"]),
+              "pistas": max((c.get("num_audio") or 0 for c in g["clips"]), default=0), "clips": len(g["clips"])} for g in grupos]
     cs = [c for g in grupos for c in g["clips"]]
-    return {"brutos": [g["base"] for g in grupos], "segundos": sum((c.get("duracion") or 0) for c in cs if c.get("fichero_video")),
+    return {"brutos": [g["base"] for g in grupos], "segundos": seg(cs), "filas": filas,
             "pistas_max": max((c.get("num_audio") or 0 for c in cs), default=0), "libre": ventana_montaje.espacio_libre(carpeta_brutos),
             "destino": str(carpeta_brutos)}, cfg
 
@@ -1469,19 +1470,21 @@ def dialogo_proyectos(raiz, lista, marcados, hechos=()):
     (en el orden de la lista) o None si se cancela. marcados: los elegidos antes (None = todos)."""
     import tkinter as tk
     from tkinter import ttk
+    import tema
     filas = [(p["nombre"], "%s   (%d bins%s)%s" % (p["nombre"], p["bins"], ", último cambio " + p["modificado"][:10] if p["modificado"] else "",
                                                      "   ✓ ya tiene brutos" if p["nombre"] in hechos else ""))
              for p in lista]
     filas.append(("SIN_PROYECTO", "SIN_PROYECTO   (clips que no están en ningún bin)%s" % ("   ✓ ya tiene brutos" if "SIN_PROYECTO" in hechos else "")))
     v = tk.Toplevel(raiz)
     v.title("Elegir proyectos para los brutos")
-    v.geometry("640x480")
+    v.geometry("720x540")
+    v.configure(bg=tema.FONDO)
     v.transient(raiz)
     ttk.Label(v, text="%d proyectos en el disco. Marca los que quieres hacer ahora (clic para marcar o desmarcar);\n"
-                      "los demás se pueden hacer otro día con la misma carpeta de brutos." % len(lista), padding=8).pack(anchor="w")
-    caja = ttk.Frame(v, padding=(8, 0))
+                      "los demás se pueden hacer otro día con la misma carpeta de brutos." % len(lista), padding=12).pack(anchor="w")
+    caja = ttk.Frame(v, padding=(12, 0))
     caja.pack(fill="both", expand=True)
-    lb = tk.Listbox(caja, selectmode="multiple", activestyle="none", font=("Segoe UI", 10), exportselection=False)
+    lb = tema.lista(caja, selectmode="multiple", selectbackground=tema.ACENTO, selectforeground=tema.SOBRE_ACENTO)
     sb = ttk.Scrollbar(caja, orient="vertical", command=lb.yview)
     lb.configure(yscrollcommand=sb.set)
     lb.pack(side="left", fill="both", expand=True)
@@ -1495,323 +1498,23 @@ def dialogo_proyectos(raiz, lista, marcados, hechos=()):
     def aceptar():
         resultado["elegidos"] = [filas[i][0] for i in lb.curselection()]
         v.destroy()
-    pie = ttk.Frame(v, padding=8)
+    pie = ttk.Frame(v, padding=12)
     pie.pack(fill="x")
     ttk.Button(pie, text="Todos", command=lambda: lb.selection_set(0, "end")).pack(side="left")
     ttk.Button(pie, text="Ninguno", command=lambda: lb.selection_clear(0, "end")).pack(side="left", padx=6)
     ttk.Button(pie, text="Solo los que faltan", command=lambda: [lb.selection_clear(0, "end")] + [lb.selection_set(i) for i, (n, _) in enumerate(filas) if n not in hechos]).pack(side="left")
-    ttk.Button(pie, text="Cancelar", command=v.destroy).pack(side="right")
-    ttk.Button(pie, text="Aceptar", command=aceptar).pack(side="right", padx=6)
+    ttk.Button(pie, text="Aceptar", style="Elegido.TButton", command=aceptar).pack(side="right")
+    ttk.Button(pie, text="Cancelar", style="Fantasma.TButton", command=v.destroy).pack(side="right", padx=6)
     v.grab_set()
     raiz.wait_window(v)
     return resultado["elegidos"]
 
 
 def lanzar_gui(sin_actualizar=False):
-    import tkinter as tk
-    from tkinter import filedialog, messagebox, ttk
-
-    raiz = tk.Tk()
-    raiz.title("Diagnóstico de disco Avid — v%s (%s)" % (VERSION, BUILD))
-    raiz.geometry("860x640")
-    raiz.minsize(640, 420)
-
-    origen = tk.StringVar()
-    destino = tk.StringVar(value=str(Path.home() / "Desktop"))
-    minis = tk.BooleanVar(value=True)
-    zip_minis = tk.BooleanVar(value=True)
-    hacer_brutos = tk.BooleanVar(value=False)
-    brutos = tk.StringVar()
-    cola = queue.Queue()
-    estado = {"ocupado": False, "cerrar": False, "proyectos": None}
-
-    marco = ttk.Frame(raiz, padding=14)
-    marco.pack(fill="both", expand=True)
-    ttk.Label(marco, text="1. Disco o carpeta de Avid que quieres analizar (solo se lee, no se modifica):").grid(row=0, column=0, columnspan=2, sticky="w")
-    ttk.Entry(marco, textvariable=origen).grid(row=1, column=0, sticky="ew", pady=(2, 10))
-    ttk.Button(marco, text="Elegir...", command=lambda: origen.set(filedialog.askdirectory(title="Disco de Avid") or origen.get())).grid(row=1, column=1, padx=(8, 0))
-    ttk.Label(marco, text="2. Dónde guardar el informe (otro disco o el escritorio):").grid(row=2, column=0, columnspan=2, sticky="w")
-    ttk.Entry(marco, textvariable=destino).grid(row=3, column=0, sticky="ew", pady=(2, 10))
-    ttk.Button(marco, text="Elegir...", command=lambda: destino.set(filedialog.askdirectory(title="Carpeta de salida") or destino.get())).grid(row=3, column=1, padx=(8, 0))
-    ttk.Checkbutton(marco, text="Generar miniaturas de cada clip (más lento, pero el informe queda completo)", variable=minis).grid(row=4, column=0, columnspan=2, sticky="w")
-    ttk.Checkbutton(marco, text="Incluir las miniaturas en el zip para enviar (desmarcado: el zip solo lleva texto)", variable=zip_minis).grid(row=5, column=0, columnspan=2, sticky="w")
-    ttk.Checkbutton(marco, text="3. Exportar además un MXF por proyecto (brutos). Tarda mucho y necesita un disco con espacio:",
-                    variable=hacer_brutos).grid(row=6, column=0, columnspan=2, sticky="w", pady=(10, 0))
-    ttk.Entry(marco, textvariable=brutos).grid(row=7, column=0, sticky="ew", pady=(2, 10))
-    ttk.Button(marco, text="Elegir...", command=lambda: brutos.set(filedialog.askdirectory(title="Carpeta para los brutos") or brutos.get())).grid(row=7, column=1, padx=(8, 0))
-    fila_proy = ttk.Frame(marco)
-    fila_proy.grid(row=8, column=0, columnspan=2, sticky="w")
-    boton_proy = ttk.Button(fila_proy, text="Elegir proyectos...")
-    boton_proy.pack(side="left")
-    boton_cortes = ttk.Button(fila_proy, text="Montaje...")
-    boton_cortes.pack(side="left", padx=(6, 0))
-    boton_exportar = ttk.Button(fila_proy, text="Exportar brutos (sin repetir el análisis)")
-    boton_exportar.pack(side="left", padx=(6, 0))
-    texto_proy = tk.StringVar(value="Brutos de todos los proyectos del disco.")
-    ttk.Label(marco, textvariable=texto_proy).grid(row=12, column=0, columnspan=2, sticky="w")
-    origen.trace_add("write", lambda *a: (estado.update(proyectos=None), texto_proy.set("Brutos de todos los proyectos del disco.")))
-
-    botones = ttk.Frame(marco)
-    botones.grid(row=9, column=0, columnspan=2, pady=12)
-    boton = ttk.Button(botones, text="Analizar disco")
-    boton.pack(side="left", padx=6)
-    boton_parar = ttk.Button(botones, text="Detener", state="disabled")
-    boton_parar.pack(side="left", padx=6)
-    # Sin actualización automática al abrir (decisión de Adrián para la revisión de Ingeniería, oct. 2026): solo se
-    # busca una versión nueva si alguien pulsa este botón (aparece solo en el .exe de Windows).
-    boton_act = ttk.Button(botones, text="Buscar actualización")
-    barra = ttk.Progressbar(marco, mode="indeterminate")
-    barra.grid(row=10, column=0, columnspan=2, sticky="ew")
-    registro = tk.Text(marco, height=14, wrap="word", state="disabled", font=("Consolas", 10))
-    registro.grid(row=11, column=0, columnspan=2, sticky="nsew", pady=(8, 0))
-    marco.columnconfigure(0, weight=1)
-    marco.rowconfigure(11, weight=1)
-
-    def escribe(txt):
-        registro.configure(state="normal")
-        registro.insert("end", txt + "\n")
-        registro.see("end")
-        registro.configure(state="disabled")
-
-    def vaciar_cola():
-        try:
-            while True:
-                tipo, msg = cola.get_nowait()
-                if tipo == "log":
-                    escribe(msg)
-                    continue
-                if tipo == "actualizacion":
-                    if msg == "cambio_lanzado":  # el .bat espera a que se cierre para cambiar de versión y reabrir
-                        raiz.destroy()
-                        return
-                    for b in (boton, boton_cortes, boton_exportar, boton_proy, boton_act):
-                        b.configure(state="normal")
-                    estado["ocupado"] = False
-                    escribe("Versión al día (%s)." % BUILD if msg == "al_dia" else
-                            "No se ha podido buscar o instalar una versión nueva; se sigue con esta (%s)." % BUILD)
-                    continue
-                barra.stop()
-                for b in (boton, boton_cortes, boton_exportar, boton_proy, boton_act):
-                    b.configure(state="normal")
-                boton_parar.configure(state="disabled")
-                estado["ocupado"] = False
-                if estado["cerrar"]:  # se pidió cerrar la ventana mientras trabajaba
-                    raiz.destroy()
-                    return
-                if tipo == "fin":
-                    messagebox.showinfo("Terminado", "Diagnóstico terminado.\n\nInforme: %s\n\nZIP para enviar: %s" % msg)
-                elif tipo == "detenido_brutos":
-                    messagebox.showwarning("Detenido", "Exportación detenida. Los brutos terminados se conservan y el informe recoge lo hecho.\n\n"
-                                           "Para seguir otro día, vuelve a lanzar el programa con las mismas carpetas: "
-                                           "repetirá el análisis y seguirá por el bruto que faltaba.\n\nInforme: %s\n\nZIP para enviar: %s" % msg)
-                elif tipo == "detenido":
-                    messagebox.showwarning("Detenido", "Análisis detenido antes de terminar: no se ha generado informe.\n\n"
-                                           "Al volver a lanzarlo empezará desde el principio.")
-                elif tipo == "exportado":
-                    total, ok, parado, carpeta_b = msg
-                    (messagebox.showwarning if parado or ok < total else messagebox.showinfo)(
-                        "Brutos", "%s\n\n%d brutos, %d OK.\n\nCarpeta: %s\n(detalle en brutos_resultado.json y exportacion.log)"
-                        % ("Exportación detenida. Al volver a pulsar Exportar sigue por donde se quedó." if parado else "Exportación terminada.",
-                           total, ok, carpeta_b))
-                elif tipo == "error":
-                    messagebox.showerror("Error", msg)
-        except queue.Empty:
-            pass
-        raiz.after(200, vaciar_cola)
-
-    def hilo():
-        try:
-            d, z, resumen = ejecutar(origen.get(), destino.get(), progreso=lambda m: cola.put(("log", m)), hacer_miniaturas=minis.get(),
-                               brutos=brutos.get() if hacer_brutos.get() else None, zip_miniaturas=zip_minis.get(),
-                               proyectos_brutos=estado["proyectos"] if hacer_brutos.get() else None)
-            cola.put(("detenido_brutos" if resumen.get("detenido") else "fin", (str(d / "informe.html"), str(z))))
-        except Detenido:
-            cola.put(("detenido", None))
-        except Exception as e:
-            LOG.error("Fallo: %s\n%s", e, traceback.format_exc())  # ejecutar ya lo ha dejado en diagnostico.log
-            cola.put(("error", "%s\n\nDetalle en diagnostico.log (si llegó a crearse)." % e))
-
-    def iniciar():
-        if estado["ocupado"]:
-            return
-        if not origen.get() or not Path(origen.get()).exists():
-            messagebox.showwarning("Falta el origen", "Elige el disco o la carpeta de Avid que quieres analizar.")
-            return
-        if not destino.get():
-            messagebox.showwarning("Falta el destino", "Elige dónde guardar el informe.")
-            return
-        if hacer_brutos.get() and estado["proyectos"] == []:
-            messagebox.showwarning("Ningún proyecto", "No has elegido ningún proyecto para los brutos. Pulsa \"Elegir proyectos...\".")
-            return
-        if hacer_brutos.get() and not brutos.get():
-            messagebox.showwarning("Falta la carpeta de brutos", "Has marcado exportar brutos: elige la carpeta donde guardarlos (un disco con espacio).")
-            return
-        ff, _ = localizar_ffmpeg()
-        if hacer_brutos.get() and not ff:
-            messagebox.showerror("Sin ffmpeg", "Para exportar brutos hace falta ffmpeg (carpeta bin o PATH).")
-            return
-        if not ff and not messagebox.askyesno("Sin ffmpeg", "No se encuentra ffmpeg/ffprobe (carpeta bin o PATH).\nSe analizarán los bins pero no los ficheros de vídeo.\n¿Continuar igualmente?"):
-            return
-        PARAR.clear()
-        estado["ocupado"] = True
-        boton.configure(state="disabled")
-        boton_parar.configure(state="normal")
-        barra.start(12)
-        escribe("— %s —" % ahora_txt())
-        threading.Thread(target=hilo, daemon=True).start()
-
-    def analisis_hecho():
-        """Carpeta del último análisis de este disco en la carpeta de destino, o None (con aviso)."""
-        if not origen.get() or not destino.get() or not brutos.get():
-            messagebox.showwarning("Faltan carpetas", "Elige el disco (1), dónde está el informe (2) y la carpeta de brutos (3).")
-            return None
-        carpeta = buscar_analisis(destino.get(), origen.get())
-        if not carpeta:
-            messagebox.showwarning("Sin análisis", "No hay ningún análisis de este disco en la carpeta del informe (2).\n\n"
-                                   "Primero pulsa \"Analizar disco\" sin marcar los brutos (o con ellos).")
-        return carpeta
-
-    def abrir_montaje():
-        if estado["ocupado"]:
-            return
-        carpeta = analisis_hecho()
-        if not carpeta:
-            return
-        if not exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json").get("agrupar", "proyecto_mes") == "proyecto_mes":
-            messagebox.showwarning("Montaje", "El montaje solo se aplica con agrupar = proyecto_mes (config_brutos.json).")
-            return
-        import ventana_montaje
-        raiz.configure(cursor="watch")
-        raiz.update()
-        try:
-            m, _, _, _, resumen, cfg = montaje_de(carpeta, brutos.get())
-        finally:
-            raiz.configure(cursor="")
-        escribe("Montaje con el análisis %s" % carpeta.name)
-        r = ventana_montaje.dialogo_montaje(raiz, m, resumen["origen"], Path(carpeta) / "visor", brutos.get(), localizar_ffmpeg()[0],
-                                            exportar_brutos.clips_a_la_vez(cfg), estado["proyectos"])
-        if r:
-            escribe("Montaje guardado en %s" % (Path(brutos.get()) / "montaje.json"))
-        if r == "exportar":
-            exportar_ahora()
-
-    def hilo_exportar(carpeta, proyectos_brutos, cfg):
-        try:
-            res = exportar_desde_analisis(carpeta, brutos.get(), progreso=lambda m: cola.put(("log", m)), proyectos_brutos=proyectos_brutos, cfg=cfg)
-            ok = sum(1 for b in res if str(b["estado"]).startswith("OK"))
-            cola.put(("exportado", (len(res), ok, PARAR.is_set(), brutos.get())))
-        except Detenido:
-            cola.put(("exportado", (0, 0, True, brutos.get())))
-        except Exception as e:
-            LOG.error("Fallo: %s\n%s", e, traceback.format_exc())
-            cola.put(("error", "%s\n\nDetalle en exportacion.log, en la carpeta de brutos." % e))
-
-    def exportar_ahora():
-        if estado["ocupado"]:
-            return
-        carpeta = analisis_hecho()
-        if not carpeta:
-            return
-        if estado["proyectos"] == []:
-            messagebox.showwarning("Ningún proyecto", "No has elegido ningún proyecto. Pulsa \"Elegir proyectos...\".")
-            return
-        import ventana_montaje
-        raiz.configure(cursor="watch")
-        raiz.update()
-        try:
-            resumen, cfg = resumen_exportacion(carpeta, brutos.get(), estado["proyectos"])
-        finally:
-            raiz.configure(cursor="")
-        cfg = ventana_montaje.dialogo_opciones(raiz, cfg, resumen, guardar_config_brutos)
-        if cfg is None:
-            return
-        if not messagebox.askyesno("Exportar brutos", "Se exportan %d brutos con el análisis %s (no se repite) y el montaje guardado.\n\n"
-                                   "Puede tardar muchas horas; se puede parar con Detener y seguir otro día.\n\n¿Empezar?"
-                                   % (len(resumen["brutos"]), carpeta.name)):
-            return
-        PARAR.clear()
-        estado["ocupado"] = True
-        for b in (boton, boton_cortes, boton_exportar, boton_proy, boton_act):
-            b.configure(state="disabled")
-        boton_parar.configure(state="normal")
-        barra.start(12)
-        escribe("— %s — Exportación de brutos" % ahora_txt())
-        threading.Thread(target=hilo_exportar, args=(carpeta, estado["proyectos"], cfg), daemon=True).start()
-
-    def elegir_proyectos():
-        if estado["ocupado"]:
-            return
-        if not origen.get() or not Path(origen.get()).exists():
-            messagebox.showwarning("Falta el origen", "Elige primero el disco o la carpeta de Avid.")
-            return
-        raiz.configure(cursor="watch")
-        raiz.update()
-        try:
-            lista = listar_proyectos(origen.get())
-        finally:
-            raiz.configure(cursor="")
-        hechos = brutos_hechos(brutos.get()) if brutos.get() else set()
-        elegidos = dialogo_proyectos(raiz, lista, estado["proyectos"], hechos)
-        if elegidos is None:  # cancelado
-            return
-        todos = [p["nombre"] for p in lista] + ["SIN_PROYECTO"]
-        if set(elegidos) >= set(todos):
-            estado["proyectos"] = None
-            texto_proy.set("Brutos de todos los proyectos del disco.")
-        else:
-            estado["proyectos"] = elegidos
-            texto_proy.set("Brutos de %d de %d proyectos: %s" % (len(elegidos), len(todos), ", ".join(elegidos)[:70] + ("…" if len(", ".join(elegidos)) > 70 else "")))
-            hacer_brutos.set(True)
-        escribe("Proyectos para brutos: %s" % ("todos" if estado["proyectos"] is None else "; ".join(estado["proyectos"])))
-
-    def detener():
-        if not estado["ocupado"] or PARAR.is_set():
-            return
-        if messagebox.askyesno("Detener", "¿Detener ahora?\n\n"
-                               "· Si está exportando brutos: los terminados se conservan, el que está a medias se descarta "
-                               "y se genera el informe con lo hecho. Relanzando con las mismas carpetas, sigue por donde se quedó.\n\n"
-                               "· Si aún está analizando: no habrá informe y al relanzar empezará de cero."):
-            PARAR.set()
-            boton_parar.configure(state="disabled")
-            escribe("Deteniendo... (unos segundos)")
-
-    def al_cerrar():
-        if not estado["ocupado"]:
-            raiz.destroy()
-            return
-        if messagebox.askyesno("Está trabajando", "El programa está trabajando. ¿Detenerlo y cerrar la ventana?\n\n"
-                               "Los brutos ya terminados se conservan."):
-            estado["cerrar"] = True
-            PARAR.set()
-            escribe("Deteniendo para cerrar... (unos segundos)")
-
-    def buscar_actualizacion():
-        if estado["ocupado"]:
-            return
-        if not messagebox.askyesno("Buscar actualización", "Se consulta en GitHub si hay una versión más nueva que la %s y, si la hay, "
-                                   "se descarga, se comprueba e instala, y el programa se vuelve a abrir.\n\n"
-                                   "Se conserva la configuración (config_*.json). ¿Seguir?" % BUILD):
-            return
-        estado["ocupado"] = True
-        for b in (boton, boton_cortes, boton_exportar, boton_proy, boton_act):
-            b.configure(state="disabled")  # nunca se actualiza a mitad de un análisis o una exportación
-        escribe("Buscando versión nueva en GitHub...")
-        threading.Thread(target=lambda: cola.put(("actualizacion", actualizar.actualizar(
-            BUILD, carpeta_base(), progreso=lambda m: cola.put(("log", m))))), daemon=True).start()
-
-    boton.configure(command=iniciar)
-    boton_act.configure(command=buscar_actualizacion)
-    boton_parar.configure(command=detener)
-    boton_proy.configure(command=elegir_proyectos)
-    boton_cortes.configure(command=abrir_montaje)
-    boton_exportar.configure(command=exportar_ahora)
-    raiz.protocol("WM_DELETE_WINDOW", al_cerrar)
-    escribe("Programa de diagnóstico de discos Avid (solo lectura). pyavb: %s. ffmpeg: %s."
-            % ("OK" if PYAVB_OK else "NO INSTALADO", "OK" if localizar_ffmpeg()[0] else "no encontrado"))
-    if puede_actualizarse():
-        boton_act.pack(side="left", padx=6)
-    raiz.after(200, vaciar_cola)
-    raiz.mainloop()
+    """Ventana con las páginas Disco, Montaje y Exportar (interfaz.py). sin_actualizar: se mantiene por compatibilidad;
+    la actualización ya solo se busca a mano."""
+    import interfaz
+    interfaz.lanzar(sys.modules[__name__])
 
 
 # ---------------------------------------------------------------------------

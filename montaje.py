@@ -39,8 +39,9 @@ class Montaje:
     """listas: {proyecto: {"material": [clips], "piezas": [clips]}} de exportar_brutos.listas_por_proyecto (en orden
     cronológico); fecha: clip -> datetime | None; tope: segundos por bruto; guardado: "proyectos" de montaje.json."""
 
-    def __init__(self, listas, fecha, tope, guardado=None):
+    def __init__(self, listas, fecha, tope, guardado=None, descartados=None):
         self.listas, self.fecha, self.tope = listas, fecha, tope
+        self.descartados = descartados or {}  # {proyecto: [(clip, motivo)]}: lo que no entra en ningún bruto
         self.por_clave = {c.get("clave"): c for l in listas.values() for cs in l.values() for c in cs}
         self.orden = {p: {c.get("clave"): (f, i) for f in ("material", "piezas") for i, c in enumerate(l.get(f) or [])}
                       for p, l in listas.items()}
@@ -88,6 +89,10 @@ class Montaje:
 
     def movidos(self, p):
         return set(self._estado(p)["movidos"])
+
+    def fuera_del_bruto(self, p):
+        """[(clip, motivo)] de lo que se queda fuera de los brutos del proyecto (efectos de Avid, agencias, importados)."""
+        return list(self.descartados.get(p, []))
 
     def nuevos(self, p):
         return [self.por_clave[k] for k in self.sin_colocar.get(p, [])]
@@ -270,18 +275,18 @@ class Montaje:
         self.estados[p] = estado
 
     @classmethod
-    def cargar(cls, carpeta_brutos, listas, fecha, tope):
+    def cargar(cls, carpeta_brutos, listas, fecha, tope, descartados=None):
         """Lee montaje.json de la carpeta de brutos; si no hay pero hay un cortes.json antiguo, lo convierte."""
         ruta = Path(carpeta_brutos) / FICHERO
         if ruta.exists():
             try:
                 guardado = json.loads(ruta.read_text(encoding="utf-8")).get("proyectos") or {}
             except Exception as e:
-                m = cls(listas, fecha, tope)
+                m = cls(listas, fecha, tope, descartados=descartados)
                 m.avisos.append("%s ilegible (%s): se usa el reparto automático" % (FICHERO, e))
                 return m
-            return cls(listas, fecha, tope, guardado)
-        m = cls(listas, fecha, tope)
+            return cls(listas, fecha, tope, guardado, descartados)
+        m = cls(listas, fecha, tope, descartados=descartados)
         cortes = eb.cargar_cortes(carpeta_brutos)
         for p, claves in sorted(cortes.items()):
             if p in listas:
@@ -296,7 +301,8 @@ class Montaje:
     def desde_analisis(cls, clips, cruce, mxf, cfg, carpeta_brutos):
         mxf_por_ruta = {m["ruta"]: m for m in mxf}
         listas = eb.listas_por_proyecto(clips, cruce, mxf_por_ruta, cfg)
-        return cls.cargar(carpeta_brutos, listas, lambda c: eb.fecha_clip(c, mxf_por_ruta), 3600 * float(cfg.get("horas_por_bruto", 2)))
+        return cls.cargar(carpeta_brutos, listas, lambda c: eb.fecha_clip(c, mxf_por_ruta), 3600 * float(cfg.get("horas_por_bruto", 2)),
+                          eb.descartados_por_proyecto(clips, cruce, mxf_por_ruta, cfg))
 
     # --- exportar -------------------------------------------------------------------------------------------------
 

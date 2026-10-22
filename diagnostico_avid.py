@@ -1191,17 +1191,21 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
 
     if resumen.get("brutos") is not None:
         h.append("<h2>Brutos exportados</h2><p class='muted'>Carpeta: %s</p>" % esc(resumen.get("brutos_carpeta")))
-        h.append("<table><tr><th>Bruto</th><th>Contenido</th><th>Fichero</th><th class='n'>Clips</th><th class='n'>Incluidos</th><th class='n'>Fallidos</th><th>Modo</th><th class='n'>Audio</th><th class='n'>Duración</th><th class='n'>GB</th><th>Estado</th></tr>")
+        h.append("<table><tr><th>Bruto</th><th>Contenido</th><th>Fichero</th><th class='n'>Clips</th><th class='n'>Incluidos</th><th class='n'>Fallidos</th><th>Modo</th><th class='n'>Audio</th><th class='n'>Duración</th><th class='n'>GB</th><th>Formato</th><th>Estado</th></tr>")
         for b in resumen["brutos"]:
             color = "" if b["estado"].startswith("OK") else " style='background:#fef3f2'"
-            h.append("<tr%s><td>%s</td><td>%s</td><td>%s</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td>%s</td><td class='n'>%d</td><td class='n'>%s</td><td class='n'>%.2f</td><td>%s</td></tr>"
+            h.append("<tr%s><td>%s</td><td>%s</td><td>%s</td><td class='n'>%d</td><td class='n'>%d</td><td class='n'>%d</td><td>%s</td><td class='n'>%d</td><td class='n'>%s</td><td class='n'>%.2f</td><td>%s</td><td>%s</td></tr>"
                      % (color, esc(b["proyecto"]), esc(b.get("contenido") or ""), esc(b["fichero"] or "—"), b["clips"], b["incluidos"], b["fallidos"],
                         esc(b["modo"] + (" (no se pudo copiar)" if b.get("reintento") else "")), b["pistas_audio"],
-                        fmt_duracion(b["segundos"]), gb(b["bytes"]), esc(b["estado"] + (" · de una ejecución anterior" if b.get("reanudado") else ""))))
-        h.append("</table><p class='muted'>Por defecto, un bruto por proyecto y mes (PROYECTO_AAAA-MM), con los clips en orden cronológico "
-                 "(fecha del fichero de media) y de hasta 2 horas; las piezas renderizadas van aparte. Todo sale en XDCAM HD 50 1080i25 16:9. "
+                        fmt_duracion(b["segundos"]), gb(b["bytes"]),
+                        {True: "conforme", False: "<b style='color:#b42318'>NO CONFORME</b>"}.get(b.get("conforme"), "—"),
+                        esc(b["estado"] + (" · de una ejecución anterior" if b.get("reanudado") else ""))))
+        h.append("</table><p class='muted'>Por defecto, un bruto por proyecto y mes (PROYECTO MES DE AÑO), con los clips en orden cronológico "
+                 "(fecha de grabación o, si no consta, del fichero de media) y de hasta 2 horas, o como se dejó en la pantalla de montaje; "
+                 "las piezas renderizadas van aparte. Todo sale en XDCAM HD422 50 1080i25 16:9. "
                  "No se incluyen los ficheros importados (agencias, internet, móvil) ni los renders de efectos (fundidos, rótulos, "
-                 "picture-in-picture). Junto a cada bruto hay un shotlist Excel con el timecode de cada clip y una hoja de contactos HTML.</p>")
+                 "picture-in-picture). Junto a cada bruto: shotlist Excel con el timecode de cada clip, hoja de contactos HTML, ficha técnica "
+                 "(Formato: comprobado sobre el fichero exportado) y MD5.</p>")
 
     h.append("<footer>Generado por diagnostico_avid.py v%s, %s. No se ha modificado nada en el disco de origen.</footer></main></body></html>" % (VERSION, esc(BUILD)))
     (destino / "informe.html").write_text("\n".join(h), encoding="utf-8")
@@ -1320,7 +1324,8 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
         zip_path = destino.with_suffix(".zip")
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
             for f in destino.rglob("*"):
-                if f.is_file() and (zip_miniaturas or f.parent.name != "miniaturas"):
+                # los fotogramas del visor de montaje nunca salen del PC (norma del proyecto: nada de imágenes del material)
+                if f.is_file() and "visor" not in f.relative_to(destino).parts and (zip_miniaturas or f.parent.name != "miniaturas"):
                     z.write(f, f.relative_to(destino.parent))
         LOG.info("ZIP: %s (%.1f MB)", zip_path, zip_path.stat().st_size / 1e6)
 
@@ -1366,8 +1371,9 @@ def cargar_analisis(carpeta):
     return leer("clips.json"), leer("cruce.json"), leer("mxf.json"), leer("resumen.json")
 
 
-def exportar_desde_analisis(carpeta, brutos, progreso=print, proyectos_brutos=None):
-    """Paso 3: brutos a partir de un análisis guardado, sin repetirlo (con los cortes de cortes.json si los hay).
+def exportar_desde_analisis(carpeta, brutos, progreso=print, proyectos_brutos=None, cfg=None):
+    """Paso 3: brutos a partir de un análisis guardado, sin repetirlo, con el montaje de montaje.json si lo hay y las
+    opciones del panel (cfg) o, si no se pasan, las de config_brutos.json.
     El log va a exportacion.log en la carpeta de brutos. Devuelve la lista de resultados."""
     carpeta, brutos = Path(carpeta), Path(brutos)
     clips, cruce, mxf, resumen = cargar_analisis(carpeta)
@@ -1391,7 +1397,9 @@ def exportar_desde_analisis(carpeta, brutos, progreso=print, proyectos_brutos=No
             raise RuntimeError("Para exportar brutos hace falta ffmpeg (carpeta bin o PATH).")
         progreso("Exportando brutos con el análisis del %s (sin repetirlo)%s" % (resumen.get("fecha", "?"), "" if proyectos_brutos is None else
                                                                                  ": %d proyectos elegidos" % len(proyectos_brutos)))
-        cfg = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json")
+        if cfg is None:
+            cfg = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json")
+        LOG.info("Opciones de exportación: %s", json.dumps(exportar_brutos.opciones_bruto(cfg), ensure_ascii=False))
         resultados = exportar_brutos.exportar_todo(clips, cruce, mxf, origen, brutos, ffmpeg, ffprobe, progreso, cfg,
                                                    miniaturas_dir=carpeta / "miniaturas" if (carpeta / "miniaturas").exists() else None,
                                                    proyectos=proyectos_brutos)
@@ -1407,225 +1415,35 @@ def exportar_desde_analisis(carpeta, brutos, progreso=print, proyectos_brutos=No
         fh.close()
 
 
-def miniatura_png(carpeta_analisis, clip, ffmpeg, ancho=112):
-    """PNG pequeño de la miniatura de un clip (tkinter no lee JPG). Se guarda en miniaturas_cortes. None si no hay."""
-    if not clip.get("miniatura") or not ffmpeg:
-        return None
-    jpg = Path(carpeta_analisis) / clip["miniatura"]
-    png = Path(carpeta_analisis) / "miniaturas_cortes" / (jpg.stem + ".png")
-    if not png.exists() and jpg.exists():
-        png.parent.mkdir(exist_ok=True)
-        try:
-            subprocess.run([ffmpeg, "-v", "error", "-y", "-i", str(jpg), "-vf", "scale=%d:-2" % ancho, str(png)],
-                           capture_output=True, timeout=30, **flags_subproceso())
-        except Exception:
-            return None
-    return png if png.exists() else None
-
-
-def fmt_h(segundos):
-    s = int(round(segundos or 0))
-    return "%d h %02d min" % (s // 3600, s % 3600 // 60) if s >= 3600 else "%d min %02d s" % (s // 60, s % 60)
-
-
-def dialogo_cortes(raiz, carpeta_analisis, carpeta_brutos, elegidos=None):
-    """Paso 2: pantalla para revisar dónde empieza cada bruto (por defecto, llenando hasta horas_por_bruto) y moverlo a
-    un clip anterior o posterior, para no partir una entrevista. Mover un corte recalcula los siguientes. Un bruto de
-    más de horas_por_bruto sale en rojo. Al guardar, los cortes de los proyectos tocados van a cortes.json de la
-    carpeta de brutos. Devuelve True si se guardó."""
-    import tkinter as tk
-    from tkinter import messagebox, ttk
+def montaje_de(carpeta_analisis, carpeta_brutos):
+    """Montaje de un análisis ya hecho (con el montaje.json de la carpeta de brutos si lo hay)."""
+    import montaje
     clips, cruce, mxf, resumen = cargar_analisis(carpeta_analisis)
     cfg = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json")
-    tope = 3600 * float(cfg.get("horas_por_bruto", 2))
-    mxf_por_ruta = {m["ruta"]: m for m in mxf}
-    fecha = lambda c: exportar_brutos.fecha_clip(c, mxf_por_ruta)
-    dur = lambda c: (c.get("duracion") or 0) if c.get("fichero_video") else 0
-    listas = exportar_brutos.listas_por_proyecto(clips, cruce, mxf_por_ruta, cfg)
-    secuencias = {p: [c for c in l["material"] if fecha(c)] for p, l in listas.items() if elegidos is None or p in elegidos}
-    secuencias = {p: cs for p, cs in secuencias.items() if cs}
-    if not secuencias:
-        messagebox.showinfo("Sin clips", "No hay material con fecha en los proyectos elegidos.")
-        return False
-    guardados = exportar_brutos.cargar_cortes(carpeta_brutos)
-    inicios, tocados = {}, set()
-    for p, cs in secuencias.items():
-        pos = {c.get("clave"): i for i, c in enumerate(cs)}
-        g = guardados.get(p)
-        inicios[p] = sorted(pos[k] for k in g) if g and all(k in pos for k in g) else exportar_brutos.inicios_auto(cs, tope)
-        if g and all(k in pos for k in g):
-            tocados.add(p)
-    ffmpeg = localizar_ffmpeg()[0]
-    nombres = sorted(secuencias)
+    return montaje.Montaje.desde_analisis(clips, cruce, mxf, cfg, carpeta_brutos), clips, cruce, mxf, resumen, cfg
 
-    def trozos(p):
-        b = [0] + [i for i in inicios[p] if i] + [len(secuencias[p])]
-        return list(zip(b, b[1:]))
 
-    def dur_trozo(p, a, b):
-        return sum(dur(c) for c in secuencias[p][a:b])
+def resumen_exportacion(carpeta_analisis, carpeta_brutos, proyectos_brutos=None):
+    """Lo que necesita el panel de opciones: nombres de los brutos que se van a exportar, segundos de material, pistas
+    de audio máximas y espacio libre en el destino."""
+    import ventana_montaje
+    m, clips, cruce, mxf, resumen, cfg = montaje_de(carpeta_analisis, carpeta_brutos)
+    mxf_por_ruta = {x["ruta"]: x for x in mxf}
+    grupos = exportar_brutos.grupos_con_montaje(clips, cruce, mxf, mxf_por_ruta, cfg, carpeta_brutos, lambda t: None, m)
+    if proyectos_brutos is not None:
+        grupos = [g for g in grupos if cfg.get("agrupar", "proyecto_mes") == "dias" or g["proyecto"] in set(proyectos_brutos)]
+    cs = [c for g in grupos for c in g["clips"]]
+    return {"brutos": [g["base"] for g in grupos], "segundos": sum((c.get("duracion") or 0) for c in cs if c.get("fichero_video")),
+            "pistas_max": max((c.get("num_audio") or 0 for c in cs), default=0), "libre": ventana_montaje.espacio_libre(carpeta_brutos),
+            "destino": str(carpeta_brutos)}, cfg
 
-    v = tk.Toplevel(raiz)
-    v.title("Revisar cortes de los brutos (máximo %s)" % fmt_h(tope))
-    v.geometry("1100x720")
-    v.transient(raiz)
-    ttk.Label(v, padding=8, text="Elige un proyecto y un bruto. Abajo salen los clips de alrededor del corte: marca el clip con el que "
-                                 "debe empezar ese bruto (antes o después) y pulsa \"Empezar aquí\". Los cortes siguientes se recalculan. "
-                                 "En rojo, los brutos de más de %s." % fmt_h(tope), wraplength=1060).pack(anchor="w")
-    arriba = ttk.Frame(v, padding=(8, 0))
-    arriba.pack(fill="both", expand=False)
-    lb_p = tk.Listbox(arriba, width=46, height=12, exportselection=False)
-    lb_p.pack(side="left", fill="y")
-    lb_b = tk.Listbox(arriba, height=12, exportselection=False)
-    lb_b.pack(side="left", fill="both", expand=True, padx=(8, 0))
-    abajo = ttk.LabelFrame(v, text="Clips alrededor del corte", padding=6)
-    abajo.pack(fill="both", expand=True, padx=8, pady=6)
-    lienzo = tk.Canvas(abajo, highlightthickness=0)
-    barra = ttk.Scrollbar(abajo, orient="vertical", command=lienzo.yview)
-    filas = ttk.Frame(lienzo)
-    filas.bind("<Configure>", lambda e: lienzo.configure(scrollregion=lienzo.bbox("all")))
-    lienzo.create_window((0, 0), window=filas, anchor="nw")
-    lienzo.configure(yscrollcommand=barra.set)
-    lienzo.pack(side="left", fill="both", expand=True)
-    barra.pack(side="right", fill="y")
-    elegido = tk.IntVar(value=-1)
-    imagenes = {}
-    estado = {"p": None, "k": None, "margen": 8}
 
-    def texto_p(p):
-        ts = trozos(p)
-        largo = any(dur_trozo(p, a, b) > tope for a, b in ts)
-        return "%s%s%s — %d brutos · %s" % ("⚠ " if largo else "", "✎ " if p in tocados else "", p, len(ts),
-                                            fmt_h(sum(dur(c) for c in secuencias[p])))
-
-    def pintar_proyectos():
-        sel = lb_p.curselection()
-        lb_p.delete(0, "end")
-        for p in nombres:
-            lb_p.insert("end", texto_p(p))
-        if sel:
-            lb_p.selection_set(sel[0])
-
-    def pintar_brutos():
-        p = estado["p"]
-        lb_b.delete(0, "end")
-        for k, (a, b) in enumerate(trozos(p), 1):
-            d = dur_trozo(p, a, b)
-            cs = secuencias[p]
-            lb_b.insert("end", "Bruto %d: %s · %d clips · %s → %s" % (k, fmt_h(d), b - a, fecha(cs[a]).strftime("%d/%m/%Y %H:%M:%S"),
-                                                                  fecha(cs[b - 1]).strftime("%d/%m/%Y %H:%M:%S")))
-            if d > tope:
-                lb_b.itemconfig("end", foreground="#c00000")
-        if estado["k"] is not None and estado["k"] < lb_b.size():
-            lb_b.selection_set(estado["k"])
-
-    def pintar_clips():
-        for w in filas.winfo_children():
-            w.destroy()
-        p, k = estado["p"], estado["k"]
-        if p is None or k is None:
-            return
-        ts = trozos(p)
-        a = ts[k][0]
-        cs = secuencias[p]
-        ini, fin = max(0, a - estado["margen"]), min(len(cs), a + estado["margen"])
-        if k == 0:
-            ttk.Label(filas, text="El bruto 1 empieza siempre con el primer clip del proyecto. Elige otro bruto para mover su corte.").grid(row=0, column=0, sticky="w")
-        elegido.set(a)
-        v.configure(cursor="watch")
-        v.update_idletasks()
-        for fila, i in enumerate(range(ini, fin)):
-            c = cs[i]
-            previo = cs[i - 1] if i else None
-            hueco = (fecha(c) - fecha(previo)).total_seconds() - dur(previo) if previo else 0
-            marca = "▶ AQUÍ EMPIEZA EL BRUTO %d" % (k + 1) if i == a else ""
-            bruto = next(n for n, (x, y) in enumerate(ts, 1) if x <= i < y)
-            png = miniatura_png(carpeta_analisis, c, ffmpeg)
-            if png:
-                try:
-                    imagenes[i] = tk.PhotoImage(file=str(png))
-                except Exception:
-                    imagenes[i] = None
-            ttk.Radiobutton(filas, variable=elegido, value=i, state="normal" if k else "disabled").grid(row=fila, column=0)
-            tk.Label(filas, image=imagenes.get(i) or "", width=112 if imagenes.get(i) else 0).grid(row=fila, column=1, padx=4, pady=2)
-            texto = "%s   %s   (%s)%s   bruto %d   %s" % (fecha(c).strftime("%d/%m/%Y %H:%M:%S"), c["nombre"], fmt_h(dur(c)),
-                                                       "   · hueco de %s antes" % fmt_h(hueco) if hueco > 60 else "", bruto, marca)
-            tk.Label(filas, text=texto, anchor="w", font=("Segoe UI", 10, "bold" if i == a else "normal"),
-                     fg="#0b5" if i == a else "#000").grid(row=fila, column=2, sticky="w")
-        v.configure(cursor="")
-
-    def al_elegir_proyecto(_=None):
-        sel = lb_p.curselection()
-        if not sel:
-            return
-        estado.update(p=nombres[sel[0]], k=1 if len(trozos(nombres[sel[0]])) > 1 else 0, margen=8)
-        pintar_brutos()
-        pintar_clips()
-
-    def al_elegir_bruto(_=None):
-        sel = lb_b.curselection()
-        if sel:
-            estado.update(k=sel[0], margen=8)
-            pintar_clips()
-
-    def empezar_aqui():
-        p, k = estado["p"], estado["k"]
-        if not p or not k:
-            return
-        i = elegido.get()
-        anterior = trozos(p)[k - 1][0]
-        if i <= anterior:
-            messagebox.showwarning("No se puede", "Ese clip es del bruto anterior a este o anterior: el corte tiene que ir después de donde empieza el bruto %d." % k, parent=v)
-            return
-        inicios[p] = [x for x in inicios[p] if x and x < i and x <= anterior] + [i] + exportar_brutos.inicios_auto(secuencias[p], tope, desde=i)
-        tocados.add(p)
-        pintar_proyectos()
-        pintar_brutos()
-        pintar_clips()
-
-    def automatico():
-        p = estado["p"]
-        if p:
-            inicios[p] = exportar_brutos.inicios_auto(secuencias[p], tope)
-            tocados.discard(p)
-            estado["k"] = min(estado["k"] or 0, len(trozos(p)) - 1)
-            pintar_proyectos()
-            pintar_brutos()
-            pintar_clips()
-
-    def mas():
-        estado["margen"] += 8
-        pintar_clips()
-
-    resultado = {"guardado": False}
-
-    def guardar():
-        nuevos = dict(guardados)
-        for p in secuencias:
-            if p in tocados:
-                nuevos[p] = [secuencias[p][i].get("clave") for i in inicios[p] if i]
-            else:
-                nuevos.pop(p, None)
-        exportar_brutos.guardar_cortes(carpeta_brutos, nuevos)
-        LOG.info("Cortes guardados en %s: %d proyectos con cortes a mano", Path(carpeta_brutos) / exportar_brutos.FICHERO_CORTES, len(nuevos))
-        resultado["guardado"] = True
-        v.destroy()
-
-    pie = ttk.Frame(v, padding=8)
-    pie.pack(fill="x")
-    ttk.Button(pie, text="Empezar aquí el bruto", command=empezar_aqui).pack(side="left")
-    ttk.Button(pie, text="Ver más clips", command=mas).pack(side="left", padx=6)
-    ttk.Button(pie, text="Volver al corte automático en este proyecto", command=automatico).pack(side="left")
-    ttk.Button(pie, text="Cancelar", command=v.destroy).pack(side="right")
-    ttk.Button(pie, text="Guardar cortes", command=guardar).pack(side="right", padx=6)
-    lb_p.bind("<<ListboxSelect>>", al_elegir_proyecto)
-    lb_b.bind("<<ListboxSelect>>", al_elegir_bruto)
-    pintar_proyectos()
-    lb_p.selection_set(0)
-    al_elegir_proyecto()
-    v.grab_set()
-    raiz.wait_window(v)
-    return resultado["guardado"]
+def guardar_config_brutos(cfg):
+    """Guarda las opciones del panel como predeterminadas en config_brutos.json (con los comentarios de siempre)."""
+    base = json.loads(json.dumps(exportar_brutos.CONFIG_DEFECTO))
+    base.update(cfg)
+    (carpeta_base() / "config_brutos.json").write_text(json.dumps(base, ensure_ascii=False, indent=2), encoding="utf-8")
+    LOG.info("Opciones de exportación guardadas como predeterminadas en config_brutos.json")
 
 
 # ---------------------------------------------------------------------------
@@ -1725,7 +1543,7 @@ def lanzar_gui(sin_actualizar=False):
     fila_proy.grid(row=8, column=0, columnspan=2, sticky="w")
     boton_proy = ttk.Button(fila_proy, text="Elegir proyectos...")
     boton_proy.pack(side="left")
-    boton_cortes = ttk.Button(fila_proy, text="Revisar cortes...")
+    boton_cortes = ttk.Button(fila_proy, text="Montaje...")
     boton_cortes.pack(side="left", padx=(6, 0))
     boton_exportar = ttk.Button(fila_proy, text="Exportar brutos (sin repetir el análisis)")
     boton_exportar.pack(side="left", padx=(6, 0))
@@ -1739,6 +1557,9 @@ def lanzar_gui(sin_actualizar=False):
     boton.pack(side="left", padx=6)
     boton_parar = ttk.Button(botones, text="Detener", state="disabled")
     boton_parar.pack(side="left", padx=6)
+    # Sin actualización automática al abrir (decisión de Adrián para la revisión de Ingeniería, oct. 2026): solo se
+    # busca una versión nueva si alguien pulsa este botón (aparece solo en el .exe de Windows).
+    boton_act = ttk.Button(botones, text="Buscar actualización")
     barra = ttk.Progressbar(marco, mode="indeterminate")
     barra.grid(row=10, column=0, columnspan=2, sticky="ew")
     registro = tk.Text(marco, height=14, wrap="word", state="disabled", font=("Consolas", 10))
@@ -1763,12 +1584,14 @@ def lanzar_gui(sin_actualizar=False):
                     if msg == "cambio_lanzado":  # el .bat espera a que se cierre para cambiar de versión y reabrir
                         raiz.destroy()
                         return
-                    boton.configure(state="normal")
+                    for b in (boton, boton_cortes, boton_exportar, boton_proy, boton_act):
+                        b.configure(state="normal")
+                    estado["ocupado"] = False
                     escribe("Versión al día (%s)." % BUILD if msg == "al_dia" else
                             "No se ha podido buscar o instalar una versión nueva; se sigue con esta (%s)." % BUILD)
                     continue
                 barra.stop()
-                for b in (boton, boton_cortes, boton_exportar, boton_proy):
+                for b in (boton, boton_cortes, boton_exportar, boton_proy, boton_act):
                     b.configure(state="normal")
                 boton_parar.configure(state="disabled")
                 estado["ocupado"] = False
@@ -1848,19 +1671,33 @@ def lanzar_gui(sin_actualizar=False):
                                    "Primero pulsa \"Analizar disco\" sin marcar los brutos (o con ellos).")
         return carpeta
 
-    def revisar_cortes():
+    def abrir_montaje():
         if estado["ocupado"]:
             return
         carpeta = analisis_hecho()
         if not carpeta:
             return
-        escribe("Revisando cortes con el análisis %s" % carpeta.name)
-        if dialogo_cortes(raiz, carpeta, brutos.get(), estado["proyectos"]):
-            escribe("Cortes guardados en %s" % (Path(brutos.get()) / exportar_brutos.FICHERO_CORTES))
-
-    def hilo_exportar(carpeta, proyectos_brutos):
+        if not exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json").get("agrupar", "proyecto_mes") == "proyecto_mes":
+            messagebox.showwarning("Montaje", "El montaje solo se aplica con agrupar = proyecto_mes (config_brutos.json).")
+            return
+        import ventana_montaje
+        raiz.configure(cursor="watch")
+        raiz.update()
         try:
-            res = exportar_desde_analisis(carpeta, brutos.get(), progreso=lambda m: cola.put(("log", m)), proyectos_brutos=proyectos_brutos)
+            m, _, _, _, resumen, cfg = montaje_de(carpeta, brutos.get())
+        finally:
+            raiz.configure(cursor="")
+        escribe("Montaje con el análisis %s" % carpeta.name)
+        r = ventana_montaje.dialogo_montaje(raiz, m, resumen["origen"], Path(carpeta) / "visor", brutos.get(), localizar_ffmpeg()[0],
+                                            exportar_brutos.clips_a_la_vez(cfg), estado["proyectos"])
+        if r:
+            escribe("Montaje guardado en %s" % (Path(brutos.get()) / "montaje.json"))
+        if r == "exportar":
+            exportar_ahora()
+
+    def hilo_exportar(carpeta, proyectos_brutos, cfg):
+        try:
+            res = exportar_desde_analisis(carpeta, brutos.get(), progreso=lambda m: cola.put(("log", m)), proyectos_brutos=proyectos_brutos, cfg=cfg)
             ok = sum(1 for b in res if str(b["estado"]).startswith("OK"))
             cola.put(("exportado", (len(res), ok, PARAR.is_set(), brutos.get())))
         except Detenido:
@@ -1878,17 +1715,28 @@ def lanzar_gui(sin_actualizar=False):
         if estado["proyectos"] == []:
             messagebox.showwarning("Ningún proyecto", "No has elegido ningún proyecto. Pulsa \"Elegir proyectos...\".")
             return
-        if not messagebox.askyesno("Exportar brutos", "Se exportan los brutos con el análisis %s (no se repite) y los cortes guardados.\n\n"
-                                   "Puede tardar muchas horas; se puede parar con Detener y seguir otro día.\n\n¿Empezar?" % carpeta.name):
+        import ventana_montaje
+        raiz.configure(cursor="watch")
+        raiz.update()
+        try:
+            resumen, cfg = resumen_exportacion(carpeta, brutos.get(), estado["proyectos"])
+        finally:
+            raiz.configure(cursor="")
+        cfg = ventana_montaje.dialogo_opciones(raiz, cfg, resumen, guardar_config_brutos)
+        if cfg is None:
+            return
+        if not messagebox.askyesno("Exportar brutos", "Se exportan %d brutos con el análisis %s (no se repite) y el montaje guardado.\n\n"
+                                   "Puede tardar muchas horas; se puede parar con Detener y seguir otro día.\n\n¿Empezar?"
+                                   % (len(resumen["brutos"]), carpeta.name)):
             return
         PARAR.clear()
         estado["ocupado"] = True
-        for b in (boton, boton_cortes, boton_exportar, boton_proy):
+        for b in (boton, boton_cortes, boton_exportar, boton_proy, boton_act):
             b.configure(state="disabled")
         boton_parar.configure(state="normal")
         barra.start(12)
         escribe("— %s — Exportación de brutos" % ahora_txt())
-        threading.Thread(target=hilo_exportar, args=(carpeta, estado["proyectos"]), daemon=True).start()
+        threading.Thread(target=hilo_exportar, args=(carpeta, estado["proyectos"], cfg), daemon=True).start()
 
     def elegir_proyectos():
         if estado["ocupado"]:
@@ -1937,19 +1785,31 @@ def lanzar_gui(sin_actualizar=False):
             PARAR.set()
             escribe("Deteniendo para cerrar... (unos segundos)")
 
+    def buscar_actualizacion():
+        if estado["ocupado"]:
+            return
+        if not messagebox.askyesno("Buscar actualización", "Se consulta en GitHub si hay una versión más nueva que la %s y, si la hay, "
+                                   "se descarga, se comprueba e instala, y el programa se vuelve a abrir.\n\n"
+                                   "Se conserva la configuración (config_*.json). ¿Seguir?" % BUILD):
+            return
+        estado["ocupado"] = True
+        for b in (boton, boton_cortes, boton_exportar, boton_proy, boton_act):
+            b.configure(state="disabled")  # nunca se actualiza a mitad de un análisis o una exportación
+        escribe("Buscando versión nueva en GitHub...")
+        threading.Thread(target=lambda: cola.put(("actualizacion", actualizar.actualizar(
+            BUILD, carpeta_base(), progreso=lambda m: cola.put(("log", m))))), daemon=True).start()
+
     boton.configure(command=iniciar)
+    boton_act.configure(command=buscar_actualizacion)
     boton_parar.configure(command=detener)
     boton_proy.configure(command=elegir_proyectos)
-    boton_cortes.configure(command=revisar_cortes)
+    boton_cortes.configure(command=abrir_montaje)
     boton_exportar.configure(command=exportar_ahora)
     raiz.protocol("WM_DELETE_WINDOW", al_cerrar)
     escribe("Programa de diagnóstico de discos Avid (solo lectura). pyavb: %s. ffmpeg: %s."
             % ("OK" if PYAVB_OK else "NO INSTALADO", "OK" if localizar_ffmpeg()[0] else "no encontrado"))
-    if puede_actualizarse() and not sin_actualizar:
-        boton.configure(state="disabled")  # nunca se actualiza a mitad de un análisis
-        escribe("Buscando versión nueva en GitHub...")
-        threading.Thread(target=lambda: cola.put(("actualizacion", actualizar.actualizar(
-            BUILD, carpeta_base(), progreso=lambda m: cola.put(("log", m))))), daemon=True).start()
+    if puede_actualizarse():
+        boton_act.pack(side="left", padx=6)
     raiz.after(200, vaciar_cola)
     raiz.mainloop()
 
@@ -1971,7 +1831,7 @@ def main():
     ap.add_argument("--proyectos", help='Brutos solo de estos proyectos, separados por ";" (SIN_PROYECTO = clips sin bin). Por defecto, todos')
     ap.add_argument("--listar-proyectos", action="store_true", help="Lista los proyectos de --origen (lectura rápida) y sale")
     ap.add_argument("--usar-analisis", metavar="CARPETA", help="Exporta los brutos (--brutos) con un análisis ya hecho (carpeta Diagnostico_...), sin repetirlo")
-    ap.add_argument("--sin-actualizar", action="store_true", help="Al abrir la ventana, no buscar versión nueva en GitHub")
+    ap.add_argument("--sin-actualizar", action="store_true", help="Sin efecto (se mantiene por compatibilidad): ya no se busca versión nueva al abrir")
     ap.add_argument("--actualizar-ahora", action="store_true", help="Solo .exe: buscar e instalar la última versión sin abrir la ventana ni reabrir")
     args = ap.parse_args()
 

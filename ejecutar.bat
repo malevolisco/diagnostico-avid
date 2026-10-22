@@ -18,7 +18,7 @@ if not %errorlevel%==0 (
 %PY% -c "import avb, openpyxl" >nul 2>nul
 if not %errorlevel%==0 (
   echo Instalando componentes (pyavb, openpyxl)...
-  %PY% -m pip install --quiet --only-binary :all: pyavb openpyxl
+  %PY% -m pip install --quiet --only-binary :all: pyavb openpyxl pillow
 )
 
 if not exist "bin\ffprobe.exe" (

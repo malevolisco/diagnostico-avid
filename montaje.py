@@ -1,0 +1,366 @@
+# -*- coding: utf-8 -*-
+"""
+MONTAJE DE LOS BRUTOS
+=====================
+
+Lógica (sin ventana) de la pantalla de montaje: qué clips van en cada bruto y en
+qué orden, antes de exportar. Diseño en docs/diseno_montaje_exportacion.md.
+
+- Se parte del reparto automático (exportar_brutos.trozos_proyecto: orden
+  cronológico estricto, brutos de hasta horas_por_bruto).
+- Sobre él se puede quitar clips (van a la papelera del proyecto), moverlos
+  (dentro del bruto o al anterior/siguiente), cortar, renombrar y deshacer.
+- Solo los proyectos tocados se guardan en montaje.json (carpeta de brutos); los
+  demás siguen con el reparto automático. Lo que se ve es lo que se exporta.
+- Si se repite el análisis, las claves que ya no existen se quitan y los clips
+  nuevos esperan en "nuevos" (no se exportan) hasta que se colocan.
+
+También saca los fotogramas del visor (1 por segundo, 480x270) a un .mjpeg por
+clip en la carpeta del análisis.
+"""
+
+import copy
+import datetime as dt
+import hashlib
+import json
+import logging
+import subprocess
+from pathlib import Path
+
+import exportar_brutos as eb
+
+LOG = logging.getLogger("diagnostico")
+
+FICHERO = "montaje.json"
+MAX_DESHACER = 50
+
+
+class Montaje:
+    """listas: {proyecto: {"material": [clips], "piezas": [clips]}} de exportar_brutos.listas_por_proyecto (en orden
+    cronológico); fecha: clip -> datetime | None; tope: segundos por bruto; guardado: "proyectos" de montaje.json."""
+
+    def __init__(self, listas, fecha, tope, guardado=None):
+        self.listas, self.fecha, self.tope = listas, fecha, tope
+        self.por_clave = {c.get("clave"): c for l in listas.values() for cs in l.values() for c in cs}
+        self.orden = {p: {c.get("clave"): (f, i) for f in ("material", "piezas") for i, c in enumerate(l.get(f) or [])}
+                      for p, l in listas.items()}
+        self.estados = {}  # solo los proyectos tocados
+        self.sin_colocar = {}
+        self.historia = []
+        self.avisos = []
+        for p, e in sorted((guardado or {}).items()):
+            self._restaurar(p, e)
+
+    # --- consulta -------------------------------------------------------------------------------------------------
+
+    def proyectos(self):
+        return sorted(self.listas)
+
+    def tocado(self, p):
+        return p in self.estados
+
+    def _estado(self, p):
+        return self.estados.get(p) or self._automatico(p)
+
+    def _automatico(self, p):
+        trozos = eb.trozos_proyecto(self.listas[p], self.fecha, self.tope)
+        return {"brutos": [{"nombre": None, "tipo": f, "clips": [c.get("clave") for c in t]} for f, t in trozos],
+                "papelera": [], "movidos": []}
+
+    def _segundos(self, claves):
+        return sum((self.por_clave[k].get("duracion") or 0) for k in claves if self.por_clave[k].get("fichero_video"))
+
+    def brutos(self, p):
+        """[{nombre, manual, tipo, clips, segundos, largo}] del proyecto, en orden."""
+        e = self._estado(p)
+        auto = iter(eb.numerar([eb.nombre_bruto(p, [self.fecha(self.por_clave[k]) for k in b["clips"]], b["tipo"] == "piezas")
+                                for b in e["brutos"] if not b["nombre"]]))
+        salida = []
+        for b in e["brutos"]:
+            nombre = b["nombre"] or next(auto)
+            s = self._segundos(b["clips"])
+            salida.append({"nombre": b["nombre"] or nombre, "manual": bool(b["nombre"]), "tipo": b["tipo"],
+                           "clips": [self.por_clave[k] for k in b["clips"]], "segundos": s, "largo": s > self.tope})
+        return salida
+
+    def papelera(self, p):
+        return [self.por_clave[k] for k in self._estado(p)["papelera"]]
+
+    def movidos(self, p):
+        return set(self._estado(p)["movidos"])
+
+    def nuevos(self, p):
+        return [self.por_clave[k] for k in self.sin_colocar.get(p, [])]
+
+    def donde(self, p, clave):
+        """Índice del bruto que contiene la clave, o None."""
+        return next((i for i, b in enumerate(self._estado(p)["brutos"]) if clave in b["clips"]), None)
+
+    # --- cambios --------------------------------------------------------------------------------------------------
+
+    def _cambiar(self, p):
+        """Guarda el estado anterior para deshacer y devuelve el estado editable del proyecto."""
+        self.historia.append((p, copy.deepcopy(self.estados.get(p)), list(self.sin_colocar.get(p, []))))
+        del self.historia[:-MAX_DESHACER]
+        if p not in self.estados:
+            self.estados[p] = self._automatico(p)
+        return self.estados[p]
+
+    @staticmethod
+    def _limpiar(e):
+        e["brutos"] = [b for b in e["brutos"] if b["clips"]]
+
+    def deshacer(self):
+        if not self.historia:
+            return False
+        p, e, nuevos = self.historia.pop()
+        if e is None:
+            self.estados.pop(p, None)
+        else:
+            self.estados[p] = e
+        self.sin_colocar[p] = nuevos
+        return True
+
+    def quitar(self, p, claves):
+        e = self._cambiar(p)
+        for b in e["brutos"]:
+            b["clips"] = [k for k in b["clips"] if k not in claves]
+        e["papelera"] += [k for k in claves if k not in e["papelera"]]
+        self._limpiar(e)
+
+    def _insertar_por_orden(self, e, p, clave):
+        """Coloca la clave junto a su vecino más cercano en el orden automático (mismo tipo): tras el anterior que esté
+        colocado o, si no hay, delante del siguiente. Si el tipo no tiene ningún clip colocado, en un bruto nuevo."""
+        tipo, i = self.orden[p][clave]
+        colocados = [(self.orden[p][k][1], n, j) for n, b in enumerate(e["brutos"]) if b["tipo"] == tipo
+                     for j, k in enumerate(b["clips"]) if k in self.orden[p]]
+        antes = [x for x in colocados if x[0] < i]
+        despues = [x for x in colocados if x[0] > i]
+        if antes:
+            _, n, j = max(antes)
+            e["brutos"][n]["clips"].insert(j + 1, clave)
+        elif despues:
+            _, n, j = min(despues)
+            e["brutos"][n]["clips"].insert(j, clave)
+        else:
+            nuevo = {"nombre": None, "tipo": tipo, "clips": [clave]}
+            if tipo == "material":
+                e["brutos"].insert(0, nuevo)
+            else:
+                e["brutos"].append(nuevo)
+
+    def recuperar(self, p, claves):
+        e = self._cambiar(p)
+        for k in claves:
+            if k in e["papelera"]:
+                e["papelera"].remove(k)
+                self._insertar_por_orden(e, p, k)
+
+    def colocar(self, p, claves):
+        """Coloca clips nuevos (de un análisis posterior) en su sitio por fecha."""
+        e = self._cambiar(p)
+        for k in claves:
+            if k in self.sin_colocar.get(p, []):
+                self.sin_colocar[p].remove(k)
+                self._insertar_por_orden(e, p, k)
+
+    def _un_bruto(self, e, claves):
+        sitios = {n for n, b in enumerate(e["brutos"]) for k in b["clips"] if k in claves}
+        if len(sitios) != 1:
+            raise ValueError("Elige clips de un solo bruto")
+        return sitios.pop()
+
+    def mover(self, p, claves, delta):
+        """Pasa los clips al bruto anterior (delta -1, al final) o al siguiente (+1, al principio). Si no hay, se crea
+        uno nuevo. Puede pasar de horas_por_bruto: se marca en rojo, no se impide."""
+        e = self._cambiar(p)
+        n = self._un_bruto(e, claves)
+        b = e["brutos"][n]
+        sel = [k for k in b["clips"] if k in claves]
+        b["clips"] = [k for k in b["clips"] if k not in claves]
+        destino = n + delta
+        if destino < 0 or destino >= len(e["brutos"]):
+            e["brutos"].insert(max(destino, 0) if delta < 0 else len(e["brutos"]), {"nombre": None, "tipo": b["tipo"], "clips": sel})
+        elif delta < 0:
+            e["brutos"][destino]["clips"] += sel
+        else:
+            e["brutos"][destino]["clips"][:0] = sel
+        e["movidos"] += [k for k in sel if k not in e["movidos"]]
+        self._limpiar(e)
+
+    def _desplazar(self, p, claves, paso):
+        e = self._cambiar(p)
+        b = e["brutos"][self._un_bruto(e, claves)]["clips"]
+        orden = range(len(b)) if paso < 0 else range(len(b) - 1, -1, -1)
+        for i in orden:
+            j = i + paso
+            if b[i] in claves and 0 <= j < len(b) and b[j] not in claves:
+                b[i], b[j] = b[j], b[i]
+                if b[j] not in e["movidos"]:
+                    e["movidos"].append(b[j])
+
+    def subir(self, p, claves):
+        self._desplazar(p, claves, -1)
+
+    def bajar(self, p, claves):
+        self._desplazar(p, claves, +1)
+
+    def cortar(self, p, clave):
+        """El bruto acaba antes de este clip. Este clip y los de los brutos siguientes se reparten de nuevo hasta
+        horas_por_bruto, en el orden en que están; se para en el primer bruto sin fecha, de otro tipo o con nombre
+        puesto a mano (ese queda como está)."""
+        e = self._cambiar(p)
+        n = self._un_bruto(e, [clave])
+        b = e["brutos"][n]
+        i = b["clips"].index(clave)
+        if i == 0:
+            return
+        fin = n + 1
+        while fin < len(e["brutos"]) and e["brutos"][fin]["tipo"] == b["tipo"] and not e["brutos"][fin]["nombre"] and \
+                any(self.fecha(self.por_clave[k]) for k in e["brutos"][fin]["clips"]):
+            fin += 1
+        resto = b["clips"][i:] + [k for x in e["brutos"][n + 1:fin] for k in x["clips"]]
+        b["clips"] = b["clips"][:i]
+        cs = [self.por_clave[k] for k in resto]
+        nuevos = [{"nombre": None, "tipo": b["tipo"], "clips": [c.get("clave") for c in t]} for t in eb.trozos_hasta(cs, self.tope)]
+        e["brutos"][n + 1:fin] = nuevos
+
+    def renombrar(self, p, n, nombre):
+        e = self._cambiar(p)
+        e["brutos"][n]["nombre"] = (nombre or "").strip() or None
+
+    def volver_automatico(self, p):
+        self._cambiar(p)
+        del self.estados[p]
+
+    # --- guardar y cargar -----------------------------------------------------------------------------------------
+
+    def a_json(self):
+        ahora = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return {"_comentario": "Montaje de los brutos (pantalla de montaje). Solo los proyectos tocados; los demás van con el "
+                               "reparto automático. Borra un proyecto (o el fichero) para volver al automático.",
+                "proyectos": {p: dict(e, modificado=e.get("modificado") or ahora) for p, e in sorted(self.estados.items())}}
+
+    def guardar(self, carpeta_brutos):
+        Path(carpeta_brutos).mkdir(parents=True, exist_ok=True)
+        for p in self.estados:
+            self.estados[p]["modificado"] = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        (Path(carpeta_brutos) / FICHERO).write_text(json.dumps(self.a_json(), ensure_ascii=False, indent=1), encoding="utf-8")
+
+    def _restaurar(self, p, e):
+        if p not in self.listas:
+            self.avisos.append("%s: el proyecto ya no está en el análisis; se ignora su montaje" % p)
+            return
+        validas = set(self.orden[p])
+        brutos = [{"nombre": b.get("nombre") or None, "tipo": b.get("tipo", "material"),
+                   "clips": [k for k in b.get("clips", []) if k in validas]} for b in e.get("brutos", [])]
+        papelera = [k for k in e.get("papelera", []) if k in validas]
+        guardadas = [k for b in e.get("brutos", []) for k in b.get("clips", [])] + list(e.get("papelera", []))
+        perdidas = [k for k in guardadas if k not in validas]
+        if perdidas:
+            self.avisos.append("%s: %d clips del montaje ya no están en el análisis; se quitan" % (p, len(perdidas)))
+        colocadas = {k for b in brutos for k in b["clips"]} | set(papelera)
+        nuevas = [k for f in ("material", "piezas") for k in (c.get("clave") for c in self.listas[p].get(f) or []) if k not in colocadas]
+        if nuevas:
+            self.avisos.append("%s: %d clips nuevos sin colocar; no se exportan hasta colocarlos" % (p, len(nuevas)))
+            self.sin_colocar[p] = nuevas
+        estado = {"brutos": brutos, "papelera": papelera, "movidos": [k for k in e.get("movidos", []) if k in validas],
+                  "modificado": e.get("modificado")}
+        self._limpiar(estado)
+        self.estados[p] = estado
+
+    @classmethod
+    def cargar(cls, carpeta_brutos, listas, fecha, tope):
+        """Lee montaje.json de la carpeta de brutos; si no hay pero hay un cortes.json antiguo, lo convierte."""
+        ruta = Path(carpeta_brutos) / FICHERO
+        if ruta.exists():
+            try:
+                guardado = json.loads(ruta.read_text(encoding="utf-8")).get("proyectos") or {}
+            except Exception as e:
+                m = cls(listas, fecha, tope)
+                m.avisos.append("%s ilegible (%s): se usa el reparto automático" % (FICHERO, e))
+                return m
+            return cls(listas, fecha, tope, guardado)
+        m = cls(listas, fecha, tope)
+        cortes = eb.cargar_cortes(carpeta_brutos)
+        for p, claves in sorted(cortes.items()):
+            if p in listas:
+                trozos = eb.trozos_proyecto(listas[p], fecha, tope, claves)
+                m.estados[p] = {"brutos": [{"nombre": None, "tipo": f, "clips": [c.get("clave") for c in t]} for f, t in trozos],
+                                "papelera": [], "movidos": []}
+        if m.estados:
+            m.avisos.append("Cortes de %s convertidos al montaje (%d proyectos)" % (eb.FICHERO_CORTES, len(m.estados)))
+        return m
+
+    @classmethod
+    def desde_analisis(cls, clips, cruce, mxf, cfg, carpeta_brutos):
+        mxf_por_ruta = {m["ruta"]: m for m in mxf}
+        listas = eb.listas_por_proyecto(clips, cruce, mxf_por_ruta, cfg)
+        return cls.cargar(carpeta_brutos, listas, lambda c: eb.fecha_clip(c, mxf_por_ruta), 3600 * float(cfg.get("horas_por_bruto", 2)))
+
+    # --- exportar -------------------------------------------------------------------------------------------------
+
+    def grupos(self, proyectos=None):
+        """Brutos de los proyectos tocados (o de los pedidos), en el formato de exportar_brutos.grupos_por_proyecto_mes,
+        con además movidos (claves movidas a mano), quitados (clips de la papelera del proyecto) y manual."""
+        grupos = []
+        for p in (proyectos if proyectos is not None else sorted(self.estados)):
+            quitados = self.papelera(p)
+            movidos = self.movidos(p)
+            for b in self.brutos(p):
+                g = eb.grupo_bruto(p, b["tipo"], b["nombre"], b["clips"], self.fecha, " · montaje a mano" if self.tocado(p) else "")
+                g.update(movidos={c.get("clave") for c in b["clips"]} & movidos, quitados=quitados, manual=b["manual"])
+                grupos.append(g)
+        return grupos
+
+
+# ---------------------------------------------------------------------------
+# Fotogramas del visor
+# ---------------------------------------------------------------------------
+
+def fichero_visor(carpeta_visor, clave):
+    return Path(carpeta_visor) / (hashlib.sha256(str(clave).encode("utf-8")).hexdigest()[:16] + ".mjpeg")
+
+
+def sacar_fotogramas(ffmpeg, ruta_video, carpeta_visor, clave, timeout=1800):
+    """Un fotograma por segundo a 480x270 (con bandas si el aspecto no es 16:9), todos seguidos en un .mjpeg por clip.
+    Si ya está hecho, no se repite. Devuelve la ruta o None si ffmpeg falla."""
+    salida = fichero_visor(carpeta_visor, clave)
+    if salida.exists() and salida.stat().st_size > 0:
+        return salida
+    salida.parent.mkdir(parents=True, exist_ok=True)
+    tmp = salida.with_suffix(".tmp")
+    # -skip_frame nokey: en MPEG-2/H.264 solo se decodifican las imágenes clave (3-4 veces más rápido; para 1 por
+    # segundo sobra). En DV, DNxHD o ProRes todas lo son. Medido: ~1 s por minuto de DV, ~10 KB por fotograma.
+    cmd = [ffmpeg, "-v", "error", "-y", "-skip_frame", "nokey", "-i", str(ruta_video), "-map", "0:v:0", "-an",
+           "-vf", "fps=1,scale=480:270:force_original_aspect_ratio=decrease,pad=480:270:(ow-iw)/2:(oh-ih)/2:black,setsar=1",
+           "-q:v", "10", "-f", "mjpeg", str(tmp)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=timeout, **eb.flags_subproceso())
+    except Exception as e:
+        LOG.warning("Visor: no se pudieron sacar los fotogramas de %s (%s)", ruta_video, e)
+        tmp.unlink(missing_ok=True)
+        return None
+    if r.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
+        LOG.warning("Visor: ffmpeg falló con %s: %s", ruta_video, r.stderr.decode("utf-8", "replace")[-300:])
+        tmp.unlink(missing_ok=True)
+        return None
+    tmp.replace(salida)
+    return salida
+
+
+def indice_jpeg(datos):
+    """[(inicio, fin)] de cada JPEG dentro de un .mjpeg (empiezan por FF D8 FF; en los datos comprimidos un FF va
+    siempre seguido de 00, así que esa secuencia solo aparece al principio de cada imagen)."""
+    inicios = []
+    i = datos.find(b"\xff\xd8\xff")
+    while i >= 0:
+        inicios.append(i)
+        i = datos.find(b"\xff\xd8\xff", i + 3)
+    return list(zip(inicios, inicios[1:] + [len(datos)]))
+
+
+def fotogramas(ruta):
+    """Lista de JPEG (bytes) de un .mjpeg del visor."""
+    datos = Path(ruta).read_bytes()
+    return [datos[a:b] for a, b in indice_jpeg(datos)]

@@ -101,6 +101,18 @@ CONFIG_DEFECTO = {
     },
     "clips_a_la_vez": "auto",
     "_clips_a_la_vez": "Cuántos clips se convierten a la vez (cada uno es un ffmpeg). auto = núcleos del procesador menos uno, hasta 6. 1 = de uno en uno",
+    "enrutado_audio": [],
+    "_enrutado_audio": "Qué pista del clip va a cada pista del bruto: [2, 1] = la 2 del clip a la 1 y la 1 a la 2. 0 = silencio. Vacío = cada una en la suya",
+    "niveles_audio": "sin_tocar",
+    "_niveles_audio": "sin_tocar (recomendado: el bruto es documento) | ganancia = ganancia_db fija por pista | r128 = cada clip a -23 LUFS (EBU R128), con tope de +/-12 dB; altera el original",
+    "ganancia_db": [],
+    "_ganancia_db": "Con niveles_audio = ganancia: dB por pista del bruto, de -20 a 20 (p. ej. [3, 0] sube 3 dB la pista 1)",
+    "md5": True,
+    "_md5": "Un fichero .md5 por bruto (comprobación de integridad al copiarlo)",
+    "ficha_tecnica": True,
+    "_ficha_tecnica": "Una ficha .txt por bruto que dice si el fichero exportado es conforme a XDCAM HD422",
+    "medidor_audio": True,
+    "_medidor_audio": "Mide sonoridad y pico de cada clip y avisa en el shotlist de saturados o casi mudos (no los toca)",
     "verificar_decodificando": False,
     "_verificar_decodificando": "true = tras unir, decodifica el bruto entero para comprobarlo (lento, muy seguro)"
 }
@@ -489,35 +501,79 @@ def partir_con_cortes(cs, tope, cortes=None):
 def grupos_por_proyecto_mes(clips, cruce, mxf_por_ruta, cfg, cortes=None):
     """agrupar=proyecto_mes (por defecto, pedido por el Archivo en oct. 2026): cada proyecto en orden cronológico,
     en brutos de hasta horas_por_bruto (o donde se eligió en la pantalla de cortes: cortes = {proyecto: [claves]}),
-    llamados PROYECTO_AAAA-MM (o PROYECTO_AAAA-MM_a_AAAA-MM si abarca varios meses; _1, _2... si se repite el nombre).
-    Piezas renderizadas aparte (PROYECTO_PIEZAS_...)."""
+    llamados "PROYECTO MES DE AÑO" (nombre_bruto; " 1", " 2"... si se repite el nombre). Piezas renderizadas aparte
+    ("PROYECTO PIEZAS MES DE AÑO"). Lo que no tiene fecha va al final, con el nombre del proyecto solo."""
     tope = 3600 * float(cfg.get("horas_por_bruto", 2))
     fecha = lambda c: fecha_clip(c, mxf_por_ruta)
     grupos = []
     listas = listas_por_proyecto(clips, cruce, mxf_por_ruta, cfg)
     for proyecto in sorted(listas):
-        for familia, cs in listas[proyecto].items():
-            con_fecha = [c for c in cs if fecha(c)]
-            sin_fecha = [c for c in cs if not fecha(c)]
-            elegidos = (cortes or {}).get(proyecto) if familia == "material" else None
-            nombres = []
-            for t in partir_con_cortes(con_fecha, tope, elegidos):
-                desde, hasta = fecha(t[0]).strftime("%Y-%m"), fecha(t[-1]).strftime("%Y-%m")
-                nombres.append((desde if desde == hasta else desde + "_a_" + hasta, t))
-            nombres += [("SIN_FECHA", t) for t in trozos_hasta(sin_fecha, tope)]
-            repetidos = Counter(n for n, _ in nombres)
-            vistos = Counter()
-            for meses, t in nombres:
-                vistos[meses] += 1
-                sufijo = meses + ("_%d" % vistos[meses] if repetidos[meses] > 1 else "")
-                nombre = proyecto + ("_PIEZAS_" if familia == "piezas" else "_") + sufijo
-                fechas = [fecha(c) for c in t if fecha(c)]
-                periodo = (fechas[0].strftime("%d/%m/%Y") + ("" if fechas[-1].date() == fechas[0].date() else " – " + fechas[-1].strftime("%d/%m/%Y"))) if fechas else "sin fecha"
-                contenido = "%s%s · %d clips%s" % ("piezas renderizadas · " if familia == "piezas" else "", periodo, len(t),
-                                                   " · corte elegido a mano" if elegidos and familia == "material" else "")
-                grupos.append({"nombre": nombre, "base": nombre_seguro(proyecto, 50) + nombre[len(proyecto):], "proyecto": proyecto,
-                               "tipo": familia, "contenido": contenido, "clips": t, "ordenado": True})
+        elegidos = (cortes or {}).get(proyecto)
+        trozos = trozos_proyecto(listas[proyecto], fecha, tope, elegidos)
+        for familia in ("material", "piezas"):
+            de_familia = [t for f, t in trozos if f == familia]
+            nombres = numerar([nombre_bruto(proyecto, [fecha(c) for c in t], familia == "piezas") for t in de_familia])
+            for nombre, t in zip(nombres, de_familia):
+                grupos.append(grupo_bruto(proyecto, familia, nombre, t, fecha, " · corte elegido a mano" if elegidos and familia == "material" else ""))
     return grupos
+
+
+def trozos_proyecto(listas_proyecto, fecha, tope, cortes=None):
+    """Reparto automático de un proyecto: [(familia, clips)], material y luego piezas; en cada familia, lo que tiene
+    fecha en brutos de hasta tope (o con los cortes elegidos, solo en material) y al final lo que no tiene fecha."""
+    trozos = []
+    for familia in ("material", "piezas"):
+        cs = listas_proyecto.get(familia) or []
+        con_fecha = [c for c in cs if fecha(c)]
+        sin_fecha = [c for c in cs if not fecha(c)]
+        elegidos = cortes if familia == "material" else None
+        trozos += [(familia, t) for t in partir_con_cortes(con_fecha, tope, elegidos) + trozos_hasta(sin_fecha, tope)]
+    return trozos
+
+
+def grupo_bruto(proyecto, familia, nombre, t, fecha, nota=""):
+    """Un bruto para exportar_todo: nombre, base (nombre de fichero), proyecto, tipo, contenido, clips."""
+    fechas = sorted(fecha(c) for c in t if fecha(c))
+    periodo = (fechas[0].strftime("%d/%m/%Y") + ("" if fechas[-1].date() == fechas[0].date() else " – " + fechas[-1].strftime("%d/%m/%Y"))) if fechas else "sin fecha"
+    contenido = "%s%s · %d clips%s" % ("piezas renderizadas · " if familia == "piezas" else "", periodo, len(t), nota)
+    return {"nombre": nombre, "base": nombre_seguro(nombre, 120), "proyecto": proyecto, "tipo": familia, "contenido": contenido,
+            "clips": t, "ordenado": True}
+
+
+MESES = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
+
+
+def nombre_proyecto(proyecto):
+    """Proyecto para un nombre de fichero: en mayúsculas, sin los caracteres que Windows no admite."""
+    texto = "SIN PROYECTO" if proyecto == "SIN_PROYECTO" else str(proyecto)
+    texto = re.sub(r'[\\/:*?"<>|]+', "", texto.upper())
+    return re.sub(r"\s+", " ", texto).strip(" .") or "SIN NOMBRE"
+
+
+def nombre_bruto(proyecto, fechas, piezas=False):
+    """Nombre por defecto de un bruto (Adrián, oct. 2026): PROYECTO [PIEZAS] MES DE AÑO, en letra y sin guiones:
+    "VENEZUELA SEPTIEMBRE DE 2021", "... SEPTIEMBRE A OCTUBRE DE 2021", "... DICIEMBRE DE 2021 A ENERO DE 2022".
+    Sin fechas, solo el proyecto. La numeración de los repetidos (" 1", " 2") la pone quien reparte."""
+    partes = [nombre_proyecto(proyecto)] + (["PIEZAS"] if piezas else [])
+    fechas = sorted(f for f in fechas if f)
+    if fechas:
+        a, b = fechas[0], fechas[-1]
+        if (a.year, a.month) == (b.year, b.month):
+            partes.append("%s DE %d" % (MESES[a.month - 1], a.year))
+        elif a.year == b.year:
+            partes.append("%s A %s DE %d" % (MESES[a.month - 1], MESES[b.month - 1], a.year))
+        else:
+            partes.append("%s DE %d A %s DE %d" % (MESES[a.month - 1], a.year, MESES[b.month - 1], b.year))
+    return " ".join(partes)
+
+
+def numerar(nombres):
+    """Añade " 1", " 2"... a los nombres repetidos, en el orden en que salen."""
+    repetidos, vistos, salida = Counter(nombres), Counter(), []
+    for n in nombres:
+        vistos[n] += 1
+        salida.append(n + (" %d" % vistos[n] if repetidos[n] > 1 else ""))
+    return salida
 
 
 def _dia(fecha, cfg):
@@ -688,9 +744,103 @@ def grupos_por_proyecto(clips, cruce, mxf_por_ruta, cfg):
     return grupos
 
 
-def firma_clips(cs):
-    """Identifica el conjunto de clips de un bruto: si cambia, el bruto no se reanuda, se rehace."""
-    return hashlib.sha256("\n".join(sorted(str(c.get("clave")) for c in cs)).encode("utf-8")).hexdigest()[:16]
+OPCIONES_FIRMA = ("formato_salida", "modo", "convertir", "timecode_inicio", "pistas_audio", "enrutado_audio", "niveles_audio", "ganancia_db")
+
+
+def opciones_bruto(cfg):
+    """Las opciones que cambian el fichero exportado (van a la firma y a brutos_resultado.json)."""
+    return {k: cfg.get(k, CONFIG_DEFECTO.get(k)) for k in OPCIONES_FIRMA}
+
+
+def firma_bruto(cs, cfg):
+    """Identifica un bruto: sus clips en orden y las opciones que cambian el fichero. Si cambia, no se reanuda: se rehace."""
+    texto = "\n".join(str(c.get("clave")) for c in cs) + "\n" + json.dumps(opciones_bruto(cfg), sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(texto.encode("utf-8")).hexdigest()[:16]
+
+
+# ---------------------------------------------------------------------------
+# Opciones de exportación (panel)
+# ---------------------------------------------------------------------------
+
+NIVELES_AUDIO = ("sin_tocar", "ganancia", "r128")
+PROHIBIDOS = '\\/:*?"<>|'
+R128_OBJETIVO, R128_TOPE, GANANCIA_MAX = -23.0, 12.0, 20.0
+
+
+def validar_opciones(cfg):
+    """Errores legibles de las opciones del panel ([] si todo está bien). La ventana no deja exportar con errores."""
+    errores = []
+    tc = str(cfg.get("timecode_inicio", ""))
+    m = re.fullmatch(r"(\d\d):(\d\d):(\d\d)[:;](\d\d)", tc)
+    fps_max = 25 if cfg.get("formato_salida", "xdcam_hd50") == "xdcam_hd50" else 30
+    if not m:
+        errores.append("TC de inicio: escribe hh:mm:ss:ff, por ejemplo 00:00:00:00")
+    else:
+        h, mi, se, ff = map(int, m.groups())
+        if h > 23 or mi > 59 or se > 59 or ff >= fps_max:
+            errores.append("TC de inicio %s: horas 00-23, minutos y segundos 00-59, fotogramas 00-%02d" % (tc, fps_max - 1))
+    pa = cfg.get("pistas_audio", "max")
+    if pa != "max" and not (isinstance(pa, int) and 0 <= pa <= MAX_PISTAS):
+        errores.append("Pistas de audio: 'max' o un número de 0 a %d" % MAX_PISTAS)
+    enr = cfg.get("enrutado_audio") or []
+    if not isinstance(enr, list) or len(enr) > MAX_PISTAS or any(not isinstance(x, int) or not 0 <= x <= MAX_PISTAS for x in enr):
+        errores.append("Enrutado de audio: para cada pista, una pista del clip de 1 a %d o 0 (silencio)" % MAX_PISTAS)
+    if cfg.get("niveles_audio", "sin_tocar") not in NIVELES_AUDIO:
+        errores.append("Niveles de audio: sin_tocar, ganancia o r128")
+    gan = cfg.get("ganancia_db") or []
+    if not isinstance(gan, list) or len(gan) > MAX_PISTAS or any(not isinstance(x, (int, float)) or abs(x) > GANANCIA_MAX for x in gan):
+        errores.append("Ganancia: de -%d a %d dB por pista" % (GANANCIA_MAX, GANANCIA_MAX))
+    if any(ch in str(cfg.get("prefijo_fichero") or "") for ch in PROHIBIDOS):
+        errores.append("Prefijo: no puede llevar %s" % " ".join(PROHIBIDOS))
+    return errores
+
+
+def validar_nombres(nombres):
+    """Errores de los nombres de los brutos (vacíos, con caracteres que Windows no admite o repetidos)."""
+    errores = []
+    for n in nombres:
+        if not str(n).strip():
+            errores.append("Hay un bruto sin nombre")
+        elif any(ch in n for ch in PROHIBIDOS) or n.strip(" .") != n:
+            errores.append("%s: no puede llevar %s ni acabar en punto o espacio" % (n, " ".join(PROHIBIDOS)))
+    repetidos = sorted(n for n, k in Counter(x.upper() for x in nombres if str(x).strip()).items() if k > 1)
+    if repetidos:
+        errores.append("Nombres repetidos: %s" % "; ".join(repetidos))
+    return errores
+
+
+def pistas_salida(n_max, cfg):
+    """Pistas de audio del bruto: las que más tenga un clip (pistas_audio = max) o las fijadas, hasta 8. En XDCAM HD422
+    solo valen 4 u 8: se redondea hacia arriba y las que sobran van en silencio (0 sigue siendo sin audio)."""
+    pa = cfg.get("pistas_audio", "max")
+    n = n_max if pa == "max" else int(pa)
+    n = max(0, min(MAX_PISTAS, n))
+    if n and cfg.get("formato_salida", "xdcam_hd50") == "xdcam_hd50":
+        n = 4 if n <= 4 else 8
+    return n
+
+
+def ganancia_r128(lufs):
+    """dB para llevar un clip a -23 LUFS, con tope de +/-12 dB (para no disparar el ruido de un clip casi mudo)."""
+    if lufs is None:
+        return 0
+    return round(max(-R128_TOPE, min(R128_TOPE, R128_OBJETIVO - lufs)), 1)
+
+
+def medir_audio(ffmpeg, ruta):
+    """Sonoridad integrada (LUFS) y pico (dBFS) de la primera pista de audio de un fichero. None si no se puede."""
+    cmd = [ffmpeg, "-nostats", "-hide_banner", "-i", str(ruta), "-map", "0:a:0", "-af", "ebur128=peak=sample", "-f", "null", "-"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=600, **flags_subproceso())
+    except Exception as e:
+        LOG.warning("Medidor de audio: %s (%s)", ruta, e)
+        return {"lufs": None, "pico": None}
+    texto = r.stderr.decode("utf-8", "replace")
+    resumen = texto[texto.rfind("Summary:"):] if "Summary:" in texto else ""
+    lufs = re.search(r"I:\s*(-?[\d.]+|-inf) LUFS", resumen)
+    pico = re.search(r"Peak:\s*(-?[\d.]+|-inf) dBFS", resumen)
+    num = lambda m: None if not m else (-120.0 if m.group(1) == "-inf" else float(m.group(1)))
+    return {"lufs": num(lufs), "pico": num(pico)}
 
 
 # ---------------------------------------------------------------------------
@@ -723,11 +873,7 @@ def plan_proyecto(clips, mxf_por_ruta, cfg, modo_forzado=None):
     if modo_forzado:
         modo = modo_forzado
 
-    pa = cfg.get("pistas_audio", "max")
-    if pa == "max":
-        pistas = min(MAX_PISTAS, max((c.get("num_audio", 0) for c in clips), default=0))
-    else:
-        pistas = max(0, min(MAX_PISTAS, int(pa)))
+    pistas = pistas_salida(max((c.get("num_audio", 0) for c in clips), default=0), cfg)
 
     mayoritaria = firmas.most_common(1)[0][0] if firmas else (None, 1920, 1080, "25/1", None)
     cv = cfg["convertir"]
@@ -757,7 +903,10 @@ def filtros_xdcam(entrelazado):
     f = ["bwdif=mode=send_field:deint=all"] if entrelazado else []
     f += ["fps=50",
           "scale=w='trunc(min(1920,1080*dar)/2)*2':h='trunc(min(1080,1920/dar)/2)*2':flags=lanczos:out_color_matrix=bt709:out_range=tv",
-          "pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black", "setsar=1", "interlace=scan=tff:lowpass=linear", "setfield=tff"]
+          "pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black", "setsar=1", "interlace=scan=tff:lowpass=linear", "setfield=tff",
+          # ffmpeg 7.1 toma el color de los fotogramas y no de -color_primaries/-color_trc: sin esto, la cabecera MPEG-2
+          # sale con primarias y transferencia "sin especificar" (lo detectó la ficha técnica en el Windows de GitHub)
+          "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv"]
     return f
 
 
@@ -798,29 +947,77 @@ def args_video(plan, mxf_video, cfg):
 # Segmentos y unión
 # ---------------------------------------------------------------------------
 
-def hacer_segmento(clip, idx, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, nombre=None):
-    """Convierte un clip (V + sus audios) en un MXF OP1a intermedio homogéneo.
-    Devuelve (ruta | None, error, comando)."""
+def hacer_segmento(clip, idx, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, nombre=None, info=None):
+    """Convierte un clip (V + sus audios) en un MXF OP1a intermedio homogéneo, con las pistas de audio del bruto según
+    enrutado_audio (las que el clip no tiene, en silencio) y los niveles pedidos. info (dict) recibe lo medido para el
+    shotlist: lufs, pico, ganancia, aviso_audio. Devuelve (ruta | None, error, comando)."""
+    info = {} if info is None else info
     salida = tmp / (nombre or "seg_%05d.mxf" % idx)
     video = Path(origen) / clip["fichero_video"]
     audios = [Path(origen) / r for r in clip["ficheros"] if r != clip["fichero_video"]
               and any(p["tipo"] == "audio" for p in mxf_por_ruta.get(r, {}).get("pistas", []))]
-    audios = audios[:plan["pistas_audio"]]
-    n_silencio = plan["pistas_audio"] - len(audios)
+    n = plan["pistas_audio"]
+    enrutado = list(cfg.get("enrutado_audio") or [])
+    fuentes = [(enrutado[k] if k < len(enrutado) else k + 1) for k in range(n)]  # pista del clip (1..8) o 0 = silencio
+    # Con el enrutado por defecto, que al clip le falten pistas es lo normal (se rellenan con silencio): solo se avisa
+    # si el enrutado elegido a mano pide una pista que el clip no tiene, o si se pierden pistas del clip.
+    avisos = ["pista %d del clip no existe (silencio)" % r for r in sorted({r for r in fuentes if r > len(audios)})] if enrutado else []
+    perdidas = [r for r in range(1, len(audios) + 1) if r not in fuentes]
+    if perdidas:
+        avisos.append("no entran las pistas %s del clip" % ", ".join(map(str, perdidas)))
+    usadas = sorted({r for r in fuentes if 0 < r <= len(audios)})
+
+    niveles = cfg.get("niveles_audio", "sin_tocar")
+    medidas = {}
+    if usadas and (cfg.get("medidor_audio", True) or niveles == "r128"):
+        for r in usadas:
+            medidas[r] = medir_audio(ffmpeg, audios[r - 1])
+    ganancias = {}
+    for k, r in enumerate(fuentes):
+        if not 0 < r <= len(audios):
+            continue
+        if niveles == "ganancia":
+            g = (cfg.get("ganancia_db") or [])[k] if k < len(cfg.get("ganancia_db") or []) else 0
+        elif niveles == "r128":
+            g = ganancia_r128((medidas.get(r) or {}).get("lufs"))
+            if abs(g) >= R128_TOPE:
+                avisos.append("R128 al tope en la pista %d (%+.0f dB)" % (k + 1, g))
+        else:
+            g = 0
+        if g:
+            ganancias[k] = float(g)
+    if medidas:
+        lufs = [m["lufs"] for m in medidas.values() if m.get("lufs") is not None]
+        picos = [m["pico"] for m in medidas.values() if m.get("pico") is not None]
+        info["lufs"] = max(lufs) if lufs else None
+        info["pico"] = max(picos) if picos else None
+        if info["pico"] is not None and info["pico"] >= -0.1:
+            avisos.insert(0, "saturado")
+        if info["lufs"] is None or info["lufs"] < -60:
+            avisos.insert(0, "casi mudo")
+    if ganancias:
+        info["ganancia"] = " ".join("%d: %+.1f" % (k + 1, g) for k, g in sorted(ganancias.items()))
+    if avisos:
+        info["aviso_audio"] = "; ".join(avisos)
 
     cmd = [ffmpeg, "-v", "error", "-y", "-i", str(video)]
-    for a in audios:
-        cmd += ["-i", str(a)]
-    dur = clip.get("duracion")
-    for _ in range(n_silencio):  # silencio de la duración del clip: con -shortest se recortaría el vídeo a la pista más corta
+    entrada = {}
+    for r in usadas:
+        entrada[r] = len(entrada) + 1
+        cmd += ["-i", str(audios[r - 1])]
+    if any(not 0 < r <= len(audios) for r in fuentes):
+        dur = clip.get("duracion")  # silencio de la duración del clip: con -shortest se recortaría el vídeo a la pista más corta
+        entrada[0] = len(entrada) + 1
         cmd += (["-t", "%.3f" % dur] if dur else []) + ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono"]
     cmd += ["-map", "0:v:0"]
-    for i in range(plan["pistas_audio"]):
-        cmd += ["-map", "%d:a:0" % (i + 1)]
+    for r in fuentes:
+        cmd += ["-map", "%d:a:0" % entrada[r if 0 < r <= len(audios) else 0]]
     cmd += args_video(plan, mxf_por_ruta.get(clip["fichero_video"], {}), cfg)
-    if plan["pistas_audio"]:
+    if n:
         cmd += ["-c:a", "pcm_s24le", "-ar", "48000", "-ac", "1"]
-    if n_silencio and not dur:
+        for k, g in sorted(ganancias.items()):
+            cmd += ["-filter:a:%d" % k, "volume=%.1fdB" % g]
+    if 0 in entrada and not clip.get("duracion"):
         cmd += ["-shortest"]
     cmd += ["-f", "mxf", str(salida)]
     ok, err = ejecutar_ffmpeg(cmd, timeout_segmento(clip.get("duracion")))
@@ -846,8 +1043,9 @@ def unir_segmentos(segmentos, salida, ffmpeg, cfg, plan, duracion_total):
     with open(lista, "w", encoding="utf-8") as f:
         for s in segmentos:  # rutas absolutas: el demuxer concat resuelve las relativas respecto a la lista
             f.write("file '%s'\n" % str(Path(s).resolve()).replace("'", "'\\''"))
+    creado = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000Z")  # si no, el MXF sale sin fecha de creación
     cmd = [ffmpeg, "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(lista), "-map", "0", "-c", "copy",
-           "-timecode", timecode_inicio(cfg, plan["fps"]), "-f", "mxf", str(salida)]
+           "-timecode", timecode_inicio(cfg, plan["fps"]), "-metadata", "creation_time=" + creado, "-f", "mxf", str(salida)]
     ok, err = ejecutar_ffmpeg(cmd, timeout_union(duracion_total))
     lista.unlink(missing_ok=True)
     return ok, err, cmd
@@ -857,36 +1055,53 @@ def unir_segmentos(segmentos, salida, ffmpeg, cfg, plan, duracion_total):
 # Shotlist y hoja de contactos
 # ---------------------------------------------------------------------------
 
-def escribir_shotlist(ruta, proyecto, filas):
+COLUMNAS_SHOTLIST = [  # (cabecera, clave de la fila, ancho)
+    ("Nº", "n", 5), ("Proyecto", "proyecto", 24), ("Clip", "clip", 34), ("TC inicio (bruto)", "tc_in", 14), ("TC fin (bruto)", "tc_out", 14),
+    ("Duración", "duracion", 11), ("TC original", "tc_original", 14), ("Fecha fichero", "fecha", 18), ("Fecha grabación", "fecha_grabacion", 18),
+    ("Montaje", "montaje", 14), ("Códec origen", "codec", 12), ("Resolución origen", "resolucion", 14), ("Pistas audio", "pistas", 8),
+    ("Sonoridad (LUFS)", "lufs", 10), ("Pico (dBFS)", "pico", 10), ("Ganancia (dB)", "ganancia", 10), ("Aviso audio", "aviso_audio", 26),
+    ("Estado", "estado", 14), ("Ficheros origen", "ficheros", 60), ("Fichero importado (según bin)", "fichero_origen", 50),
+    ("Disco de origen (según bin)", "volumenes", 24), ("Origen", "origen", 20), ("Referencia agencia", "ref_agencia", 18), ("Slug", "slug", 40)]
+
+
+def escribir_shotlist(ruta, proyecto, filas, quitados=None):
+    """Shotlist del bruto (xlsx; csv si falta openpyxl). quitados: clips del proyecto quitados en la pantalla de montaje,
+    en una hoja aparte para que conste que no entraron a propósito."""
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font
+        from openpyxl.utils import get_column_letter
     except ImportError:
         import csv
         with open(ruta.with_suffix(".csv"), "w", newline="", encoding="utf-8-sig") as f:
-            w = csv.DictWriter(f, fieldnames=list(filas[0].keys()) if filas else ["clip"], delimiter=";")
-            w.writeheader()
-            w.writerows(filas)
+            w = csv.writer(f, delimiter=";")
+            w.writerow([c for c, _, _ in COLUMNAS_SHOTLIST])
+            w.writerows([[fila.get(k) for _, k, _ in COLUMNAS_SHOTLIST] for fila in filas])
         return ruta.with_suffix(".csv")
     wb = Workbook()
     ws = wb.active
     ws.title = "Shotlist"
-    cab = ["Nº", "Proyecto", "Clip", "TC inicio (bruto)", "TC fin (bruto)", "Duración", "TC original", "Fecha fichero", "Fecha grabación",
-           "Códec origen", "Resolución origen", "Pistas audio", "Estado", "Ficheros origen", "Fichero importado (según bin)", "Disco de origen (según bin)", "Origen", "Referencia agencia", "Slug"]
-    ws.append(cab)
+    ws.append([c for c, _, _ in COLUMNAS_SHOTLIST])
     for c in ws[1]:
         c.font = Font(bold=True)
     anterior = None
     for fila in filas:
-        ws.append([fila.get(k) for k in ["n", "proyecto", "clip", "tc_in", "tc_out", "duracion", "tc_original", "fecha", "fecha_grabacion",
-                                          "codec", "resolucion", "pistas", "estado", "ficheros", "fichero_origen", "volumenes", "origen", "ref_agencia", "slug"]])
+        ws.append([fila.get(k) for _, k, _ in COLUMNAS_SHOTLIST])
         if fila.get("proyecto_principal") != anterior:  # donde empieza otro proyecto, en negrita
             ws.cell(row=ws.max_row, column=2).font = Font(bold=True)
             anterior = fila.get("proyecto_principal")
-    anchos = [5, 24, 34, 14, 14, 11, 14, 18, 18, 12, 14, 8, 14, 60, 50, 24, 20, 18, 40]
-    for i, a in enumerate(anchos):
-        ws.column_dimensions[chr(65 + i)].width = a
+    for i, (_, _, a) in enumerate(COLUMNAS_SHOTLIST, 1):
+        ws.column_dimensions[get_column_letter(i)].width = a
     ws.freeze_panes = "A2"
+    if quitados:
+        wq = wb.create_sheet("Quitados")
+        wq.append(["Clip", "TC original", "Duración (s)", "Ficheros origen"])
+        for c in wq[1]:
+            c.font = Font(bold=True)
+        for c in quitados:
+            wq.append([c.get("nombre"), c.get("timecode"), c.get("duracion"), "; ".join(c.get("ficheros") or [])])
+        for col, a in zip("ABCD", (34, 14, 12, 60)):
+            wq.column_dimensions[col].width = a
     wb.save(ruta)
     return ruta
 
@@ -931,7 +1146,8 @@ def _fila_clip(i, proyecto, c, mxf_por_ruta):
 
 
 def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir=None,
-                      etiqueta="", modo_forzado=None, timeouts=None, motivo_reintento=None, base_fichero=None, ordenado=False):
+                      etiqueta="", modo_forzado=None, timeouts=None, motivo_reintento=None, base_fichero=None, ordenado=False,
+                      movidos=None, quitados=None):
     """Exporta el bruto de un proyecto. Devuelve el resultado (dict) para brutos_resultado.json.
 
     En modo copia, si un segmento o la unión fallan por algo que no sea tiempo agotado, se repite
@@ -940,7 +1156,9 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
     también falla, el problema es el fichero y el proyecto sigue en copia sin ese clip.
     timeouts: claves de clips que ya agotaron el tiempo (no se reintentan).
     proyecto es el nombre del bruto (p. ej. "MEXICO_T02_2021-09-15"); base_fichero, el nombre de
-    fichero sin prefijo (por defecto, el nombre del bruto saneado)."""
+    fichero sin prefijo (por defecto, el nombre del bruto saneado). movidos (claves movidas a mano) y quitados (clips
+    quitados del proyecto) vienen de la pantalla de montaje y solo van al shotlist."""
+    movidos = set(movidos or ())
     base_fichero = base_fichero or nombre_seguro(proyecto)
     destino = Path(destino)
     timeouts = set(timeouts or ())
@@ -950,7 +1168,8 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
     pref = cfg.get("prefijo_fichero", "BRUTO_")
     res = {"proyecto": proyecto, "modo": plan["modo"], "reintento": modo_forzado is not None, "pistas_audio": plan["pistas_audio"],
            "clips": len(cs), "incluidos": 0, "fallidos": 0, "solo_audio": plan["clips_solo_audio"], "fichero": None, "bytes": 0,
-           "segundos": 0.0, "estado": "", "shotlist": None, "contactos": None, "errores": [], "firma": firma_clips(cs)}
+           "segundos": 0.0, "estado": "", "shotlist": None, "contactos": None, "errores": [], "firma": firma_bruto(cs, cfg),
+           "opciones": opciones_bruto(cfg)}
     if motivo_reintento:
         res["motivo_reintento"] = motivo_reintento
     progreso("Bruto %s: %s (%d clips, modo %s%s)" % (etiqueta, proyecto, len(cs), plan["modo"], ", reintento" if modo_forzado else ""))
@@ -974,7 +1193,7 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
         shutil.rmtree(tmp, ignore_errors=True)
         return exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir,
                                  etiqueta, modo_forzado="convertir", timeouts=timeouts, motivo_reintento=motivo, base_fichero=base_fichero,
-                                 ordenado=True)
+                                 ordenado=True, movidos=movidos, quitados=quitados)
 
     puede_reintentar = plan["modo"] == "copia" and modo_forzado is None
     tmp = destino / ("_tmp_" + base_fichero)
@@ -987,17 +1206,18 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
     try:
         # Convirtiendo, varios clips a la vez (cada segmento es independiente; se unen después en orden). Copiando,
         # de uno en uno: es rápido y el reintento copia -> convertir decide clip a clip.
-        futuros = {}
+        futuros, infos = {}, {}
         n_pool = clips_a_la_vez(cfg) if plan["modo"] == "convertir" else 1
         if n_pool > 1:
             pool = ThreadPoolExecutor(n_pool)
-            futuros = {i: pool.submit(hacer_segmento, c, i, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg)
+            futuros = {i: pool.submit(hacer_segmento, c, i, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, None, infos.setdefault(i, {}))
                        for i, c in enumerate(cs, 1) if c.get("fichero_video") and c.get("clave") not in timeouts}
         segmentos, filas = [], []
         frames = 0  # se acumulan frames, no segundos, para no arrastrar redondeos en el shotlist
         inicio = tc_a_frames(timecode_inicio(cfg, plan["fps"]), plan["fps"])
         for i, c in enumerate(cs, 1):
             fila = _fila_clip(i, proyecto, c, mxf_por_ruta)
+            fila["montaje"] = "movido a mano" if c.get("clave") in movidos else "automático"
             if not c.get("fichero_video"):
                 fila["estado"] = "solo audio, no incluido"
                 filas.append(fila)
@@ -1008,7 +1228,9 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
                 filas.append(fila)
                 continue
             progreso("  %s: clip %d/%d  %s" % (proyecto, i, len(cs), c["nombre"]))
-            seg, err, cmd = futuros[i].result() if i in futuros else hacer_segmento(c, i, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg)
+            seg, err, cmd = futuros[i].result() if i in futuros else hacer_segmento(c, i, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg,
+                                                                                    None, infos.setdefault(i, {}))
+            fila.update(infos.get(i, {}))
             if not seg:
                 if err == TIEMPO_AGOTADO:
                     timeouts.add(c.get("clave"))
@@ -1052,6 +1274,8 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
                     res["estado"] = "AVISO: duración %.1fs, esperada %.1fs" % (dur_final, acumulado)
                 else:
                     res["estado"] = "OK"
+                if res["estado"] == "OK":
+                    acabado_profesional(res, salida, plan, cfg, ffprobe, inicio, acumulado, progreso, proyecto)
                 if cfg.get("verificar_decodificando") and res["estado"] == "OK":
                     progreso("  %s: verificando decodificación completa..." % proyecto)
                     cmd2 = [ffmpeg, "-v", "error", "-i", str(salida), "-f", "null", "-"]
@@ -1071,11 +1295,12 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
         shutil.rmtree(tmp, ignore_errors=True)
         if uniendo:
             salida.unlink(missing_ok=True)
+            salida.with_name(salida.stem + "_ficha.txt").unlink(missing_ok=True)
         raise
 
     base = destino / ("%s%s" % (pref, base_fichero))
     try:
-        res["shotlist"] = escribir_shotlist(base.with_name(base.name + "_shotlist.xlsx"), proyecto, filas).name
+        res["shotlist"] = escribir_shotlist(base.with_name(base.name + "_shotlist.xlsx"), proyecto, filas, quitados).name
     except Exception as e:
         LOG.error("Shotlist %s: %s", proyecto, e)
     try:
@@ -1094,6 +1319,41 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
     LOG.info("Bruto %s: %s (%d incluidos, %d fallidos, %.1f s, modo %s%s)", proyecto, res["estado"], res["incluidos"], res["fallidos"],
              res["segundos"], res["modo"], ", reintento" if res["reintento"] else "")
     return res
+
+
+def comprobar_parar():
+    if PARAR.is_set():
+        raise Detenido()
+
+
+def acabado_profesional(res, salida, plan, cfg, ffprobe, inicio, segundos, progreso, proyecto):
+    """Tras unir: TC interno del vídeo igual al del fichero (solo lo convertido), ficha técnica XDCAM y MD5.
+    Un bruto no conforme queda en AVISO. Actualiza res (tc_gop, conforme, ficha, md5)."""
+    import mxf_util
+    xdcam = bool(plan["destino"].get("xdcam"))
+    if xdcam and plan["modo"] == "convertir":
+        try:
+            res["tc_gop"] = mxf_util.parchear_tc_gop(salida, inicio, plan["fps"])
+        except Exception as e:
+            LOG.error("%s: no se pudo reescribir el TC interno (%s)", proyecto, e)
+            res["errores"].append(detalle_error(None, "TC interno", [], str(e)))
+    if xdcam and cfg.get("ficha_tecnica", True):
+        progreso("  %s: comprobando el formato..." % proyecto)
+        esperado = {"pistas": plan["pistas_audio"], "tc": fmt_tc(inicio, plan["fps"]), "duracion": segundos, "tc_gop": bool(res.get("tc_gop"))}
+        try:
+            ok, texto = mxf_util.ficha_tecnica(ffprobe, salida, esperado, flags_subproceso())
+        except Exception as e:
+            ok, texto = False, "No se pudo hacer la ficha técnica: %s\n" % e
+        ficha = salida.with_name(salida.stem + "_ficha.txt")
+        ficha.write_text(texto, encoding="utf-8")
+        res.update(conforme=ok, ficha=ficha.name)
+        if not ok:
+            fallos = [l[7:] for l in texto.splitlines() if l.startswith("FALLO")]
+            res["estado"] = "AVISO: no conforme con XDCAM HD422 (%s)" % "; ".join(fallos)[:300]
+            LOG.warning("%s: %s", proyecto, res["estado"])
+    if cfg.get("md5", True):
+        progreso("  %s: calculando MD5..." % proyecto)
+        res["md5"] = mxf_util.escribir_md5(salida, comprobar_parar)
 
 
 def ya_exportado(previo, n_clips, destino, firma=None):
@@ -1136,13 +1396,37 @@ def guardar_cortes(carpeta_brutos, cortes):
     (Path(carpeta_brutos) / FICHERO_CORTES).write_text(json.dumps(datos, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
-def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir=None, proyectos=None, cortes=None):
+def grupos_con_montaje(clips, cruce, mxf, mxf_por_ruta, cfg, destino, progreso, montaje=None):
+    """Reparto final: el automático, salvo en los proyectos tocados en la pantalla de montaje (montaje.json de la
+    carpeta de brutos, o el montaje que se pase), cuyos brutos son exactamente los del montaje."""
+    import montaje as mj
+    agrupar = cfg.get("agrupar", "proyecto_mes")
+    if agrupar != "proyecto_mes":
+        if montaje is not None or (Path(destino) / mj.FICHERO).exists():
+            LOG.warning("Hay montaje pero agrupar = %s: el montaje solo se aplica con proyecto_mes; se ignora", agrupar)
+            progreso("Aviso: el montaje solo se aplica con agrupar = proyecto_mes; se ignora.")
+        return grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg)
+    if montaje is None:
+        montaje = mj.Montaje.desde_analisis(clips, cruce, mxf, cfg, destino)
+    for a in montaje.avisos:
+        LOG.warning("Montaje: %s", a)
+        progreso("Aviso del montaje: %s" % a)
+    tocados = set(montaje.estados)
+    if tocados:
+        LOG.info("Montaje a mano en %d proyectos (%s): %s", len(tocados), mj.FICHERO, "; ".join(sorted(tocados)))
+    grupos = [g for g in grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg) if g["proyecto"] not in tocados] + montaje.grupos()
+    return sorted(grupos, key=lambda g: g["proyecto"])  # estable: dentro de cada proyecto, el orden del montaje
+
+
+def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir=None, proyectos=None, cortes=None,
+                  montaje=None):
     """Devuelve una lista con el resultado por proyecto (para el informe). brutos_resultado.json se
     reescribe tras cada proyecto, y al relanzar sobre la misma carpeta se saltan los ya terminados.
     Si se pulsa Detener, devuelve los proyectos terminados hasta ese momento (PARAR queda activado).
     proyectos: nombres de los proyectos elegidos (None = todos; "SIN_PROYECTO" = clips sin bin). Los brutos de
     proyectos no elegidos que ya estaban en brutos_resultado.json se conservan, para hacer el disco en varias veces.
-    cortes: los de la pantalla de cortes; por defecto, los de cortes.json de la carpeta de brutos."""
+    cortes: cortes a mano al estilo antiguo (pruebas); si no se pasan, manda el montaje (montaje.json de la carpeta
+    de brutos, o el que se pase en montaje; un cortes.json antiguo se convierte)."""
     destino = Path(destino)
     destino.mkdir(parents=True, exist_ok=True)
     mxf_por_ruta = {m["ruta"]: m for m in mxf}
@@ -1155,19 +1439,18 @@ def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso,
         except Exception as e:
             LOG.warning("brutos_resultado.json anterior ilegible (%s); se exporta todo", e)
 
-    if cortes is None:
-        cortes = cargar_cortes(destino)
     if cortes:
-        LOG.info("Cortes elegidos a mano en %d proyectos (%s)", len(cortes), FICHERO_CORTES)
+        LOG.info("Cortes elegidos a mano en %d proyectos", len(cortes))
+    if proyectos is not None and cfg.get("agrupar", "proyecto_mes") == "dias":  # los bloques por días mezclan proyectos
+        clips = [c for c in clips if de_proyectos(c, set(proyectos))]
+    if cortes is not None:
+        grupos = grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg, cortes)
+    else:
+        grupos = grupos_con_montaje(clips, cruce, mxf, mxf_por_ruta, cfg, destino, progreso, montaje)
     if proyectos is not None:
         elegidos = set(proyectos)
-        if cfg.get("agrupar", "proyecto_mes") == "dias":  # los bloques por días mezclan proyectos: se filtran los clips
-            clips = [c for c in clips if de_proyectos(c, elegidos)]
-        grupos = [g for g in grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg, cortes)
-                  if cfg.get("agrupar", "proyecto_mes") == "dias" or g["proyecto"] in elegidos]
+        grupos = [g for g in grupos if cfg.get("agrupar", "proyecto_mes") == "dias" or g["proyecto"] in elegidos]
         LOG.info("Proyectos elegidos (%d): %s", len(elegidos), "; ".join(sorted(elegidos)))
-    else:
-        grupos = grupos_de_exportacion(clips, cruce, mxf_por_ruta, cfg, cortes)
     de_esta_vez = {g["nombre"] for g in grupos}
     proyectos_de_esta_vez = {g["proyecto"] for g in grupos}
     # De otras ejecuciones: se conservan los de otros proyectos. Los de estos proyectos que ya no salen (se movieron
@@ -1186,13 +1469,14 @@ def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso,
         try:
             if PARAR.is_set():
                 raise Detenido()
-            if ya_exportado(previos.get(proyecto), len(cs), destino, firma_clips(cs)):
+            if ya_exportado(previos.get(proyecto), len(cs), destino, firma_bruto(cs, cfg)):
                 res = dict(previos[proyecto], reanudado=True)
                 progreso("Bruto %s: %s ya estaba exportado, se salta (reanudado)" % (etiqueta, proyecto))
                 LOG.info("Bruto %s: reanudado (ya exportado en una ejecución anterior)", proyecto)
             else:
                 res = exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir,
-                                        etiqueta, base_fichero=g["base"], ordenado=g.get("ordenado", False))
+                                        etiqueta, base_fichero=g["base"], ordenado=g.get("ordenado", False),
+                                        movidos=g.get("movidos"), quitados=g.get("quitados"))
                 res["reanudado"] = False
             res.update({"proyecto_avid": g["proyecto"], "tipo": g["tipo"], "contenido": g["contenido"]})
         except Detenido:

@@ -21,9 +21,9 @@ if not %errorlevel%==0 (
 )
 
 echo.
-echo [2/5] Instalando herramientas (pyinstaller, pyavb, openpyxl)...
+echo [2/5] Instalando herramientas (pyinstaller, pyavb, openpyxl, pillow)...
 %PY% -m pip install --quiet --upgrade pip
-%PY% -m pip install --quiet --only-binary :all: pyavb openpyxl pyinstaller
+%PY% -m pip install --quiet --only-binary :all: pyavb openpyxl pillow pyinstaller
 if not %errorlevel%==0 (
   echo   Fallo al instalar. Copia el texto de arriba y enviaselo a Adrian.
   pause & exit /b 1

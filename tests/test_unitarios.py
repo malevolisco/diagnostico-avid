@@ -258,9 +258,9 @@ class Reparto(unittest.TestCase):
             (d / "B.mxf").write_bytes(b"12345")
             (d / "B_shotlist.xlsx").write_bytes(b"x")
             previo = {"estado": "OK", "clips": 1, "fichero": "B.mxf", "bytes": 5, "shotlist": "B_shotlist.xlsx",
-                      "firma": eb.firma_clips([{"clave": "K1"}])}
-            self.assertTrue(eb.ya_exportado(previo, 1, d, eb.firma_clips([{"clave": "K1"}])))
-            self.assertFalse(eb.ya_exportado(previo, 1, d, eb.firma_clips([{"clave": "K2"}])))
+                      "firma": eb.firma_bruto([{"clave": "K1"}], {})}
+            self.assertTrue(eb.ya_exportado(previo, 1, d, eb.firma_bruto([{"clave": "K1"}], {})))
+            self.assertFalse(eb.ya_exportado(previo, 1, d, eb.firma_bruto([{"clave": "K2"}], {})))
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
@@ -356,9 +356,9 @@ class ProyectoMes(unittest.TestCase):
               # MXF importado de una tarjeta P2: el origen dice "Fichero importado" pero la ruta es de tarjeta
               self.clip("0001AB", "2019-09-16 12:00:00", 1, origen="Fichero importado", fichero_origen=r"E:\CARD01\CONTENTS\VIDEO\0001AB.MXF"),
               self.clip("X,Dissolve,1", "2019-09-16 12:00:00", 0.1, proyectos=(), render=True)]
-        self.assertEqual(self.nombres(cs), {"P_2019-09": ["0016Q3", "0001AB"]})
+        self.assertEqual(self.nombres(cs), {"P SEPTIEMBRE DE 2019": ["0016Q3", "0001AB"]})
         self.cfg["excluir_importados"] = False
-        self.assertEqual(len(self.nombres(cs)["P_2019-09"]), 5)
+        self.assertEqual(len(self.nombres(cs)["P SEPTIEMBRE DE 2019"]), 5)
 
     def test_orden_cronologico_estricto(self):
         # Las fechas de la foto del correo, que salieron desordenadas
@@ -366,7 +366,7 @@ class ProyectoMes(unittest.TestCase):
         cs = [self.clip("C%d" % i, f, 1) for i, f in enumerate(fechas)]
         g = eb.grupos_de_exportacion(cs, {}, self.mxf, self.cfg)
         self.assertEqual(len(g), 1)
-        self.assertEqual(g[0]["nombre"], "P_2019-09_a_2019-10")
+        self.assertEqual(g[0]["nombre"], "P SEPTIEMBRE A OCTUBRE DE 2019")
         orden = [self.mxf[c["fichero_video"]]["modificado"] for c in g[0]["clips"]]
         self.assertEqual(orden, sorted(fechas))
         self.assertTrue(g[0]["ordenado"])
@@ -376,15 +376,151 @@ class ProyectoMes(unittest.TestCase):
         cs = [self.clip("A", "2019-09-01 10:00:00", 60), self.clip("B", "2019-09-02 10:00:00", 50),
               self.clip("C", "2019-09-03 10:00:00", 20), self.clip("D", "2019-09-04 10:00:00", 30),
               self.clip("E", "2019-10-01 10:00:00", 150)]  # más de 2 h por sí solo: va solo
-        self.assertEqual(self.nombres(cs), {"P_2019-09_1": ["A", "B"], "P_2019-09_2": ["C", "D"], "P_2019-10": ["E"]})
+        self.assertEqual(self.nombres(cs), {"P SEPTIEMBRE DE 2019 1": ["A", "B"], "P SEPTIEMBRE DE 2019 2": ["C", "D"], "P OCTUBRE DE 2019": ["E"]})
 
     def test_proyectos_piezas_compartidos_y_sin_fecha(self):
         cruce = {"por_proyecto": [{"proyecto": "Q", "secuencias_nombres": ["PIEZA SISMO"]}]}
         cs = [self.clip("A", "2018-12-01 20:00:00", 1, proyectos=("Q", "P")),  # compartido: solo con el primero (P)
               self.clip("B", "2018-12-01 21:00:00", 1, proyectos=("Q",)), self.clip("H", "2018-12-02 09:00:00", 1, proyectos=()),
               self.clip("PIEZA SISMO", "2018-12-03 10:00:00", 1, proyectos=("Q",)), self.clip("Z", None, 1)]
-        self.assertEqual(self.nombres(cs, cruce), {"P_2018-12": ["A"], "P_SIN_FECHA": ["Z"], "Q_2018-12": ["B"],
-                                                   "Q_PIEZAS_2018-12": ["PIEZA SISMO"], "SIN_PROYECTO_2018-12": ["H"]})
+        self.assertEqual(self.nombres(cs, cruce), {"P DICIEMBRE DE 2018": ["A"], "P": ["Z"], "Q DICIEMBRE DE 2018": ["B"],
+                                                   "Q PIEZAS DICIEMBRE DE 2018": ["PIEZA SISMO"], "SIN PROYECTO DICIEMBRE DE 2018": ["H"]})
+
+
+class NombresDeBruto(unittest.TestCase):
+    """Nombre por defecto (Adrián, oct. 2026): proyecto en mayúsculas y mes y año en letra, sin guiones."""
+
+    def f(self, texto):
+        import datetime as dt
+        return dt.datetime.strptime(texto, "%Y-%m-%d")
+
+    def test_nombres_de_bruto(self):
+        f = self.f
+        self.assertEqual(eb.nombre_bruto("Venezuela", [f("2021-09-19"), f("2021-09-30")]), "VENEZUELA SEPTIEMBRE DE 2021")
+        self.assertEqual(eb.nombre_bruto("VENEZUELA", [f("2021-09-19"), f("2021-10-02")]), "VENEZUELA SEPTIEMBRE A OCTUBRE DE 2021")
+        self.assertEqual(eb.nombre_bruto("VENEZUELA", [f("2021-12-30"), f("2022-01-02")]), "VENEZUELA DICIEMBRE DE 2021 A ENERO DE 2022")
+        self.assertEqual(eb.nombre_bruto("VENEZUELA", []), "VENEZUELA")
+        self.assertEqual(eb.nombre_bruto("VENEZUELA", [f("2021-09-19")], piezas=True), "VENEZUELA PIEZAS SEPTIEMBRE DE 2021")
+        self.assertEqual(eb.nombre_bruto("VENEZUELA", [], piezas=True), "VENEZUELA PIEZAS")
+        self.assertEqual(eb.nombre_bruto("Méx/ico: 2", [f("2021-01-05")]), "MÉXICO 2 ENERO DE 2021")
+        self.assertEqual(eb.nombre_bruto("SIN_PROYECTO", [f("2021-05-05")]), "SIN PROYECTO MAYO DE 2021")
+        # Las fechas pueden venir desordenadas (bruto montado a mano): manda la más antigua y la más moderna
+        self.assertEqual(eb.nombre_bruto("P", [f("2021-10-02"), f("2021-09-19")]), "P SEPTIEMBRE A OCTUBRE DE 2021")
+
+
+class OpcionesExportacion(unittest.TestCase):
+    """Panel de opciones: validación, pistas en XDCAM, enrutado, ganancias, R128, medidor y firma."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+        self._orig = (eb.ejecutar_ffmpeg, eb.medir_audio)
+        self.cmds = []
+
+        def ejecutar(cmd, timeout):
+            self.cmds.append(cmd)
+            Path(cmd[-1]).write_bytes(b"mxf")
+            return True, ""
+        eb.ejecutar_ffmpeg = ejecutar
+        self.medidas = {}
+        eb.medir_audio = lambda ffmpeg, ruta: self.medidas.get(Path(ruta).name, {"lufs": -23.0, "pico": -6.0})
+
+    def tearDown(self):
+        eb.ejecutar_ffmpeg, eb.medir_audio = self._orig
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_por_defecto(self):
+        d = eb.CONFIG_DEFECTO
+        self.assertEqual((d["timecode_inicio"], d["pistas_audio"], d["niveles_audio"], d["enrutado_audio"], d["md5"], d["ficha_tecnica"],
+                          d["medidor_audio"]), ("00:00:00:00", "max", "sin_tocar", [], True, True, True))
+        self.assertEqual(eb.validar_opciones(self.cfg), [])
+
+    def test_validar_opciones(self):
+        malos = [("timecode_inicio", "25:00:00:00"), ("timecode_inicio", "00:00:00:25"), ("timecode_inicio", "0:0:0"),
+                 ("ganancia_db", [0, 21]), ("enrutado_audio", [9]), ("niveles_audio", "fuerte"), ("pistas_audio", 9),
+                 ("prefijo_fichero", "A/B")]
+        for clave, valor in malos:
+            cfg = dict(self.cfg, **{clave: valor})
+            self.assertTrue(eb.validar_opciones(cfg), (clave, valor))
+        self.assertEqual(eb.validar_opciones(dict(self.cfg, timecode_inicio="23:59:59:24", ganancia_db=[-20, 20], enrutado_audio=[2, 1, 0],
+                                                  niveles_audio="r128", pistas_audio=8)), [])
+
+    def test_validar_nombres(self):
+        self.assertEqual(eb.validar_nombres(["A SEPTIEMBRE DE 2021", "B"]), [])
+        self.assertTrue(eb.validar_nombres(["A", "A"]))
+        self.assertTrue(eb.validar_nombres(["A:B"]))
+        self.assertTrue(eb.validar_nombres([""]))
+
+    def test_pistas_en_xdcam_solo_4_u_8(self):
+        self.assertEqual([eb.pistas_salida(n, self.cfg) for n in (0, 1, 2, 4, 5, 8)], [0, 4, 4, 4, 8, 8])
+        self.assertEqual(eb.pistas_salida(2, dict(self.cfg, pistas_audio=8)), 8)
+        self.assertEqual(eb.pistas_salida(2, dict(self.cfg, formato_salida="auto")), 2)
+
+    def test_ganancia_r128(self):
+        self.assertEqual(eb.ganancia_r128(-40), 12)
+        self.assertEqual(eb.ganancia_r128(-20), -3)
+        self.assertEqual(eb.ganancia_r128(None), 0)
+
+    def segmento(self, cfg, pistas=4, audios=2):
+        rutas = ["V.mxf"] + ["A%d.mxf" % i for i in range(1, audios + 1)]
+        mxf = {"V.mxf": {"pistas": [{"tipo": "video", "field_order": "bb"}]}}
+        mxf.update({r: {"pistas": [{"tipo": "audio"}]} for r in rutas[1:]})
+        clip = {"clave": "K", "nombre": "C", "ficheros": rutas, "fichero_video": "V.mxf", "duracion": 2.0}
+        plan = {"modo": "convertir", "pistas_audio": pistas, "destino": {"xdcam": True}, "fps": 25.0}
+        info = {}
+        seg, err, cmd = eb.hacer_segmento(clip, 1, plan, self.tmp, mxf, self.tmp, "ffmpeg", cfg, info=info)
+        entradas = [cmd[i + 1] for i, x in enumerate(cmd) if x == "-i"]
+        mapas = [cmd[i + 1] for i, x in enumerate(cmd) if x == "-map"]
+        audio = [Path(entradas[int(m.split(":")[0])]).name for m in mapas[1:]]
+        return audio, cmd, info
+
+    def test_enrutado_y_silencio(self):
+        audio, _, info = self.segmento(dict(self.cfg, enrutado_audio=[2, 1]))
+        self.assertEqual(audio, ["A2.mxf", "A1.mxf", "anullsrc=r=48000:cl=mono", "anullsrc=r=48000:cl=mono"])
+        audio, _, info = self.segmento(dict(self.cfg, enrutado_audio=[0, 3]))  # silencio a propósito y una pista que no tiene
+        self.assertEqual(audio[:2], ["anullsrc=r=48000:cl=mono", "anullsrc=r=48000:cl=mono"])
+        self.assertIn("pista 3", info["aviso_audio"])
+        self.assertIn("no entran las pistas 1, 2", info["aviso_audio"])
+        _, _, info = self.segmento(self.cfg)  # por defecto, rellenar con silencio no es un aviso
+        self.assertIsNone(info.get("aviso_audio"))
+        _, _, info = self.segmento(self.cfg, pistas=4, audios=6)
+        self.assertEqual(info["aviso_audio"], "no entran las pistas 5, 6 del clip")
+
+    def test_ganancia_por_pista(self):
+        _, cmd, info = self.segmento(dict(self.cfg, niveles_audio="ganancia", ganancia_db=[3, 0, -2]))
+        texto = " ".join(cmd)
+        self.assertIn("-filter:a:0 volume=3.0dB", texto)
+        self.assertNotIn("-filter:a:1 ", texto)
+        self.assertNotIn("-filter:a:2 ", texto)  # la pista 3 es silencio: no se toca
+        self.assertEqual(info["ganancia"], "1: +3.0")
+
+    def test_r128_con_tope_y_medidor(self):
+        self.medidas = {"A1.mxf": {"lufs": -45.0, "pico": -30.0}, "A2.mxf": {"lufs": -23.0, "pico": 0.0}}
+        _, cmd, info = self.segmento(dict(self.cfg, niveles_audio="r128"))
+        texto = " ".join(cmd)
+        self.assertIn("-filter:a:0 volume=12.0dB", texto)
+        self.assertNotIn("-filter:a:1 ", texto)  # ya está a -23
+        self.assertEqual((info["lufs"], info["pico"]), (-23.0, 0.0))
+        self.assertIn("saturado", info["aviso_audio"])
+        self.assertIn("tope", info["aviso_audio"])
+
+    def test_casi_mudo(self):
+        self.medidas = {"A1.mxf": {"lufs": -70.0, "pico": -90.0}, "A2.mxf": {"lufs": -65.0, "pico": -50.0}}
+        _, _, info = self.segmento(self.cfg)
+        self.assertIn("casi mudo", info["aviso_audio"])
+        self.assertIsNone(info.get("ganancia"))
+
+    def test_sin_medidor_no_mide(self):
+        llamadas = []
+        eb.medir_audio = lambda ffmpeg, ruta: llamadas.append(ruta) or {"lufs": None, "pico": None}
+        self.segmento(dict(self.cfg, medidor_audio=False))
+        self.assertEqual(llamadas, [])
+
+    def test_firma_cambia_con_el_orden_y_las_opciones(self):
+        a, b = [{"clave": "K1"}, {"clave": "K2"}], [{"clave": "K2"}, {"clave": "K1"}]
+        self.assertNotEqual(eb.firma_bruto(a, self.cfg), eb.firma_bruto(b, self.cfg))
+        self.assertNotEqual(eb.firma_bruto(a, self.cfg), eb.firma_bruto(a, dict(self.cfg, timecode_inicio="10:00:00:00")))
+        self.assertEqual(eb.firma_bruto(a, self.cfg), eb.firma_bruto(a, dict(self.cfg, md5=False)))  # no cambia el bruto
 
 
 class OrdenYParalelo(unittest.TestCase):
@@ -447,6 +583,7 @@ class OrdenYParalelo(unittest.TestCase):
         mxf, clips = self.preparar(6)
         cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
         cfg["clips_a_la_vez"] = 3
+        cfg["ficha_tecnica"] = False  # ffmpeg simulado: no hay MXF de verdad que comprobar (eso se prueba en test_mxf.py)
         destino = self.tmp / "brutos"
         destino.mkdir()
         unidos = []
@@ -482,13 +619,13 @@ class OrdenYParalelo(unittest.TestCase):
         try:
             eb.duracion_ffprobe = lambda ffprobe, ruta: DUR if Path(ruta).name.startswith("seg_") else DUR * 2
             res = eb.exportar_todo(clips, {}, list(mxf.values()), self.tmp, destino, "ffmpeg", "ffprobe", lambda m: None, cfg, proyectos=["P1"])
-            self.assertEqual([r["proyecto"] for r in res], ["P1_2019-09"])
+            self.assertEqual([r["proyecto"] for r in res], ["P1 SEPTIEMBRE DE 2019"])
             res = eb.exportar_todo(clips, {}, list(mxf.values()), self.tmp, destino, "ffmpeg", "ffprobe", lambda m: None, cfg, proyectos=["P0"])
-            self.assertEqual([r["proyecto"] for r in res], ["P0_2019-09"])
+            self.assertEqual([r["proyecto"] for r in res], ["P0 SEPTIEMBRE DE 2019"])
         finally:
             eb.unir_segmentos = orig
         guardado = json.loads((destino / "brutos_resultado.json").read_text(encoding="utf-8"))
-        self.assertEqual(sorted(r["proyecto"] for r in guardado), ["P0_2019-09", "P1_2019-09"])
+        self.assertEqual(sorted(r["proyecto"] for r in guardado), ["P0 SEPTIEMBRE DE 2019", "P1 SEPTIEMBRE DE 2019"])
 
     @unittest.skipIf(da is None, "sin pyavb")
     def test_lista_rapida_de_proyectos(self):
@@ -540,7 +677,7 @@ class CortesYGrabacion(unittest.TestCase):
         cortes = eb.cargar_cortes(self.tmp)
         self.assertEqual(cortes, {"P": ["KB"]})
         g = {x["nombre"]: [c["nombre"] for c in x["clips"]] for x in eb.grupos_de_exportacion(cs, {}, self.mxf, self.cfg, cortes)}
-        self.assertEqual(g, {"P_2019-09_1": ["A"], "P_2019-09_2": ["B", "C"]})
+        self.assertEqual(g, {"P SEPTIEMBRE DE 2019 1": ["A"], "P SEPTIEMBRE DE 2019 2": ["B", "C"]})
         self.assertEqual(eb.cargar_cortes(self.tmp / "no_existe"), {})
 
     @unittest.skipIf(da is None, "sin pyavb")

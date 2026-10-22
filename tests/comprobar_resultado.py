@@ -77,9 +77,10 @@ def main():
         # Fuera la agencia (SISMO, por la ruta del bin) y el vídeo de móvil importado. La pieza, aparte. NTSC entra:
         # sus MXF se importaron de una tarjeta (CONTENTS) aunque el origen diga "Fichero importado".
         # SIN_PROYECTO: huérfano 2 s + cuarentena 1 s + los 2 "APROX B" ambiguos de 2 s. Renders de efectos, fuera.
-        esperado_brutos = {"15 SEPT CENTROAMERICA_2021-09": ("convertir", 3, 7.0), "15 SEPT CENTROAMERICA_PIEZAS_2021-09": ("convertir", 1, 2.0),
-                           "ABORTO_2021-09": ("convertir", 2, 4.0), "APROX_2021-09": ("convertir", 1, 2.0),
-                           "NTSC_2021-09": ("convertir", 2, 4.0), "SIN_PROYECTO_2021-09": ("convertir", 4, 7.0)}
+        esperado_brutos = {"15 SEPT CENTROAMERICA SEPTIEMBRE DE 2021": ("convertir", 3, 7.0),
+                           "15 SEPT CENTROAMERICA PIEZAS SEPTIEMBRE DE 2021": ("convertir", 1, 2.0),
+                           "ABORTO SEPTIEMBRE DE 2021": ("convertir", 2, 4.0), "APROX SEPTIEMBRE DE 2021": ("convertir", 1, 2.0),
+                           "NTSC SEPTIEMBRE DE 2021": ("convertir", 2, 4.0), "SIN PROYECTO SEPTIEMBRE DE 2021": ("convertir", 4, 7.0)}
     else:
         # Un bruto por tarjeta (_Tnn_fecha), y aparte agencias, importados y piezas. 15 SEPT: el clip "2017 07 13" es del día 10
         # (otra tarjeta); el de Reuters lo dice la ruta del bin; la pieza se llama como la secuencia. El vídeo de móvil
@@ -121,6 +122,7 @@ def main():
                          "field_order": "tt", "r_frame_rate": "25/1", "display_aspect_ratio": "16:9"}
                 if any(v.get(k) != x for k, x in xdcam.items()):
                     fallo("bruto %s: vídeo %s, esperado XDCAM HD 50 1080i25 16:9 %s" % (proy, v, xdcam))
+                acabado_profesional(proy, b, mxf, tc, a)
         tcs, _, clips, fechas = tc_shotlist(Path(a.brutos) / b["shotlist"])
         if a.agrupar == "proyecto_mes":
             if fechas != sorted(fechas):
@@ -138,6 +140,24 @@ def main():
         if no:
             fallo("segunda ejecución: se han vuelto a exportar %s en vez de reanudar" % no)
     print("Brutos OK%s:" % (" (reanudados)" if a.reanudado else ""), ", ".join("%s (%s, %.1fs)" % (p, por[p]["modo"], por[p]["segundos"]) for p in esperado_brutos))
+
+
+def acabado_profesional(proy, b, mxf, tc, a):
+    """Ficha técnica conforme, MD5 correcto, TC interno del vídeo igual al del fichero y fecha de creación."""
+    import hashlib
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import mxf_util
+    if b.get("conforme") is not True or not (Path(a.brutos) / str(b.get("ficha"))).exists():
+        fallo("bruto %s: ficha técnica %r, conforme %r" % (proy, b.get("ficha"), b.get("conforme")))
+    md5 = mxf.with_suffix(".md5")
+    if not md5.exists() or md5.read_text(encoding="utf-8") != "%s *%s\n" % (hashlib.md5(mxf.read_bytes()).hexdigest(), mxf.name):
+        fallo("bruto %s: el .md5 falta o no cuadra" % proy)
+    gop = mxf_util.leer_tc_gop(mxf, 1)
+    if gop != [tc]:
+        fallo("bruto %s: TC interno %s, TC del fichero %s" % (proy, gop, tc))
+    creado = mxf_util.fecha_creacion(mxf) or ""
+    if not creado.startswith("20"):
+        fallo("bruto %s: sin fecha de creación (%r)" % (proy, creado))
 
 
 def tc_shotlist(ruta):

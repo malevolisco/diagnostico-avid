@@ -903,7 +903,10 @@ def filtros_xdcam(entrelazado):
     f = ["bwdif=mode=send_field:deint=all"] if entrelazado else []
     f += ["fps=50",
           "scale=w='trunc(min(1920,1080*dar)/2)*2':h='trunc(min(1080,1920/dar)/2)*2':flags=lanczos:out_color_matrix=bt709:out_range=tv",
-          "pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black", "setsar=1", "interlace=scan=tff:lowpass=linear", "setfield=tff"]
+          "pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black", "setsar=1", "interlace=scan=tff:lowpass=linear", "setfield=tff",
+          # ffmpeg 7.1 toma el color de los fotogramas y no de -color_primaries/-color_trc: sin esto, la cabecera MPEG-2
+          # sale con primarias y transferencia "sin especificar" (lo detectó la ficha técnica en el Windows de GitHub)
+          "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv"]
     return f
 
 

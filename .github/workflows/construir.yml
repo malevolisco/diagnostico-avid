@@ -50,7 +50,7 @@ jobs:
           Get-Content build.txt
 
       - name: Construir ejecutable
-        run: pyinstaller --noconfirm --clean --noconsole --onedir --name DiagnosticoAvid --add-data "bin;bin" --add-data "build.txt;." diagnostico_avid.py
+        run: pyinstaller --noconfirm --clean --noconsole --onedir --name DiagnosticoAvid --add-data "bin;bin" --add-data "build.txt;." --hidden-import interfaz --hidden-import tema --hidden-import ventana_montaje --hidden-import montaje --hidden-import mxf_util diagnostico_avid.py
 
       - name: Disco de prueba simulado
         run: python tests/crear_disco_prueba.py disco_prueba --ffmpeg bin/ffmpeg.exe --ffprobe bin/ffprobe.exe
@@ -87,6 +87,21 @@ jobs:
           $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--usar-analisis `"$a`" --brutos brutos_montaje --proyectos `"15 SEPT CENTROAMERICA;ABORTO`"" -PassThru -Wait -NoNewWindow
           if ($p.ExitCode -ne 0) { Get-Content brutos_montaje/exportacion.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
           python tests/probar_montaje.py comprobar brutos_montaje
+
+      - name: Ventana de tres páginas de principio a fin (analizar, montar, exportar), con capturas
+        shell: pwsh
+        run: |
+          # pantalla más grande que la ventana (1280x800) para que las capturas salgan enteras; si no se puede, se sigue
+          try { Set-DisplayResolution -Width 1920 -Height 1080 -Force -ErrorAction Stop } catch { Write-Host "No se puede cambiar la resolución: $_" }
+          python tests/probar_interfaz.py disco_prueba salida_ventana brutos_ventana capturas_ventana
+
+      - name: Guardar capturas de la ventana
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capturas_ventana
+          path: capturas_ventana
+          if-no-files-found: ignore
 
       - name: Exportación con agrupar=proyecto y formato auto (por tarjetas, copia, timecode NTSC drop-frame)
         shell: pwsh

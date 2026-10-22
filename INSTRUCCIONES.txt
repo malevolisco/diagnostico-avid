@@ -7,17 +7,18 @@ Qué hace
 1. ANALIZA un disco de edición Avid completo y genera un informe con lo que
    contiene: proyectos, clips, piezas montadas, duraciones, formatos,
    incidencias y una miniatura de cada clip.
-2. Si se marca la opción, EXPORTA un bruto por proyecto: un único fichero
+2. Después, EXPORTA un bruto por proyecto: un único fichero
    MXF con todos los clips de ese proyecto encadenados, listo para archivar,
    acompañado de un Excel (shotlist) con el timecode de cada clip dentro del
-   bruto y una hoja de contactos con miniaturas.
+   bruto y una hoja de contactos con miniaturas. Antes se pueden revisar y
+   corregir los brutos en el montaje.
 NO modifica nada en el disco de Avid: solo lo lee. No hay que instalar nada.
 
 Orden recomendado (la primera vez con un disco)
 -----------------------------------------------
-1. Primero, SOLO el análisis (sin marcar la opción 3). Envía el zip.
-2. Exporta los brutos en una segunda ejecución, cuando Adrián haya revisado
-   el informe y te diga que adelante.
+1. Primero, SOLO el análisis (página 1 · Disco). Envía el zip.
+2. Exporta los brutos (página 3 · Exportar) cuando Adrián haya revisado el
+   informe y te diga que adelante. No hace falta volver a analizar.
 
 Antes de empezar
 ----------------
@@ -36,37 +37,101 @@ Pasos
    "Más información" y luego "Ejecutar de todas formas". Es normal en
    programas que no están firmados por una empresa.
    El programa no se actualiza solo. Si te dicen que hay una versión nueva,
-   pulsa "Buscar actualización": la descarga, se cierra y se vuelve a abrir
+   pulsa "Buscar actualización" (arriba a la derecha): la descarga, se cierra y se vuelve a abrir
    ya actualizado (un par de minutos; no lo cierres mientras). Se conserva
    la configuración.
-2. Casilla 1: pulsa "Elegir..." y selecciona el disco de Avid (la letra del
-   disco, no una carpeta dentro de él).
-3. Casilla 2: dónde guardar el informe. Deja el escritorio o elige otra
-   carpeta. Nunca el propio disco de Avid.
-4. Opción 3 (solo si quieres los brutos): marca la casilla y elige la carpeta
-   del disco con espacio donde dejarlos.
-   Para no hacerlos todos de una vez, pulsa "Elegir proyectos...": sale la
+   La ventana tiene tres páginas, que se eligen en la barra de abajo:
+   1 · Disco, 2 · Montaje y 3 · Exportar. Se va de izquierda a derecha.
+
+Página 1 · Disco
+2. En "Carpetas":
+   - Disco de Avid: pulsa "Elegir..." y selecciona el disco de Avid (la
+     letra del disco, no una carpeta dentro de él). Solo se lee.
+   - Informe: dónde guardar el informe. Deja el escritorio o elige otra
+     carpeta. Nunca el propio disco de Avid.
+   - Carpeta de brutos (solo si quieres los brutos): la carpeta del disco
+     con espacio donde dejarlos.
+3. "Proyectos: todos..." sirve para no hacerlos todos de una vez: sale la
    lista de proyectos del disco (tarda unos segundos) y marcas los que
    quieres ahora. Los que ya tienen brutos en esa carpeta salen con
    "✓ ya tiene brutos"; el botón "Solo los que faltan" marca el resto.
    Otro día, misma carpeta de brutos y eliges los siguientes: los ya hechos
    no se tocan. El análisis lee siempre el disco entero (hace falta para
    saber qué vídeo es de cada proyecto).
-5. Pulsa "Analizar disco". En el recuadro de abajo irá apareciendo lo que hace.
-   Solo el análisis: de minutos a una hora según el número de ficheros.
-   Con brutos: puede ser de varias horas a varios días. No cierres la
-   ventana. El programa impide que el ordenador se suspenda mientras trabaja,
-   pero si es un portátil déjalo enchufado.
-6. Al terminar se abre el informe en el navegador y aparece un mensaje con dos
-   rutas. En la carpeta de destino habrá:
+4. Pulsa "Analizar disco" (el botón naranja). En el recuadro de abajo irá
+   apareciendo lo que hace. De minutos a una hora según el número de
+   ficheros. El programa impide que el ordenador se suspenda mientras
+   trabaja, pero si es un portátil déjalo enchufado.
+5. Al terminar se abre el informe en el navegador y aparece un mensaje con dos
+   rutas. En la carpeta del informe habrá:
    - una carpeta  Diagnostico_<disco>_<fecha>  con el informe (informe.html)
    - un fichero   Diagnostico_<disco>_<fecha>.zip
-   Y si se marcó la opción 3, en la carpeta de brutos, un bruto por proyecto
-   de Avid y mes, con los clips en orden de fecha y de 2 horas como mucho:
+   A la derecha, "Último análisis de este disco" resume lo encontrado, y
+   "Siguiente paso" lleva al montaje.
+6. Envía el fichero .zip del informe. Es pequeño (texto y miniaturas, sin vídeo).
+   Si te piden enviarlo sin imágenes, abre "Opciones avanzadas" antes de
+   empezar y desmarca "Incluir las miniaturas en el zip para enviar".
+   Al final del informe hay una tabla "Brutos exportados" con el estado de cada uno.
+
+Página 2 · Montaje (revisar los brutos antes de exportar; opcional)
+Usa el último análisis del disco: no lo repite.
+- Arriba eliges el proyecto; a la izquierda, sus brutos (en rojo los que
+  pasan de 2 horas).
+- El visor enseña el fotograma del punto donde estás, con el timecode en
+  naranja. La primera vez que abres un bruto tarda un poco en preparar los
+  fotogramas (1 por segundo, sin sonido); se puede ir mirando mientras.
+  A la derecha, la ficha del clip (fecha de grabación, TC, formato, audio).
+- Debajo, la línea de tiempo: cada bloque es un clip. Pincha o arrastra
+  para moverte (Ctrl+clic marca varios); "Avance" lo pasa rápido; "+" y
+  "−" hacen zoom. Las flechas del teclado mueven un segundo.
+- Con uno o varios clips marcados (en la línea de tiempo o en la lista):
+  "Quitar" (va a la papelera de la izquierda; "Recuperar los marcados" lo
+  devuelve), "Subir"/"Bajar" (cambia el orden), "← Bruto anterior"/"Bruto
+  siguiente →", o "Cortar aquí" (el bruto acaba antes de ese clip y el
+  resto se reparte de nuevo). "Deshacer" o Ctrl+Z deshace.
+- Lo movido a mano sale en naranja y en el Excel pone "movido a mano".
+- "Renombrar..." cambia el nombre del fichero del bruto elegido.
+- "Orden automático" deshace todo lo del proyecto.
+- Si se repitió el análisis y hay clips nuevos, salen en rojo como "sin
+  colocar": no se exportan hasta pulsar "Colocar por fecha".
+- "Fuera del bruto" enseña lo que el programa deja fuera y por qué: efectos
+  renderizados por Avid, vídeos de agencia e importados (internet, móvil).
+  Es solo para consultar.
+"Guardar" (o Ctrl+S) lo deja en montaje.json, en la carpeta de brutos. Si
+cambias de página sin guardar, pregunta. Lo que se ve en el montaje es
+exactamente lo que se exporta.
+
+Página 3 · Exportar
+- A la izquierda, los ajustes con los valores recomendados ya puestos:
+  - Formato XDCAM HD422 50 Mb/s 1080i25 16:9.
+  - Timecode de inicio de cada bruto (00:00:00:00).
+  - Audio: 4 pistas u 8 pistas. Viene marcado lo que corresponde al
+    material; pulsa el otro para cambiarlo.
+  - Niveles de audio: "Sin tocar" es lo recomendado. La ganancia fija o la
+    normalización a −23 LUFS cambian el sonido original.
+  - Comprobaciones (ficha técnica, MD5, medidor de audio): marcadas.
+  - "Opciones avanzadas...": qué pista del clip va a cada pista del bruto,
+    ganancia por pista, prefijo de los nombres, "Guardar como
+    predeterminados" y "Restablecer recomendados".
+- En el centro, la cola: un bruto por fila. Pincha en la casilla para
+  incluirlo o quitarlo. Los brutos de piezas (piezas ya montadas) vienen
+  sin marcar: no se exportan salvo que los marques.
+- Debajo, el espacio que hace falta y el libre (en rojo si no cabe) y el
+  tiempo que queda (se calcula al terminar el primer bruto).
+- Pulsa "Exportar N brutos". Si algo no vale (un TC mal escrito, nombres
+  repetidos, sin espacio), el botón queda gris y dice por qué.
+  Cada fila va diciendo lo que hace ("Convirtiendo · clip 18 de 40") y al
+  acabar "Terminado" y "Conforme · MD5"; en rojo si algo no cuadra.
+Mientras exporta se pueden mirar las otras páginas, pero no cambiar el
+montaje. Puede quedarse toda la noche; con "Detener" se para y al volver a
+pulsar "Exportar" sigue por donde se quedó.
+
+En la carpeta de brutos sale un bruto por proyecto de Avid y mes, con los
+clips en orden de fecha y de 2 horas como mucho:
    - PANAMA 2019 JULIO DE 2019.mxf               proyecto PANAMA 2019, julio
    - PANAMA 2019 JULIO DE 2019 1.mxf, 2...       si pasa de 2 horas, en varios
    - HONDURAS DICIEMBRE DE 2018 A ENERO DE 2019.mxf   dos meses seguidos
-   - PANAMA 2019 PIEZAS JULIO DE 2019.mxf        piezas ya renderizadas
+   - PANAMA 2019 PIEZAS JULIO DE 2019.mxf        piezas ya renderizadas (solo si se marcan)
    - PANAMA 2019.mxf                             clips sin fecha
    - SIN PROYECTO <MES> DE <AÑO>.mxf             clips que no están en ningún bin
    Todos salen en XDCAM HD422 50 (1920x1080, 25i, 16:9). El material en SD
@@ -85,74 +150,33 @@ Pasos
    Convertir a HD es lento: el programa convierte varios clips a la vez,
    pero cuenta con del orden de media hora de ordenador por cada hora de
    material (depende del PC). Con un disco grande, mejor por proyectos con
-   "Elegir proyectos...", o usa "Detener" y vuelve a lanzarlo con las mismas
+   "Proyectos...", o usa "Detener" y vuelve a exportar con las mismas
    carpetas para seguir donde se quedó.
    Los clips van en orden estricto de fecha y hora (al segundo): la de
    grabación si el bin la guarda (columnas como "Shoot Date" y "Shoot
    Time"); si no, la del volcado al disco de Avid. Si dos coinciden en el
    mismo segundo, por su timecode. El Excel lleva las dos fechas, y el
    informe dice en cuántos clips se ha encontrado la de grabación.
-7. Envía el fichero .zip del informe. Es pequeño (texto y miniaturas, sin vídeo).
-   Si te piden enviarlo sin imágenes, desmarca antes de empezar la casilla
-   "Incluir las miniaturas en el zip para enviar".
-   Al final del informe hay una tabla "Brutos exportados" con el estado de cada uno.
 
-Revisar y corregir los brutos antes de exportar (en tres pasos)
----------------------------------------------------------------
-1. Analiza el disco ("Analizar disco") sin marcar los brutos. Se hace una
-   vez: los pasos siguientes usan ese análisis y no lo repiten.
-2. Elige la carpeta de brutos y pulsa "Montaje...".
-   - Arriba eliges el proyecto; a la izquierda, sus brutos (en rojo los que
-     pasan de 2 horas).
-   - El visor enseña el fotograma del punto donde estás. La primera vez que
-     abres un bruto tarda un poco en preparar los fotogramas (1 por segundo,
-     sin sonido); se puede ir mirando mientras.
-   - Debajo, la línea de tiempo: cada bloque es un clip. Pincha o arrastra
-     para moverte; "Avance" lo pasa rápido; "Zoom +" para afinar. Las
-     flechas del teclado mueven un segundo.
-   - En la lista, marca uno o varios clips (Ctrl o Mayús) y:
-     "Quitar" (va a la papelera de la izquierda; "Recuperar" lo devuelve),
-     "Subir"/"Bajar" (cambia el orden), "Al bruto anterior"/"Al bruto
-     siguiente", o "Cortar aquí" (el bruto acaba antes de ese clip y el
-     resto se reparte de nuevo). Ctrl+Z deshace.
-   - Lo movido a mano sale en naranja y en el Excel pone "movido a mano".
-   - "Renombrar bruto..." cambia el nombre del fichero.
-   - "Volver al orden automático" deshace todo lo del proyecto.
-   - Si se repitió el análisis y hay clips nuevos, salen en rojo como "sin
-     colocar": no se exportan hasta pulsar "Colocar por fecha".
-   "Guardar" lo deja en montaje.json, en la carpeta de brutos. Lo que se ve
-   en el montaje es exactamente lo que se exporta.
-3. Pulsa "Exportar brutos (sin repetir el análisis)" (o "Guardar y
-   exportar..." en el montaje). Sale el panel de opciones con los valores
-   recomendados ya puestos:
-   - Timecode de inicio de cada bruto (00:00:00:00).
-   - Pistas de audio (las que más haya; en XDCAM salen 4 u 8) y qué pista
-     del clip va a cada una.
-   - Niveles de audio: "Sin tocar" es lo recomendado. La ganancia fija o la
-     normalización EBU R128 cambian el sonido original.
-   - Comprobaciones (MD5, ficha técnica, medidor de audio) y nombres.
-   - El espacio que hace falta y el que hay libre.
-   Si algo no vale, el botón Exportar queda gris y dice por qué. "Guardar
-   como predeterminados" las deja para la próxima vez.
-   Puede quedarse toda la noche; con "Detener" se para y al volver a
-   pulsarlo sigue.
-Con "Elegir proyectos..." antes del paso 2 o del 3 se hace solo una parte.
+Todo seguido, sin pasar por Montaje ni Exportar: en la página Disco, abre
+"Opciones avanzadas" y marca "Analizar y exportar seguido" antes de pulsar
+"Analizar disco". Usa los ajustes guardados como predeterminados y no
+exporta los brutos de piezas.
 
 Si hay que pararlo (por ejemplo, se acaba la jornada)
 -----------------------------------------------------
-Pulsa el botón "Detener" (al lado de "Analizar disco") y confirma. En unos
-segundos se para. También puedes cerrar la ventana con la X: pregunta
-antes y se para igual de bien.
-- Si estaba exportando brutos: los brutos terminados se quedan, el que
-  estaba a medias se descarta, y se genera el informe con lo hecho.
-- Si todavía estaba analizando (antes de los brutos): no hay informe y la
-  próxima vez empieza de cero.
+Pulsa "Detener" (en la página Disco si está analizando, en Exportar si está
+exportando) y confirma. En unos segundos se para. También puedes cerrar la
+ventana con la X: pregunta antes y se para igual de bien.
+- Si estaba exportando brutos: los brutos terminados se quedan y el que
+  estaba a medias se descarta.
+- Si todavía estaba analizando: no hay informe y la próxima vez empieza de
+  cero.
 
 Para seguir otro día (o si se cortó por un apagón, un disco que se
-desconectó...): vuelve a lanzar el programa con LAS MISMAS carpetas y la
-opción 3 marcada. Repetirá el análisis entero (tarda lo mismo que la
-primera vez), pero los brutos que ya estaban terminados no se vuelven a
-hacer: sigue por donde se quedó.
+desconectó...): abre el programa con LAS MISMAS carpetas y pulsa
+"Exportar" en la página 3. Usa el análisis ya hecho y los brutos que ya
+estaban terminados no se vuelven a hacer: sigue por donde se quedó.
 
 Si algo falla
 -------------

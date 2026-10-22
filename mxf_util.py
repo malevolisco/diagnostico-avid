@@ -97,6 +97,25 @@ def leer_tc_gop(ruta, maximo=3):
     return salida
 
 
+def color_mpeg2(ruta):
+    """(primarias, transferencia, matriz) de la extensión de pantalla de la secuencia MPEG-2 (00 00 01 B5, id 2) del
+    primer elemento de imagen, o None. 1, 1, 1 = BT.709. Se lee del propio vídeo porque ffprobe 7.1 no lo da en MXF."""
+    with open(ruta, "rb") as f:
+        for pos, clave, n in _klv(f):
+            if clave[:12] != CLAVE_ESENCIA or clave[12] != TIPO_IMAGEN:
+                continue
+            f.seek(pos)
+            cabeza = f.read(min(n, 4096))
+            i = cabeza.find(b"\x00\x00\x01\xb5")
+            while 0 <= i and i + 8 <= len(cabeza):
+                b = cabeza[i + 4]
+                if b >> 4 == 2:  # sequence_display_extension
+                    return (cabeza[i + 5], cabeza[i + 6], cabeza[i + 7]) if b & 1 else None
+                i = cabeza.find(b"\x00\x00\x01\xb5", i + 4)
+            return None
+    return None
+
+
 IDENTIFICACION = bytes.fromhex("060e2b34025301010d01010101013000")
 
 
@@ -178,7 +197,8 @@ def ficha_tecnica(ffprobe, ruta, esperado, flags=None):
     ver(v.get("r_frame_rate") == "25/1" and v.get("field_order") == "tt",
         "25 imágenes/s entrelazado, primero el campo superior (%s, %s)" % (v.get("r_frame_rate"), v.get("field_order")))
     ver(v.get("display_aspect_ratio") == "16:9", "Aspecto 16:9 (%s)" % v.get("display_aspect_ratio"))
-    ver(v.get("color_primaries") == "bt709", "Color BT.709 (%s)" % v.get("color_primaries"))
+    color = color_mpeg2(ruta)
+    ver(color == (1, 1, 1), "Color BT.709 en la cabecera del vídeo (primarias, transferencia, matriz: %s)" % (color,))
     ver(48 <= mbps <= maximo, "Unos 50 Mb/s de vídeo (%.1f Mb/s en total con audio y envoltura)" % mbps)
     ver(len(aus) == pistas, "%d pistas de audio (%d)" % (pistas, len(aus)))
     malas = [i + 1 for i, a in enumerate(aus) if (a.get("codec_name"), a.get("sample_rate"), a.get("channels")) != ("pcm_s24le", "48000", 1)]

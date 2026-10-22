@@ -214,5 +214,32 @@ class Grupos(Base):
         self.assertEqual(g[3]["tipo"], "piezas")
 
 
+@unittest.skipUnless(shutil.which("ffmpeg"), "sin ffmpeg")
+class Visor(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_un_fotograma_por_segundo_y_no_se_repite(self):
+        import subprocess
+        video = self.tmp / "clip.mxf"
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=720x576:r=25:d=3", "-c:v", "mpeg2video",
+                        "-f", "mxf", str(video)], check=True)
+        ruta = montaje.sacar_fotogramas("ffmpeg", video, self.tmp / "visor", "K:1/a")
+        self.assertEqual(ruta.parent, self.tmp / "visor")
+        fs = montaje.fotogramas(ruta)
+        self.assertEqual(len(fs), 3)
+        self.assertTrue(all(f.startswith(b"\xff\xd8") and f.endswith(b"\xff\xd9") for f in fs))
+        antes = ruta.stat().st_mtime_ns
+        self.assertEqual(montaje.sacar_fotogramas("no-existe-ffmpeg", video, self.tmp / "visor", "K:1/a"), ruta)  # ya hecho
+        self.assertEqual(ruta.stat().st_mtime_ns, antes)
+
+    def test_fallo_de_ffmpeg(self):
+        self.assertIsNone(montaje.sacar_fotogramas("ffmpeg", self.tmp / "no_existe.mxf", self.tmp / "visor", "K"))
+        self.assertEqual(list((self.tmp / "visor").glob("*")), [])
+
+
 if __name__ == "__main__":
     unittest.main()

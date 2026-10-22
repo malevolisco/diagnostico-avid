@@ -35,9 +35,10 @@ Pasos
    Si Windows muestra un aviso azul "Windows protegió su PC", pulsa
    "Más información" y luego "Ejecutar de todas formas". Es normal en
    programas que no están firmados por una empresa.
-   Al abrirse, el programa mira si hay una versión nueva. Si la hay, la
-   descarga, se cierra y se vuelve a abrir solo ya actualizado (un par de
-   minutos; no lo cierres mientras). Sin internet sigue con la que tiene.
+   El programa no se actualiza solo. Si te dicen que hay una versión nueva,
+   pulsa "Buscar actualización": la descarga, se cierra y se vuelve a abrir
+   ya actualizado (un par de minutos; no lo cierres mientras). Se conserva
+   la configuración.
 2. Casilla 1: pulsa "Elegir..." y selecciona el disco de Avid (la letra del
    disco, no una carpeta dentro de él).
 3. Casilla 2: dónde guardar el informe. Deja el escritorio o elige otra
@@ -62,15 +63,22 @@ Pasos
    - un fichero   Diagnostico_<disco>_<fecha>.zip
    Y si se marcó la opción 3, en la carpeta de brutos, un bruto por proyecto
    de Avid y mes, con los clips en orden de fecha y de 2 horas como mucho:
-   - PANAMA 2019_2019-07.mxf              proyecto PANAMA 2019, julio de 2019
-   - PANAMA 2019_2019-07_1.mxf, _2...     si pasa de 2 horas, en varios
-   - HONDURAS_2018-12_a_2019-01.mxf       material de dos meses seguidos
-   - PANAMA 2019_PIEZAS_2019-07.mxf       piezas ya renderizadas
-   - SIN_PROYECTO_<mes>.mxf               clips que no están en ningún bin
-   Todos salen en XDCAM HD 50 (1920x1080, 25i, 16:9). El material en SD 4:3
-   queda con bandas negras a los lados, sin deformar; el NTSC pasa a 25.
-   Cada uno con su _shotlist.xlsx (lista de clips con su timecode dentro del
-   bruto) y su _contactos.html (miniaturas).
+   - PANAMA 2019 JULIO DE 2019.mxf               proyecto PANAMA 2019, julio
+   - PANAMA 2019 JULIO DE 2019 1.mxf, 2...       si pasa de 2 horas, en varios
+   - HONDURAS DICIEMBRE DE 2018 A ENERO DE 2019.mxf   dos meses seguidos
+   - PANAMA 2019 PIEZAS JULIO DE 2019.mxf        piezas ya renderizadas
+   - PANAMA 2019.mxf                             clips sin fecha
+   - SIN PROYECTO <MES> DE <AÑO>.mxf             clips que no están en ningún bin
+   Todos salen en XDCAM HD422 50 (1920x1080, 25i, 16:9). El material en SD
+   4:3 queda con bandas negras a los lados, sin deformar; el NTSC pasa a 25.
+   Cada uno lleva al lado:
+   - _shotlist.xlsx: los clips con su timecode dentro del bruto, la fecha,
+     si se movió a mano en el montaje, el nivel de audio y avisos (clips
+     saturados o casi mudos). Si se quitaron clips, una hoja "Quitados".
+   - _contactos.html: miniaturas.
+   - _ficha.txt: comprobación del formato del fichero ya exportado. Debe
+     decir "Veredicto: CONFORME".
+   - .md5: huella del fichero, para comprobar que una copia es idéntica.
    No se incluyen los ficheros importados (agencias, internet, móvil: los que
    el informe marca como "Fichero importado" o de agencia) ni los fundidos,
    rótulos y efectos renderizados por Avid.
@@ -89,22 +97,45 @@ Pasos
    "Incluir las miniaturas en el zip para enviar".
    Al final del informe hay una tabla "Brutos exportados" con el estado de cada uno.
 
-Elegir dónde se corta cada bruto (en tres pasos)
-------------------------------------------------
-Para no partir una entrevista en dos brutos:
+Revisar y corregir los brutos antes de exportar (en tres pasos)
+---------------------------------------------------------------
 1. Analiza el disco ("Analizar disco") sin marcar los brutos. Se hace una
    vez: los pasos siguientes usan ese análisis y no lo repiten.
-2. Elige la carpeta de brutos y pulsa "Revisar cortes...". A la izquierda,
-   los proyectos; a la derecha, sus brutos de hasta 2 horas. Al elegir un
-   bruto salen abajo los clips de alrededor de su comienzo, con miniatura,
-   fecha y hora, duración y el hueco desde el clip anterior (un hueco largo
-   suele ser un cambio de tema). Marca el clip con el que quieres que empiece
-   ese bruto, antes o después, y pulsa "Empezar aquí el bruto". Los cortes
-   siguientes se recalculan solos. Si un bruto pasa de 2 horas sale en
-   rojo: lo decides tú. "Guardar cortes" los deja en cortes.json, en la
-   carpeta de brutos.
-3. Pulsa "Exportar brutos (sin repetir el análisis)". Puede quedarse toda
-   la noche; con "Detener" se para y al volver a pulsarlo sigue.
+2. Elige la carpeta de brutos y pulsa "Montaje...".
+   - Arriba eliges el proyecto; a la izquierda, sus brutos (en rojo los que
+     pasan de 2 horas).
+   - El visor enseña el fotograma del punto donde estás. La primera vez que
+     abres un bruto tarda un poco en preparar los fotogramas (1 por segundo,
+     sin sonido); se puede ir mirando mientras.
+   - Debajo, la línea de tiempo: cada bloque es un clip. Pincha o arrastra
+     para moverte; "Avance" lo pasa rápido; "Zoom +" para afinar. Las
+     flechas del teclado mueven un segundo.
+   - En la lista, marca uno o varios clips (Ctrl o Mayús) y:
+     "Quitar" (va a la papelera de la izquierda; "Recuperar" lo devuelve),
+     "Subir"/"Bajar" (cambia el orden), "Al bruto anterior"/"Al bruto
+     siguiente", o "Cortar aquí" (el bruto acaba antes de ese clip y el
+     resto se reparte de nuevo). Ctrl+Z deshace.
+   - Lo movido a mano sale en naranja y en el Excel pone "movido a mano".
+   - "Renombrar bruto..." cambia el nombre del fichero.
+   - "Volver al orden automático" deshace todo lo del proyecto.
+   - Si se repitió el análisis y hay clips nuevos, salen en rojo como "sin
+     colocar": no se exportan hasta pulsar "Colocar por fecha".
+   "Guardar" lo deja en montaje.json, en la carpeta de brutos. Lo que se ve
+   en el montaje es exactamente lo que se exporta.
+3. Pulsa "Exportar brutos (sin repetir el análisis)" (o "Guardar y
+   exportar..." en el montaje). Sale el panel de opciones con los valores
+   recomendados ya puestos:
+   - Timecode de inicio de cada bruto (00:00:00:00).
+   - Pistas de audio (las que más haya; en XDCAM salen 4 u 8) y qué pista
+     del clip va a cada una.
+   - Niveles de audio: "Sin tocar" es lo recomendado. La ganancia fija o la
+     normalización EBU R128 cambian el sonido original.
+   - Comprobaciones (MD5, ficha técnica, medidor de audio) y nombres.
+   - El espacio que hace falta y el que hay libre.
+   Si algo no vale, el botón Exportar queda gris y dice por qué. "Guardar
+   como predeterminados" las deja para la próxima vez.
+   Puede quedarse toda la noche; con "Detener" se para y al volver a
+   pulsarlo sigue.
 Con "Elegir proyectos..." antes del paso 2 o del 3 se hace solo una parte.
 
 Si hay que pararlo (por ejemplo, se acaba la jornada)
@@ -128,5 +159,5 @@ Si algo falla
 - Envía el fichero diagnostico.log que está dentro de la carpeta
   Diagnostico_<disco>_<fecha>, junto con una captura del mensaje de error.
 - Si la ventana no llega a abrirse, envía una captura de lo que aparezca.
-- Si un bruto sale marcado en rojo en el informe, no lo archives: envía el
-  informe y se revisa.
+- Si un bruto sale marcado en rojo en el informe, o su _ficha.txt dice
+  "NO CONFORME", no lo archives: envía el informe (o la ficha) y se revisa.

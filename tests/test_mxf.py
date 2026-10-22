@@ -89,6 +89,9 @@ class AcabadoProfesional(unittest.TestCase):
                         "creation_time=2026-10-22T18:43:16.000000Z", "-f", "mxf", str(con)], check=True)
         self.assertEqual(mxf_util.fecha_creacion(con), "2026-10-22 18:43:16")
 
+    def test_color_bt709_en_la_cabecera(self):
+        self.assertEqual(mxf_util.color_mpeg2(self.mxf), (1, 1, 1))
+
     def test_md5(self):
         h = mxf_util.escribir_md5(self.mxf)
         self.assertEqual(h, hashlib.md5(self.mxf.read_bytes()).hexdigest())

@@ -21,7 +21,7 @@ jobs:
           python-version: "3.12"
 
       - name: Dependencias
-        run: pip install --only-binary ":all:" pyavb openpyxl pyinstaller
+        run: pip install --only-binary ":all:" pyavb openpyxl pillow pyinstaller
 
       - name: ffmpeg 7.1.1 (build fijada de gyan.dev)
         shell: pwsh

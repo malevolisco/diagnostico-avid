@@ -18,25 +18,31 @@ Estas notas recogen lo que no está en el código: cómo probar, lo aprendido de
 |---|---|
 | `diagnostico_avid.py` | Programa principal: inventario, lectura de bins (pyavb), ffprobe de MXF, cruce bin↔MXF, miniaturas, informe HTML, ventana tkinter y CLI. Fase 1. |
 | `exportar_brutos.py` | Fase 2: brutos MXF OP1a. Por defecto un bruto por proyecto y mes (`PROYECTO_2019-09`), hasta 2 h, en orden cronológico, sin importados, piezas aparte, todo en XDCAM HD 50 1080i25 16:9; opcionalmente por días o por proyecto y tarjeta (`agrupar`) y en el formato mayoritario (`formato_salida = auto`); shotlist xlsx, hoja de contactos. Lo importa el principal. |
-| `actualizar.py` | Autoactualización del `.exe` al abrir la ventana: consulta la última release en GitHub, descarga, comprueba y un `.bat` cambia la carpeta conservando `config_*.json`. |
+| `montaje.py` | Lógica de la pantalla de montaje (quitar, mover, cortar, renombrar, deshacer; `montaje.json` en la carpeta de brutos) y fotogramas del visor (`.mjpeg` por clip en `<análisis>/visor/`). Sin tkinter. |
+| `ventana_montaje.py` | Ventana de montaje (visor con Pillow, línea de tiempo, lista de clips) y panel de opciones de exportación. |
+| `mxf_util.py` | Acabado del bruto: TC de las cabeceras GOP igual al del fichero, fecha de creación, ficha técnica XDCAM HD422 y MD5. |
+| `actualizar.py` | Actualización del `.exe` solo al pulsar "Buscar actualización": consulta la última release en GitHub, descarga, comprueba y un `.bat` cambia la carpeta conservando `config_*.json`. |
 | `config_brutos.json`, `config_origen.json` | Se crean junto al programa con valores por defecto la primera vez. No están en git. |
 | `tests/crear_disco_prueba.py` | Genera un disco Avid simulado con casos límite (bins con pyavb, MXF OP-Atom con ffmpeg, V y A compartiendo UMID como hace Avid). |
-| `tests/probar_cortes.py` | Prueba de la pantalla de cortes sin ventana: escribe un `cortes.json` y comprueba los brutos exportados con `--usar-analisis`. |
-| `tests/comprobar_resultado.py` | Comprueba un resultado contra valores fijos; sale con 1 si algo no cuadra. `--reanudado` para la segunda ejecución. |
+| `tests/probar_montaje.py` | Prueba del montaje sin ventana: escribe un `montaje.json` (cortar, reordenar, renombrar, quitar) y comprueba los brutos exportados con `--usar-analisis`. |
+| `tests/test_montaje.py` | Lógica del montaje y fotogramas del visor. |
+| `tests/test_mxf.py` | TC GOP (comparado con el que escribe ffmpeg), audio intacto, ficha técnica, fecha de creación y MD5. Necesita ffmpeg en el PATH. |
+| `tests/comprobar_resultado.py` | Comprueba un resultado contra valores fijos (también ficha conforme, MD5, TC interno y fecha de creación); sale con 1 si algo no cuadra. `--reanudado` para la segunda ejecución. |
 | `tests/test_unitarios.py` | Timecode drop-frame, reintento copia→convertir con ffmpeg simulado, reanudar, botón Detener, reparto por tarjeta/agencias/piezas, autoactualización con release falsa local. Solo stdlib. |
-| `.github/workflows/construir.yml` | En cada push a `main` (o a mano en otra rama): pruebas unitarias, ffmpeg 7.1.1 fijado, PyInstaller con `build.txt`, disco de prueba, ejecuta el `.exe` dos veces (la segunda debe reanudar) y una tercera con `agrupar = proyecto` y `formato_salida = auto`, comprueba, prueba la autoactualización con una release falsa local y, solo en `main`, publica release `build-N` con `DiagnosticoAvid_portable.zip`. El repositorio es público (la autoactualización lo necesita sin contraseña). |
+| `.github/workflows/construir.yml` | En cada push a `main` (o a mano en otra rama): pruebas unitarias, ffmpeg 7.1.1 fijado, PyInstaller con `build.txt`, disco de prueba, ejecuta el `.exe` dos veces (la segunda debe reanudar) y una tercera con `agrupar = proyecto` y `formato_salida = auto`, comprueba, prueba la actualización con una release falsa local y, solo en `main`, publica release `build-N` con `DiagnosticoAvid_portable.zip`. El repositorio es público (la actualización lo necesita sin contraseña). |
 | `construir_exe.bat`, `ejecutar.bat` | Plan B local sin GitHub. |
 | `INSTRUCCIONES.txt` | Para quien ejecuta el programa. Se copia dentro del portable. |
 | `LEEME_tecnico.md` | Cómo funciona por dentro, qué está verificado con datos reales y qué no. |
 | `docs/NOTAS_DESARROLLO.md` | Estas notas. |
 | `docs/plan_fase3.md` | Plan aprobado de la fase 3. Implementados los pasos 1-4 y 6; el paso 5 (regla APTN) espera un nombre de fichero real. |
+| `docs/diseno_montaje_exportacion.md`, `docs/plan_montaje.md` | Diseño aprobado (oct. 2026) y plan de la pantalla de montaje, el panel de opciones y el acabado profesional. |
 
 Descarga del portable: `https://github.com/malevolisco/diagnostico-avid/releases/latest/download/DiagnosticoAvid_portable.zip`
 
 ## Cómo probar en local (Linux o Windows con ffmpeg en el PATH)
 
 ```
-pip install pyavb openpyxl
+pip install pyavb openpyxl pillow
 python tests/crear_disco_prueba.py disco_prueba
 python diagnostico_avid.py --origen disco_prueba --destino salida --brutos brutos --sin-gui --no-abrir
 python tests/comprobar_resultado.py salida brutos
@@ -69,8 +75,10 @@ Debe terminar con "Análisis OK", "Brutos OK" y las pruebas unitarias en OK. Par
 - Formato real del disco de México: 94 % DV 720×480 29,97 (151 de 160 h); nada a 25 ni en XDCAM HD. Con XDCAM HD 50 hay que convertirlo todo; unir antes de convertir no ahorra trabajo. Se convierten varios clips a la vez (`clips_a_la_vez`) y se unen en orden.
 - Orden de los clips: estricto por fecha y hora del fichero (al segundo), luego timecode original, luego nombre (`orden_cronologico`).
 - Hora que manda para ordenar (Adrián, oct. 2026): la de grabación si el bin o el MXF la guardan con fecha y hora (columnas de usuario tipo "Shoot Date"/"Shoot Time"); si no, la del volcado (fecha del MXF). No verificado con bins reales: `cruce.json → fecha_grabacion` dice qué hay.
-- Cortes de los brutos (Adrián, oct. 2026): se trabaja en tres pasos (analizar; "Revisar cortes" sobre ese análisis; exportar sin repetirlo). En la pantalla se puede mover el comienzo de cada bruto a un clip anterior o posterior para no partir una entrevista; puede pasar de 2 h (sale en rojo). Se guarda en `cortes.json` de la carpeta de brutos.
+- Montaje (Adrián, oct. 2026, antes de pasarlo a Ingeniería; diseño en `docs/diseno_montaje_exportacion.md`): tres pasos (analizar; "Montaje..." sobre ese análisis; exportar sin repetirlo con el panel de opciones). En el montaje se ven los brutos con un visor de fotogramas (1/s, 480×270, sin sonido) y una línea de tiempo, y se puede quitar clips (papelera), moverlos dentro del bruto o a otro bruto del mismo proyecto (puede pasar de 2 h: sale en rojo, no se impide), cortar, renombrar y deshacer. Lo que se ve es lo que se exporta (`montaje.json`). Sustituye a "Revisar cortes" (`cortes.json` se convierte).
+- Nombres de los brutos (Adrián, oct. 2026): `PROYECTO MES DE AÑO` en mayúsculas, con el mes en letra y sin guiones; sin fecha, solo el proyecto. Editables por bruto.
+- Opciones de exportación (Adrián, oct. 2026): TC de inicio 00:00:00:00; pistas: las que más haya, redondeadas a 4 u 8 en XDCAM; audio **sin tocar** por defecto, con ganancia por pista o EBU R128 como opciones; MD5, ficha técnica y medidor de audio activados.
 - Selector de proyectos (ventana y `--proyectos`): el análisis es siempre del disco entero; los brutos, solo de los elegidos; `brutos_resultado.json` conserva los de otras veces para hacer un disco en varias sesiones.
-- La autoactualización es automática, sin preguntar, al abrir la ventana.
+- La actualización ya no es automática (Adrián, oct. 2026, para que Ingeniería revise una versión fija): solo con el botón "Buscar actualización" del `.exe`.
 - El programa nunca escribe en el disco de origen y se niega si el destino está dentro de él.
 - Clips en `Quarantined Files` se incluyen en los brutos pero marcados "incluido (cuarentena)" en el shotlist.

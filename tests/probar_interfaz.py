@@ -27,6 +27,7 @@ from tkinter import messagebox  # noqa: E402
 import diagnostico_avid as d  # noqa: E402
 import interfaz  # noqa: E402
 
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # la consola de Windows (cp1252) no tiene ☑
 DISCO, DESTINO, BRUTOS, CAPTURAS = sys.argv[1], sys.argv[2], sys.argv[3], Path(sys.argv[4])
 CAPTURAS.mkdir(parents=True, exist_ok=True)
 r = {"errores": [], "dialogos_error": [], "fallos": []}

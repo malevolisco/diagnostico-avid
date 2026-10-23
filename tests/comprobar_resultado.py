@@ -190,6 +190,16 @@ def acabado_profesional(proy, b, mxf, tc, a):
         fallo("bruto %s: sin fecha de creación (%r)" % (proy, creado))
 
 
+def ffmpeg_junto_a(ffprobe):
+    """El ffmpeg de la misma carpeta que el ffprobe (en Windows, bin/ no está en el PATH); si no, el del PATH."""
+    if ffprobe:
+        p = Path(ffprobe)
+        junto = p.with_name(p.name.lower().replace("ffprobe", "ffmpeg"))
+        if junto.exists():
+            return str(junto)
+    return shutil.which("ffmpeg") or "ffmpeg"
+
+
 def enlaces(proy, shotlist, mxf, clips, a):
     """ENLACES: los tres clips, el HDR marcado, el vertical derecho (centrado entre bandas) y el estéreo en dos pistas distintas."""
     if sorted(clips) != ["C0001", "GX010045", "OTRO DISCO"]:
@@ -205,14 +215,14 @@ def enlaces(proy, shotlist, mxf, clips, a):
         print("Fila del shotlist:", fila["GX010045"])
         fallo("shotlist %s: el GoPro HDR no sale como HLG (%r)" % (proy, fila["GX010045"].get("Color origen")))
     inicio = sum(int(x) * k for x, k in zip(fila["C0001"]["TC inicio (bruto)"].replace(";", ":").split(":"), (3600, 60, 1, 0.04)))
-    r = subprocess.run([shutil.which("ffmpeg") or "ffmpeg", "-hide_banner", "-ss", "%.2f" % (inicio + 0.3), "-t", "1.2", "-i", str(mxf),
+    r = subprocess.run([ffmpeg_junto_a(a.ffprobe), "-hide_banner", "-ss", "%.2f" % (inicio + 0.3), "-t", "1.2", "-i", str(mxf),
                         "-vf", "cropdetect=limit=24:round=2:reset=0", "-f", "null", "-"], capture_output=True, text=True)
     ancho = int(r.stderr.rsplit("crop=", 1)[1].split(":")[0]) if "crop=" in r.stderr else 0
     if not 590 <= ancho <= 630:
         fallo("bruto %s: el vídeo vertical no sale derecho y centrado (ancho de imagen %d, esperado ~608)" % (proy, ancho))
     vol = []
     for k in (0, 1):
-        r = subprocess.run([shutil.which("ffmpeg") or "ffmpeg", "-hide_banner", "-ss", "%.2f" % (inicio + 0.3), "-t", "1", "-i", str(mxf),
+        r = subprocess.run([ffmpeg_junto_a(a.ffprobe), "-hide_banner", "-ss", "%.2f" % (inicio + 0.3), "-t", "1", "-i", str(mxf),
                             "-map", "0:a:%d" % k, "-af", "astats=measure_overall=Peak_level:measure_perchannel=0", "-f", "null", "-"],
                            capture_output=True, text=True)
         vol.append(r.stderr)

@@ -301,7 +301,7 @@ class PantallaMontaje:
             tags = ("movido",) if c.get("clave") in movidos else ("audio",) if not c.get("fichero_video") else ()
             self.tv.insert("", "end", iid=str(n), tags=tags, values=(
                 n + 1, c["nombre"] + ("" if c.get("fichero_video") else "  (solo audio: no se exporta)"),
-                f.strftime("%d/%m/%Y %H:%M:%S") if f else "sin fecha", fmt_h(d), c.get("origen") or "",
+                f.strftime("%d/%m/%Y %H:%M:%S") if f else "sin fecha", fmt_h(d), c.get("origen_texto") or c.get("origen") or "",
                 "movido a mano" if c.get("clave") in movidos else "automático"))
             self.claves_tv.append(c.get("clave"))
         sel = [str(i) for i, k in enumerate(self.claves_tv) if k in mantener]
@@ -369,7 +369,7 @@ class PantallaMontaje:
         valores = {"fecha": f.strftime("%d/%m/%Y %H:%M:%S") if f else "sin fecha", "tc": c.get("timecode") or "—",
                    "dur": fmt_h(duracion_visible(c)),
                    "formato": " · ".join(str(x) for x in (c.get("codec_video"), c.get("resolucion")) if x) or "—",
-                   "audio": "%s pistas" % (c.get("num_audio") or 0), "origen": c.get("origen") or "—",
+                   "audio": "%s pistas" % (c.get("num_audio") or 0), "origen": (c.get("origen_texto") or c.get("origen") or "—") + ("\n" + c["origen_motivo"] if c.get("origen_motivo") else ""),
                    "montaje": "movido a mano" if movido else "automático"}
         self.lbl_nombre.configure(text="%d. %s" % (n + 1, c["nombre"]))
         for k, w in self.ficha.items():

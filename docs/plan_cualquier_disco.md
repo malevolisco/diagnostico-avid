@@ -61,11 +61,16 @@
 
 ### Parte 4: origen por señales y pantalla "Origen del material"
 
-- `clasificar(clip) -> (clase, motivo, seguro)` con las señales del diseño.
-- `origen.json` en la carpeta de brutos; reglas recordadas en `config_brutos.json → reglas_origen`.
-- Pestaña "Origen del material" en Montaje.
-- Shotlist con la columna Origen.
-- Ante la duda, entra marcado "para revisar".
+Se hace en dos entregas:
+
+- **4a (lógica)**:
+  - `clasificar(clip, cfg) -> (clase, motivo, seguro)` con las señales del diseño;
+  - marca de cámara o móvil de los metadatos en el análisis;
+  - `origen.json` (carpeta de brutos) y `config_brutos.json → reglas_origen` se aplican;
+  - shotlist con las columnas Origen y Por qué;
+  - ante la duda, entra marcado "para revisar";
+  - disco simulado: proyecto ORIGEN.
+- **4b (pantalla)**: pestaña "Origen del material" en Montaje, que escribe `origen.json` y, si se marca "Recordar para otros discos", `reglas_origen`.
 
 ### Parte 5: fechas imposibles
 

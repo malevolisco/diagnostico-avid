@@ -1091,7 +1091,18 @@ def matriz_entrada(pista_video):
     return "bt709" if (pv.get("alto") or 0) >= 720 else "bt601"
 
 
-def filtros_xdcam(entrelazado, nativo=False, color=None, matriz="auto"):
+def entrada_de_color(pista_video):
+    """Opciones de entrada del filtro scale para el vídeo sin etiqueta de color: la matriz (matriz_entrada) y SIEMPRE el
+    rango con ella (legal, salvo que el fichero diga "pc", como algunos móviles). Con la matriz sola, ffmpeg 7 corre los
+    colores igual que sin ella (medido en 6.1 y 7.0 contra zscale: 24,7 dB; con matriz y rango, idéntico)."""
+    matriz = matriz_entrada(pista_video)
+    if matriz == "auto":
+        return ""
+    rango = "pc" if (pista_video or {}).get("color_rango") in ("pc", "jpeg", "full") else "tv"
+    return ":in_color_matrix=%s:in_range=%s" % (matriz, rango)
+
+
+def filtros_xdcam(entrelazado, nativo=False, color=None, entrada=""):
     """A 1920x1080 25i 16:9 desde cualquier origen: desentrelaza a campos (59,94 o 50 imágenes/s), pasa a 50,
     encaja sin deformar según la relación de aspecto de pantalla (el SD 4:3 queda 1440x1080 con bandas negras),
     convierte el color de SD (BT.601) a HD (BT.709) y vuelve a entrelazar, primero el campo superior.
@@ -1106,7 +1117,7 @@ def filtros_xdcam(entrelazado, nativo=False, color=None, matriz="auto"):
         f.append(filtro_color(color))
     f += ["fps=50",
           "scale=w='trunc(min(1920,1080*dar)/2)*2':h='trunc(min(1080,1920/dar)/2)*2':flags=lanczos:out_color_matrix=bt709:out_range=tv"
-          + (":in_color_matrix=%s" % matriz if matriz != "auto" and not color else ""),
+          + ("" if color else entrada),
           "pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black", "setsar=1", "interlace=scan=tff:lowpass=linear", "setfield=tff", COLOR_BT709]
     return f
 
@@ -1119,7 +1130,7 @@ def args_video(plan, mxf_video, cfg, convertir_color=True):
     if plan["destino"].get("xdcam"):
         entrelazado = (pv.get("field_order") or "progressive") not in ("progressive", "unknown", None)
         color = color_de(pv) if convertir_color else None
-        return ["-vf", ",".join(filtros_xdcam(entrelazado, es_1080i25(pv), color, matriz_entrada(pv))),
+        return ["-vf", ",".join(filtros_xdcam(entrelazado, es_1080i25(pv), color, entrada_de_color(pv))),
                 "-c:v", "mpeg2video", "-pix_fmt", "yuv422p", "-profile:v", "0", "-level:v", "2",
                 "-b:v", "50M", "-minrate", "50M", "-maxrate", "50M", "-bufsize", "17825792", "-rc_init_occupancy", "17825792",
                 "-g", "12", "-bf", "2", "-flags", "+ilme+ildct", "-top", "1", "-dc", "10", "-intra_vlc", "1", "-non_linear_quant", "1",
@@ -1137,9 +1148,8 @@ def args_video(plan, mxf_video, cfg, convertir_color=True):
     if color:  # HDR o BT.2020: a BT.709, como en XDCAM
         filtros.append(filtro_color(color))
     w, h = int(d["ancho"]), int(d["alto"])  # encajado sin deformar (un vertical de móvil, un 4:3), como en XDCAM
-    matriz = matriz_entrada(pv)
     filtros += ["scale=w='trunc(min(%d,%d*dar)/2)*2':h='trunc(min(%d,%d/dar)/2)*2':flags=lanczos:out_color_matrix=%s%s"
-                % (w, h, h, w, "bt709" if h >= 720 else "bt601", ":in_color_matrix=%s" % matriz if matriz != "auto" and not color else ""),
+                % (w, h, h, w, "bt709" if h >= 720 else "bt601", "" if color else entrada_de_color(pv)),
                 "pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black" % (w, h), "fps=%s" % d["fps_txt"], "setsar=1"]
     args = ["-vf", ",".join(filtros)]
     if cv["codec"] == "mpeg2video":

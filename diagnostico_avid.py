@@ -710,6 +710,7 @@ def resumir_mxf(datos):
             "color_primarias": s.get("color_primaries"),
             "color_transfer": s.get("color_transfer"),
             "color_matriz": s.get("color_space"),
+            "color_rango": s.get("color_range"),
             "rotacion": next((int(d["rotation"]) for d in s.get("side_data_list") or [] if "rotation" in d), None)
                         or (int(st["rotate"]) if str(st.get("rotate") or "").lstrip("-").isdigit() else None),
             "muestreo": s.get("sample_rate"),

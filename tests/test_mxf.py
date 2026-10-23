@@ -148,7 +148,7 @@ class AudioPorCanales(unittest.TestCase):
         d = json.loads(r.stdout)
         pistas = [{"tipo": s["codec_type"], "canales": s.get("channels"), "ancho": s.get("width"), "alto": s.get("height"),
                    "fps": s.get("r_frame_rate"), "field_order": s.get("field_order"), "color_primarias": s.get("color_primaries"),
-                   "color_transfer": s.get("color_transfer"), "color_matriz": s.get("color_space"),
+                   "color_transfer": s.get("color_transfer"), "color_matriz": s.get("color_space"), "color_rango": s.get("color_range"),
                    "duracion": float(s["duration"]) if s.get("duration") else None} for s in d["streams"]]
         return {"ruta": nombre, "pistas": pistas, "duracion": float(d["format"]["duration"])}
 
@@ -234,7 +234,10 @@ class VideoDeCualquierOrigen(AudioPorCanales):
         self.assertAlmostEqual(self.ancho_de_imagen(seg), 608, delta=8)  # 1080 de alto x 9/16: vertical, centrado entre bandas
 
     def psnr(self, a, b):
-        r = subprocess.run([FFMPEG, "-hide_banner", "-i", str(a), "-i", str(b), "-lavfi", "[0:v]format=yuv422p[x];[1:v]format=yuv422p[y];[x][y]psnr",
+        """PSNR del bruto `a` frente a la referencia `b`, que siempre es BT.709 sin etiquetar. Se etiqueta aquí: si no, ffmpeg 7
+        la toma por BT.601 al compararla con el bruto (que sí va etiquetado) y la convierte, y sale ~24 dB aunque sean iguales."""
+        ref = "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv,format=yuv422p"
+        r = subprocess.run([FFMPEG, "-hide_banner", "-i", str(a), "-i", str(b), "-lavfi", "[0:v]format=yuv422p[x];[1:v]%s[y];[x][y]psnr" % ref,
                             "-f", "null", "-"], capture_output=True, text=True)
         return float(r.stderr.split("average:")[1].split()[0])
 
@@ -249,16 +252,16 @@ class VideoDeCualquierOrigen(AudioPorCanales):
         return self.psnr(seg, self.tmp / "ref.mkv"), info
 
     # Umbrales medidos (oct. 2026): sin convertir el HDR sale ~14-15 dB frente a la original y con el mapeo de tonos hable
-    # ~16; con la conversión, ~30 en Linux (ffmpeg 6.1) y ~24 en Windows (ffmpeg 7.1.1, otra versión de zimg y x265).
+    # ~16; con la conversión, ~30 con ffmpeg 6.1 y 7.0 (los ~24 que salían en Windows eran de la comparación, no del bruto).
     def test_hdr_hlg_se_pasa_a_bt709(self):
         psnr, info = self.hdr("arib-std-b67", "hlg.mov", 100)
         self.assertEqual(info["color"], "HLG")
-        self.assertGreater(psnr, 21, "PSNR %.1f dB" % psnr)
+        self.assertGreater(psnr, 27, "PSNR %.1f dB" % psnr)
 
     def test_hdr_pq_se_pasa_a_bt709(self):
         psnr, info = self.hdr("smpte2084", "pq.mov", 203)
         self.assertEqual(info["color"], "PQ")
-        self.assertGreater(psnr, 21, "PSNR %.1f dB" % psnr)
+        self.assertGreater(psnr, 27, "PSNR %.1f dB" % psnr)
 
     def test_hd_sin_etiqueta_de_color_no_cambia_de_color(self):
         """HD sin la matriz de color en el fichero: es BT.709 (ffmpeg suponía BT.601 y corría los colores: 24,7 dB)."""

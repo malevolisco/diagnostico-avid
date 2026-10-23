@@ -356,7 +356,18 @@ def sacar_fotogramas(ffmpeg, ruta_video, carpeta_visor, clave, timeout=1800):
             return salida
         LOG.warning("Visor: ffmpeg falló con %s: %s", ruta_video, r.stderr.decode("utf-8", "replace")[-300:])
         return None
-    tmp.replace(salida)
+    if salida.exists() and salida.stat().st_size > 0:  # otro lo terminó antes: vale el suyo
+        tmp.unlink(missing_ok=True)
+        return salida
+    try:
+        tmp.replace(salida)
+    except OSError as e:
+        # Windows no deja sustituir un fichero que otro acaba de escribir o está leyendo ("Access is denied")
+        tmp.unlink(missing_ok=True)
+        if salida.exists() and salida.stat().st_size > 0:
+            return salida
+        LOG.warning("Visor: no se pudo guardar %s (%s)", salida, e)
+        return None
     return salida
 
 

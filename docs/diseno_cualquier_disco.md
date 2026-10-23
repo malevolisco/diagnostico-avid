@@ -2,6 +2,16 @@
 
 Pedido por Adrián el 23/10/2026: "no quiero que me los hagas exactamente hechos para esos discos… necesito que me los hagas para cualquier disco que venga, con cualquier casuística".
 
+## Cómo quedó (23/10/2026)
+
+Hecho entero en seis partes (estado y PR de cada una en `docs/plan_cualquier_disco.md`). Diferencias con lo que dice este diseño, y por qué:
+
+- **HDR**: se pasa a BT.709 con `zscale` de forma directa, sin `tonemap`. Medido con una imagen de prueba: ~30 dB de PSNR frente a la original, cuando con el mapeo de tonos clásico salía ~16 dB y sin convertir ~14 dB.
+- **Velocidad variable**: no hizo falta `aresample=async`. Con `fps=50` y el audio ajustado a la duración del vídeo (`apad` + `-t`), las pruebas con ffmpeg real ya salían en sincronía.
+- **Disco de Mac**: se avisa cuando la media enlazada tiene rutas de Mac (`/Volumes/…`, `Macintosh HD:…`) y no está en el disco. No se intenta leer HFS+/APFS.
+- **OMF**: se cuenta y, clip a clip, los clips de bin con un `.omf` de su nombre salen offline marcados "media en OMF".
+- **Origen**: un fichero importado sin ninguna pista se marca dudoso y entra en el bruto. En el disco de México, eso son unos 1.000 clips de "Mis vídeos" y los del Escritorio y discos externos, que antes se quedaban fuera. La pestaña "Origen del material" sirve para decidirlos por carpeta.
+
 ## Objetivo
 
 Que el programa trate bien un disco de Avid que nadie ha visto antes, sin tener que añadirle reglas para cada corresponsalía. Hoy acierta con lo que conoce (México, el simulado, China), pero:

@@ -69,6 +69,12 @@ Debe terminar con "Análisis OK", "Brutos OK" y las pruebas unitarias en OK. Par
 - Nombres de fichero: Windows no admite `:` (el disco simulado lo tenía en un render "Title: 1" y en Windows ese clip no se creaba). El nombre del clip va en `material_package_name`, no en el nombre de fichero.
 - ffmpeg: `mxf_opatom` sirve para generar fixtures; el muxer `mxf` (OP1a) admite `-c copy` de DNxHD, MPEG-2, DV, ProRes, H.264. Con el demuxer `concat` hay que usar `-map 0` o pierde pistas de audio, y la lista debe llevar rutas absolutas.
 - pyavb necesita Python ≤ 3.13 con wheel universal: instalar siempre con `--only-binary :all:` (el sdist exige Cython 0.29, que no compila en 3.13).
+- ffmpeg 7 (el de Windows es 7.1.1) y el color (oct. 2026):
+  - toma un vídeo sin etiqueta de color por BT.601. Al convertir HD sin etiqueta hay que darle matriz **y** rango de entrada (`entrada_de_color`);
+  - al comparar dos vídeos con `psnr`, convierte el que no lleva etiqueta: las pruebas etiquetan la referencia, o salen ~24 dB aunque sean iguales;
+  - al generar con `libx265`, las opciones `-color_primaries/-color_trc` solas pueden no llegar al fichero: el disco simulado pone las etiquetas también en las imágenes (`setparams`) y en `x265-params`.
+- Windows no deja sustituir (`os.replace`) un fichero que otro proceso acaba de escribir o está leyendo ("Access is denied"). Lo que escriban varios hilos a la vez va a un temporal propio, y si el destino ya existe se usa ese (fotogramas del visor, `montaje.sacar_fotogramas`).
+- Las pruebas de Windows (`construir.yml`) solo tienen ffmpeg en `bin/`, no en el PATH: los scripts de prueba lo buscan junto al ffprobe que reciben.
 
 ## Decisiones ya tomadas (no reabrir sin motivo)
 

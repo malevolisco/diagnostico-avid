@@ -154,6 +154,7 @@ Se crea con valores por defecto al primer uso. Claves: `formato_salida` (`xdcam_
   - El fichero se busca por nombre. Si hay varios con el mismo nombre (C0001.MP4 de dos tarjetas), gana el que comparte más carpetas por el final de la ruta, así que da igual la letra de unidad, que venga de un Mac o que se haya movido la carpeta. Si no se puede saber cuál es, no se adivina.
   - En el bruto, el clip lleva el nombre del bin.
   - Solo se analizan los ficheros enlazados por algún bin: las copias de tarjetas que hay sueltas en el disco no se duplican.
+- **Media OMF** (`marcar_offline_en_omf`). ffmpeg no lee la media OMF de los Avid antiguos (`OMFI MediaFiles`): no se analiza ni se exporta. Sus clips de bin salen como offline; los que tienen un `.omf` que se llama como el clip (`<clip>V01.<id>.omf`, `RE_OMF`) se marcan "media en OMF" en el informe y en `cruce.json` (`offline_detalle[].omf`, `offline_en_omf`). Disco simulado: "VIEJO OMF" en ORIGEN.
 - **Más carpetas de media** (`carpetas_media`, `--media-extra "A;B"`, "Más media" en la página Disco). Se inventarían con rutas completas (`Path(origen) / ruta` vale igual). Así un clip cuya media de Avid está en otro disco se encuentra por su UMID como siempre.
 - **Avisos**:
   - clips enlazados encontrados;

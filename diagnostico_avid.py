@@ -1148,6 +1148,26 @@ def casos_de_video(mxf):
     return dict(cuenta)
 
 
+# Avid nombra la media OMF como la MXF: <clip>V01.<id>.omf, <clip>A01.<id>.omf
+RE_OMF = re.compile(r"^(.*?)[VA]\d{2}\.[^.]+\.omf$", re.IGNORECASE)
+
+
+def marcar_offline_en_omf(cruce, ficheros):
+    """ffmpeg no lee la media OMF (Avid antiguo): sus clips de bin salen como offline. Marca los que tienen media OMF en
+    el disco (por el nombre del fichero, que empieza por el del clip) para que el informe lo diga clip a clip.
+    Devuelve cuántos."""
+    normal = lambda t: " ".join(str(t or "").lower().split())
+    en_omf = {normal(m.group(1)) for f in ficheros if f["ext"] == ".omf" for m in [RE_OMF.match(f["nombre"])] if m}
+    n = 0
+    for p in cruce.get("por_proyecto", []):
+        for o in p.get("offline_detalle", []):
+            if normal(o["nombre"]) in en_omf:
+                o["omf"] = True
+                n += 1
+    cruce["offline_en_omf"] = n
+    return n
+
+
 def construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmpeg_ok):
     bytes_total = sum(f["bytes"] for f in ficheros)
     bytes_media = sum(f["bytes"] for f in ficheros if f["ext"] in EXT_MEDIA)
@@ -1178,7 +1198,10 @@ def construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmp
         avisos.append(("aviso", "%d MXF en carpetas 'Creating': capturas o importaciones interrumpidas." % len(creating)))
     omf = sum(1 for f in ficheros if f["ext"] == ".omf")
     if omf:
-        avisos.append(("info", "%d ficheros OMF (media de Avid antigua). No se analizan en esta fase." % omf))
+        n = cruce.get("offline_en_omf") or 0
+        avisos.append(("aviso", "%d ficheros OMF (media de Avid antigua): ffmpeg no la lee, así que no se pueden exportar con este "
+                       "programa%s." % (omf, "; %d clips de bin tienen su media en OMF y salen como offline, marcados \"media en OMF\""
+                                        % n if n else "")))
     if cruce["huerfanos"]:
         avisos.append(("aviso", "%d clips físicos no aparecen en ningún bin (huérfanos, %.2f GB). Pueden ser de bins borrados o de otro disco."
                        % (len(cruce["huerfanos"]), gb(sum(h["bytes"] for h in cruce["huerfanos"])))))
@@ -1393,7 +1416,7 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
             for o in od[:200]:
                 fo = o.get("fichero_origen") or ""
                 h.append("<tr><td>%s</td><td>%s</td><td class='n'>%s</td><td>%s</td><td>%s</td><td title='%s'>%s</td></tr>"
-                         % (esc(o["nombre"]), esc(o["bin"]), fmt_duracion(o["segundos"]), esc(o.get("origen") or ""), esc(", ".join(o["volumenes"]) or "—"), esc(fo), esc(fo.replace("\\", "/").rsplit("/", 1)[-1])))
+                         % (esc(o["nombre"]) + (" <span class='tag'>media en OMF</span>" if o.get("omf") else ""), esc(o["bin"]), fmt_duracion(o["segundos"]), esc(o.get("origen") or ""), esc(", ".join(o["volumenes"]) or "—"), esc(fo), esc(fo.replace("\\", "/").rsplit("/", 1)[-1])))
             if p["clips_offline"] > len(od):
                 h.append("<tr><td colspan='6' class='muted'>… y %d más (ver cruce.json)</td></tr>" % (p["clips_offline"] - len(od)))
             h.append("</table></details>")
@@ -1534,6 +1557,7 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
         else:
             progreso("5/6 Miniaturas omitidas.")
         guardar_json(destino, "clips.json", clips)
+        marcar_offline_en_omf(cruce, ficheros)
         guardar_json(destino, "cruce.json", cruce)
 
         resultados_brutos = None

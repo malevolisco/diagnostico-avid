@@ -47,7 +47,8 @@ def main():
     # offline: CLIP OFFLINE + los 2 "APROX B" ambiguos. clips_fisicos: 9 + 2 NTSC + 3 APROX + agencia + pieza
     # + importado + render sin bin + 4 de China. huerfanos: HUERFANO, SOLOAUDIO, CUARENTENA y los 2 "APROX B" (el render no cuenta).
     # China: 2 bins, uno en una ruta de más de 260 caracteres (en Windows hay que leerlo con \\?\).
-    esperado = {"proyectos": 5, "bins": 8, "bins_ilegibles": 1, "offline": 3, "renders_en_bins": 1, "clips_compartidos": 1, "clips_fisicos": 22,
+    # ENLACES: 2 ficheros enlazados (AMA) fuera de Avid MediaFiles y 1 clip con la media en otra carpeta (--media-extra).
+    esperado = {"proyectos": 6, "bins": 9, "bins_ilegibles": 1, "offline": 3, "renders_en_bins": 1, "clips_compartidos": 1, "clips_fisicos": 25,
                 "huerfanos": 5}
     for k, v in esperado.items():
         if r.get(k) != v:
@@ -55,6 +56,8 @@ def main():
     modos = r.get("modo_coincidencia") or {}
     if not modos.get("le"):
         fallo("el cruce bin<->MXF por identificador no ha coincidido con nada: %r" % modos)
+    if modos.get("enlace") != 2:
+        fallo("media enlazada (AMA): %r clips enlazados encontrados, esperados 2" % modos.get("enlace"))
     if modos.get("nombre_duracion") != 1:
         fallo("cruce aproximado: nombre_duracion = %r, esperado 1" % modos.get("nombre_duracion"))
     cruce = json.loads((carpeta / "cruce.json").read_text(encoding="utf-8"))
@@ -93,6 +96,8 @@ def main():
         # el vídeo del bin de agencias, fuera.
         esperado_brutos = {"15 SEPT CENTROAMERICA SEPTIEMBRE DE 2021": ("convertir", 3, 7.0),
                            "20260916_CHINA 北京 SEPTIEMBRE DE 2021": ("convertir", 3, 6.0),
+                           # ENLACES: vertical de móvil con estéreo y HDR HLG enlazados (AMA) y el clip del otro disco
+                           "ENLACES SEPTIEMBRE DE 2021": ("convertir", 3, 6.0),
                            "ABORTO SEPTIEMBRE DE 2021": ("convertir", 2, 4.0), "APROX SEPTIEMBRE DE 2021": ("convertir", 1, 2.0),
                            "NTSC SEPTIEMBRE DE 2021": ("convertir", 2, 4.0), "SIN PROYECTO SEPTIEMBRE DE 2021": ("convertir", 4, 7.0)}
     else:
@@ -107,6 +112,9 @@ def main():
                            # la entrevista, de la tarjeta J: (XDROOT). DNxHD 1080i50 igual en todo: copia sin recomprimir.
                            "20260916_China 北京_T01_2021-09-15": ("copia", 2, 4.0), "20260916_China 北京_T02_2021-09-15": ("copia", 1, 2.0),
                            "20260916_China 北京_AGENCIAS": ("copia", 1, 2.0),
+                           # ENLACES: el del otro disco (DNxHD, se copia) es una tanda sin carpeta de tarjeta; el móvil y la GoPro
+                           # comparten carpeta de tarjeta (E:\RODAJE) y se convierten (formatos distintos)
+                           "ENLACES_T01_2021-09-15": ("copia", 1, 2.0), "ENLACES_T02_2021-09-15": ("convertir", 2, 4.0),
                            "ABORTO_T01_2021-09-15": ("convertir", 2, 4.0), "APROX_T01_2021-09-15": ("copia", 1, 2.0),
                            "NTSC_T01_2021-09-15": ("copia", 1, 2.0), "NTSC_T02_2021-09-15": ("copia", 1, 2.0),
                            "SIN_PROYECTO_T01_2021-09-15": ("copia", 4, 7.0)}
@@ -152,6 +160,8 @@ def main():
                 fallo("shotlist %s: lleva importados o agencias (%s)" % (proy, clips))
             if "CHINA" in proy and sorted(clips) != ["C0380", "DJI_0012", "entrevista 北京"]:
                 fallo("shotlist %s: clips %s, esperados la entrevista, el dron y la A7" % (proy, clips))
+            if proy.startswith("ENLACES"):
+                enlaces(proy, Path(a.brutos) / b["shotlist"], mxf, clips, a)
         sep = ";" if proy.startswith("NTSC") and a.agrupar == "proyecto" else ":"
         if not tcs or any(len(t) != 11 or t[8] != sep for t in tcs):
             fallo("shotlist %s: timecodes %r, esperado '%s' antes de los frames" % (proy, tcs, sep))
@@ -178,6 +188,46 @@ def acabado_profesional(proy, b, mxf, tc, a):
     creado = mxf_util.fecha_creacion(mxf) or ""
     if not creado.startswith("20"):
         fallo("bruto %s: sin fecha de creación (%r)" % (proy, creado))
+
+
+def ffmpeg_junto_a(ffprobe):
+    """El ffmpeg de la misma carpeta que el ffprobe (en Windows, bin/ no está en el PATH); si no, el del PATH."""
+    if ffprobe:
+        p = Path(ffprobe)
+        junto = p.with_name(p.name.lower().replace("ffprobe", "ffmpeg"))
+        if junto.exists():
+            return str(junto)
+    return shutil.which("ffmpeg") or "ffmpeg"
+
+
+def enlaces(proy, shotlist, mxf, clips, a):
+    """ENLACES: los tres clips, el HDR marcado, el vertical derecho (centrado entre bandas) y el estéreo en dos pistas distintas."""
+    if sorted(clips) != ["C0001", "GX010045", "OTRO DISCO"]:
+        fallo("shotlist %s: clips %s, esperados los dos enlazados y el del otro disco" % (proy, clips))
+    from openpyxl import load_workbook
+    filas = list(load_workbook(shotlist, read_only=True).active.iter_rows(values_only=True))
+    cab = filas[0]
+    fila = {f[cab.index("Clip")]: dict(zip(cab, f)) for f in filas[1:]}
+    if fila["GX010045"].get("Color origen") != "HLG":
+        carpeta = sorted(c for c in glob.glob(str(Path(a.informe) / "Diagnostico_*")) if Path(c).is_dir())[-1]
+        leido = [m for m in json.loads((Path(carpeta) / "mxf.json").read_text(encoding="utf-8")) if "GX010045" in m["ruta"]]
+        print("Lo que leyó el análisis del GoPro:", json.dumps(leido, ensure_ascii=False))
+        print("Fila del shotlist:", fila["GX010045"])
+        fallo("shotlist %s: el GoPro HDR no sale como HLG (%r)" % (proy, fila["GX010045"].get("Color origen")))
+    inicio = sum(int(x) * k for x, k in zip(fila["C0001"]["TC inicio (bruto)"].replace(";", ":").split(":"), (3600, 60, 1, 0.04)))
+    r = subprocess.run([ffmpeg_junto_a(a.ffprobe), "-hide_banner", "-ss", "%.2f" % (inicio + 0.3), "-t", "1.2", "-i", str(mxf),
+                        "-vf", "cropdetect=limit=24:round=2:reset=0", "-f", "null", "-"], capture_output=True, text=True)
+    ancho = int(r.stderr.rsplit("crop=", 1)[1].split(":")[0]) if "crop=" in r.stderr else 0
+    if not 590 <= ancho <= 630:
+        fallo("bruto %s: el vídeo vertical no sale derecho y centrado (ancho de imagen %d, esperado ~608)" % (proy, ancho))
+    vol = []
+    for k in (0, 1):
+        r = subprocess.run([ffmpeg_junto_a(a.ffprobe), "-hide_banner", "-ss", "%.2f" % (inicio + 0.3), "-t", "1", "-i", str(mxf),
+                            "-map", "0:a:%d" % k, "-af", "astats=measure_overall=Peak_level:measure_perchannel=0", "-f", "null", "-"],
+                           capture_output=True, text=True)
+        vol.append(r.stderr)
+    if "Peak level dB: -inf" not in vol[0] or "Peak level dB: -inf" in vol[1]:
+        fallo("bruto %s: el estéreo del móvil (izquierdo mudo, derecho con tono) no sale como pista 1 muda y pista 2 con sonido" % proy)
 
 
 def tc_shotlist(ruta):

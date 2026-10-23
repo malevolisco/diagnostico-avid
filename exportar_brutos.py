@@ -1030,28 +1030,107 @@ def es_1080i25(pista_video):
     return (pv.get("ancho"), pv.get("alto")) == (1920, 1080) and abs(fps_num(pv.get("fps")) - 25) < 0.01 and pv.get("field_order") == "tt"
 
 
-def filtros_xdcam(entrelazado, nativo=False):
+TRANSFER_HDR = {"arib-std-b67": "HLG", "smpte2084": "PQ"}
+_FILTROS = {}  # ffmpeg -> nombres de los filtros que trae (se mira una vez)
+
+
+def tiene_filtro(ffmpeg, nombre):
+    """¿Trae este ffmpeg el filtro? (zscale depende de cómo se compiló)."""
+    if ffmpeg not in _FILTROS:
+        try:
+            r = subprocess.run([ffmpeg, "-hide_banner", "-filters"], capture_output=True, timeout=30, **flags_subproceso())
+            _FILTROS[ffmpeg] = {linea.split()[1] for linea in r.stdout.decode("utf-8", "replace").splitlines() if len(linea.split()) > 2}
+        except Exception:
+            _FILTROS[ffmpeg] = set()
+    return nombre in _FILTROS[ffmpeg]
+
+
+def color_de(pista_video):
+    """'HLG', 'PQ', 'BT.2020' (gama amplia sin HDR) o None (BT.709 / SD / sin datos)."""
+    pv = pista_video or {}
+    if pv.get("color_transfer") in TRANSFER_HDR:
+        return TRANSFER_HDR[pv["color_transfer"]]
+    return "BT.2020" if str(pv.get("color_primarias") or "").startswith("bt2020") else None
+
+
+def filtro_color(color):
+    """Conversión directa a BT.709 (zscale) del HDR y la gama amplia. Medido con una imagen de prueba pasada a HLG y a PQ y
+    vuelta (oct. 2026): ~30 dB de PSNR frente a la original, cuando sin convertir sale ~14 dB (colores lavados o
+    apagados) y con el mapeo de tonos clásico (hable) ~16 dB. HLG se diseñó para verse bien en una tele normal y se convierte
+    tal cual; en PQ el blanco de referencia (203 nits, ITU-R BT.2408) pasa a ser el blanco: solo se recortan los brillos
+    por encima de él (reflejos, sol)."""
+    return "zscale=t=bt709:p=bt709:m=bt709:r=tv" + (":npl=203" if color == "PQ" else "") + ",format=yuv422p10le"
+
+
+def detectar_campos(ffmpeg, ruta, segundos=8):
+    """Si el fichero no dice si es entrelazado (field_order desconocido), lo mira ffmpeg con idet en los primeros
+    segundos: 'tt', 'bb' o 'progressive'."""
+    cmd = [ffmpeg, "-hide_banner", "-nostats", "-t", str(segundos), "-i", str(ruta), "-map", "0:v:0", "-vf", "idet", "-f", "null", "-"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=300, **flags_subproceso())
+        texto = r.stderr.decode("utf-8", "replace")
+        # ffmpeg escribe dos resúmenes y el primero sale siempre a cero: vale el último
+        m = re.findall(r"Multi frame detection:\s*TFF:\s*(\d+)\s*BFF:\s*(\d+)\s*Progressive:\s*(\d+)", texto)
+    except Exception:
+        m = None
+    if not m:
+        return "progressive"
+    tff, bff, prog = (int(x) for x in m[-1])
+    if max(tff, bff) <= prog:
+        return "progressive"
+    return "tt" if tff >= bff else "bb"
+
+
+def matriz_entrada(pista_video):
+    """Matriz de color con la que leer el vídeo: la que diga el fichero; si no dice nada, la de su norma (HD, desde 720
+    líneas: BT.709; SD: BT.601). Sin esto ffmpeg supone BT.601 y el HD sin etiqueta salía con los colores algo
+    corridos (medido: 24,7 dB de PSNR frente al original; con BT.709, idéntico)."""
+    pv = pista_video or {}
+    if pv.get("color_matriz") and pv["color_matriz"] not in ("unknown", "reserved"):
+        return "auto"
+    return "bt709" if (pv.get("alto") or 0) >= 720 else "bt601"
+
+
+def entrada_de_color(pista_video):
+    """Opciones de entrada del filtro scale para el vídeo sin etiqueta de color: la matriz (matriz_entrada) y SIEMPRE el
+    rango con ella (legal, salvo que el fichero diga "pc", como algunos móviles). Con la matriz sola, ffmpeg 7 corre los
+    colores igual que sin ella (medido en 6.1 y 7.0 contra zscale: 24,7 dB; con matriz y rango, idéntico)."""
+    matriz = matriz_entrada(pista_video)
+    if matriz == "auto":
+        return ""
+    rango = "pc" if (pista_video or {}).get("color_rango") in ("pc", "jpeg", "full") else "tv"
+    return ":in_color_matrix=%s:in_range=%s" % (matriz, rango)
+
+
+def filtros_xdcam(entrelazado, nativo=False, color=None, entrada=""):
     """A 1920x1080 25i 16:9 desde cualquier origen: desentrelaza a campos (59,94 o 50 imágenes/s), pasa a 50,
     encaja sin deformar según la relación de aspecto de pantalla (el SD 4:3 queda 1440x1080 con bandas negras),
     convierte el color de SD (BT.601) a HD (BT.709) y vuelve a entrelazar, primero el campo superior.
     nativo: el origen ya es 1080i25 con el campo superior primero (es_1080i25): solo se recodifica, sin tocar los
-    campos (más rápido y sin la pérdida de separar y volver a juntar)."""
-    if nativo:
+    campos (más rápido y sin la pérdida de separar y volver a juntar).
+    color: 'HLG', 'PQ' o 'BT.2020' (color_de) para pasarlo a BT.709 con filtro_color; None si ya es BT.709 o SD. El giro de
+    los vídeos de móvil (rotación en los metadatos) lo aplica ffmpeg solo al leerlos: el vertical sale derecho y con bandas."""
+    if nativo and not color:
         return ["setfield=tff", "setsar=1", COLOR_BT709]
     f = ["bwdif=mode=send_field:deint=all"] if entrelazado else []
+    if color:
+        f.append(filtro_color(color))
     f += ["fps=50",
-          "scale=w='trunc(min(1920,1080*dar)/2)*2':h='trunc(min(1080,1920/dar)/2)*2':flags=lanczos:out_color_matrix=bt709:out_range=tv",
+          "scale=w='trunc(min(1920,1080*dar)/2)*2':h='trunc(min(1080,1920/dar)/2)*2':flags=lanczos:out_color_matrix=bt709:out_range=tv"
+          + ("" if color else entrada),
           "pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black", "setsar=1", "interlace=scan=tff:lowpass=linear", "setfield=tff", COLOR_BT709]
     return f
 
 
-def args_video(plan, mxf_video, cfg):
+def args_video(plan, mxf_video, cfg, convertir_color=True):
+    """convertir_color=False si el ffmpeg no trae zscale: el HDR se convierte sin ese paso (y el clip lleva aviso)."""
     if plan["modo"] == "copia":
         return ["-c:v", "copy"]
     pv = next((p for p in mxf_video.get("pistas", []) if p["tipo"] == "video"), {})
     if plan["destino"].get("xdcam"):
         entrelazado = (pv.get("field_order") or "progressive") not in ("progressive", "unknown", None)
-        return ["-vf", ",".join(filtros_xdcam(entrelazado, es_1080i25(pv))),
+        color = color_de(pv) if convertir_color else None
+        return ["-vf", ",".join(filtros_xdcam(entrelazado, es_1080i25(pv), color, entrada_de_color(pv))),
                 "-c:v", "mpeg2video", "-pix_fmt", "yuv422p", "-profile:v", "0", "-level:v", "2",
                 "-b:v", "50M", "-minrate", "50M", "-maxrate", "50M", "-bufsize", "17825792", "-rc_init_occupancy", "17825792",
                 "-g", "12", "-bf", "2", "-flags", "+ilme+ildct", "-top", "1", "-dc", "10", "-intra_vlc", "1", "-non_linear_quant", "1",
@@ -1065,7 +1144,13 @@ def args_video(plan, mxf_video, cfg):
     reescala = (pv.get("ancho"), pv.get("alto")) != (d["ancho"], d["alto"])
     if des == "si" or (des == "auto" and entrelazado and reescala):
         filtros.append("bwdif=mode=0")
-    filtros += ["scale=%d:%d:flags=lanczos" % (d["ancho"], d["alto"]), "fps=%s" % d["fps_txt"], "setsar=1"]
+    color = color_de(pv) if convertir_color else None
+    if color:  # HDR o BT.2020: a BT.709, como en XDCAM
+        filtros.append(filtro_color(color))
+    w, h = int(d["ancho"]), int(d["alto"])  # encajado sin deformar (un vertical de móvil, un 4:3), como en XDCAM
+    filtros += ["scale=w='trunc(min(%d,%d*dar)/2)*2':h='trunc(min(%d,%d/dar)/2)*2':flags=lanczos:out_color_matrix=%s%s"
+                % (w, h, h, w, "bt709" if h >= 720 else "bt601", "" if color else entrada_de_color(pv)),
+                "pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black" % (w, h), "fps=%s" % d["fps_txt"], "setsar=1"]
     args = ["-vf", ",".join(filtros)]
     if cv["codec"] == "mpeg2video":
         br = str(cv["bitrate"])
@@ -1156,7 +1241,20 @@ def hacer_segmento(clip, idx, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, nomb
     if grafo:
         cmd += ["-filter_complex", ";".join(grafo)]
     cmd += ["-map", "0:v:0"] + sum((["-map", "[a%d]" % k] for k in range(len(fuentes))), [])
-    cmd += args_video(plan, mxf_por_ruta.get(clip["fichero_video"], {}), cfg)
+    m_video = mxf_por_ruta.get(clip["fichero_video"], {})
+    pv = next((x for x in m_video.get("pistas", []) if x.get("tipo") == "video"), {})
+    convertir_color = True
+    if plan["modo"] != "copia" and plan["destino"].get("xdcam"):
+        if pv.get("field_order") in (None, "unknown"):  # el fichero no lo dice: se mira la imagen
+            pv = dict(pv, field_order=detectar_campos(ffmpeg, video))
+            m_video = dict(m_video, pistas=[pv] + [x for x in m_video.get("pistas", []) if x.get("tipo") != "video"])
+            info["campos"] = pv["field_order"]
+        if color_de(pv):
+            convertir_color = tiene_filtro(ffmpeg, "zscale")
+            info["color"] = color_de(pv)
+            if not convertir_color:
+                info["aviso_video"] = "%s sin ajustar a BT.709 (este ffmpeg no trae zscale)" % color_de(pv)
+    cmd += args_video(plan, m_video, cfg, convertir_color)
     if n:
         cmd += ["-c:a", "pcm_s24le", "-ar", "48000", "-ac", "1"]
     dur = duracion_video(clip, mxf_por_ruta)
@@ -1202,6 +1300,7 @@ COLUMNAS_SHOTLIST = [  # (cabecera, clave de la fila, ancho)
     ("Duración", "duracion", 11), ("TC original", "tc_original", 14), ("Fecha fichero", "fecha", 18), ("Fecha grabación", "fecha_grabacion", 18),
     ("Montaje", "montaje", 14), ("Códec origen", "codec", 12), ("Resolución origen", "resolucion", 14), ("Pistas audio", "pistas", 8),
     ("Sonoridad (LUFS)", "lufs", 10), ("Pico (dBFS)", "pico", 10), ("Ganancia (dB)", "ganancia", 10), ("Aviso audio", "aviso_audio", 26),
+    ("Color origen", "color", 10), ("Aviso vídeo", "aviso_video", 26),
     ("Estado", "estado", 14), ("Ficheros origen", "ficheros", 60), ("Fichero importado (según bin)", "fichero_origen", 50),
     ("Disco de origen (según bin)", "volumenes", 24), ("Origen", "origen", 20), ("Referencia agencia", "ref_agencia", 18), ("Slug", "slug", 40)]
 

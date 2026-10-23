@@ -22,6 +22,11 @@ carpeta de bins con una ruta de más de 260 caracteres.
 Las fechas de la media se fijan (15/09/2021 10:00, y un clip el día 10) para
 que los nombres de los brutos sean siempre los mismos.
 
+Además, un proyecto ENLACES con media enlazada (AMA) fuera de Avid MediaFiles: un vídeo
+vertical de móvil con estéreo (tarjeta XDROOT) y un HDR HLG de GoPro (DCIM), y un clip
+cuya media de Avid está en otra carpeta (CARPETA_DESTINO_media2), como si estuviera en
+otro disco: solo se encuentra si se añade esa carpeta de media (--media-extra).
+
 Uso:  python tests/crear_disco_prueba.py CARPETA_DESTINO [--ffmpeg RUTA_FFMPEG --ffprobe RUTA_FFPROBE]
 """
 
@@ -61,6 +66,11 @@ def main():
     D = Path(args.destino)
     if D.exists():
         shutil.rmtree(D)
+    D2 = Path(args.destino + "_media2")  # "otro disco" con más media de Avid
+    if D2.exists():
+        shutil.rmtree(D2)
+    M2 = D2 / "Avid MediaFiles" / "MXF" / "1"
+    M2.mkdir(parents=True)
     M = D / "Avid MediaFiles" / "MXF" / "101"
     M.mkdir(parents=True)
     (M / "Quarantined Files").mkdir()
@@ -88,14 +98,18 @@ def main():
         datos = datos.replace(bytes.fromhex(umid(out)), bytes.fromhex(umid_v))
         out.write_bytes(datos)
 
-    def clip(nombre, suf, dur, audios=2, **kw):
+    def clip(nombre, suf, dur, audios=2, carpeta=None, **kw):
+        carpeta = carpeta or M
         fichero = nombre.replace(":", "_")  # Windows no admite ':' en nombres de fichero (Avid tampoco los usa)
-        v = M / ("%sV01.%s.mxf" % (fichero, suf))
+        v = carpeta / ("%sV01.%s.mxf" % (fichero, suf))
         mkv(nombre, v, dur, **kw)
         u = umid(v)
         for i in range(audios):
-            mka(nombre, M / ("%sA0%d.%s%d.mxf" % (fichero, i + 1, suf, i)), dur, 440 * (i + 1), u)
+            mka(nombre, carpeta / ("%sA0%d.%s%d.mxf" % (fichero, i + 1, suf, i)), dur, 440 * (i + 1), u)
         return u
+
+    def ff(*a):
+        subprocess.run([args.ffmpeg, "-loglevel", "error", "-y"] + list(a), check=True)
 
     def bin_con(path, clips, secs=(), renders=()):
         """clips: (nombre, umid[, frames[, fichero_origen[, columnas]]]). columnas: columnas de usuario del bin
@@ -222,6 +236,40 @@ def main():
              ("C0380", c3, 50, r"D:\北京\A7III\C0380.MP4")])
     bin_con(P / "20260916 agencias.avb", [("新闻 CCTV 0916", c4, 50, r"C:\Users\corresponsal\Downloads\CCTV 新闻 0916.mp4")])
 
+    # Media enlazada (AMA): ficheros de cámara fuera de Avid MediaFiles que el bin enlaza con otra letra de unidad (E:).
+    # Un vertical de móvil (rotación 90) con estéreo dentro, y un HDR HLG de GoPro en HEVC de 10 bits con estéreo.
+    R = D / "RODAJE"
+    (R / "XDROOT" / "Clip").mkdir(parents=True)
+    (R / "DCIM" / "100GOPRO").mkdir(parents=True)
+    tmp_v = D / "tumbado.mp4"
+    # Estéreo con el izquierdo mudo y el derecho con tono: en el bruto, la pista 1 muda y la 2 con sonido (si se mezclara
+    # a mono sonaría la 1; si se ignorara el audio de dentro del vídeo, ninguna)
+    estereo = ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-f", "lavfi", "-i", "sine=f=880:r=48000:d=2",
+               "-filter_complex", "[1:a][2:a]join=inputs=2:channel_layout=stereo[a]", "-map", "0:v", "-map", "[a]", "-t", "2"]
+    ff("-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=25:d=2", *estereo, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(tmp_v))
+    ff("-display_rotation:v:0", "90", "-i", str(tmp_v), "-c", "copy", str(R / "XDROOT" / "Clip" / "C0001.MP4"))
+    tmp_v.unlink()
+    # Las etiquetas de color van en las imágenes (setparams) y dentro del HEVC (x265-params): con solo las opciones de salida,
+    # el ffmpeg 7.1 de Windows escribía la matriz pero no las primarias ni la transferencia (y el clip no parecía HDR).
+    hlg = "color_primaries=bt2020:color_trc=arib-std-b67:colorspace=bt2020nc:range=tv"
+    estereo_hlg = list(estereo)
+    i = estereo_hlg.index("-filter_complex") + 1
+    estereo_hlg[i] = "[0:v]setparams=%s[v];%s" % (hlg, estereo_hlg[i])
+    estereo_hlg[estereo_hlg.index("0:v")] = "[v]"
+    ff("-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=25:d=2", *estereo_hlg, "-c:v", "libx265", "-pix_fmt", "yuv420p10le",
+       "-x265-params", "log-level=error:colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc:range=limited",
+       "-color_primaries", "bt2020", "-color_trc", "arib-std-b67", "-colorspace", "bt2020nc",
+       "-c:a", "aac", str(R / "DCIM" / "100GOPRO" / "GX010045.MP4"))
+    # Y un clip cuya media de Avid está en otro disco (la carpeta _media2).
+    uo = clip("OTRO DISCO", "6A00D001", 2, carpeta=M2)
+    P = D / "ENLACES"
+    P.mkdir()
+    (P / "ENLACES.avp").write_bytes(b"avp")
+    sin_media = "060A2B340101010501010D001300000000000000000000000000000000000%03X"
+    bin_con(P / "ENLACES Bin.avb", [("C0001", sin_media % 0xE01, 50, r"E:\RODAJE\XDROOT\Clip\C0001.MP4"),
+                                     ("GX010045", sin_media % 0xE02, 50, r"E:\RODAJE\DCIM\100GOPRO\GX010045.MP4"),
+                                     ("OTRO DISCO", uo, 50)])
+
     # Huérfano con vídeo, solo-audio huérfano y fichero en cuarentena.
     clip("HUERFANO", "AAAA0001", 2, audios=1)
     mka("SOLOAUDIO", M / "SOLOAUDIOA01.BBBB.mxf", 2, 300, "060A2B340101010501010D0013000000000000000000000000000000000000AA")
@@ -231,7 +279,7 @@ def main():
     # Los brutos se llaman por la fecha de su tarjeta.
     dia15 = dt.datetime(2021, 9, 15, 10, 0).timestamp()
     dia10 = dt.datetime(2021, 9, 10, 10, 0).timestamp()
-    for f in M.rglob("*.mxf"):
+    for f in list(M.rglob("*.mxf")) + list(M2.rglob("*.mxf")) + list(R.rglob("*.MP4")):
         t = dia10 if f.name.startswith("2017 07 13") else dia15
         os.utime(f, (t, t))
     (M / "msmMMOB.mdb").write_bytes(b"\0" * 100)

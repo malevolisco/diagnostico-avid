@@ -58,7 +58,7 @@ jobs:
       - name: Probar el .exe (análisis + brutos) en Windows
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--origen disco_prueba --destino salida --brutos brutos --sin-gui --no-abrir" -PassThru -Wait -NoNewWindow
+          $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--origen disco_prueba --destino salida --brutos brutos --sin-gui --no-abrir --media-extra disco_prueba_media2" -PassThru -Wait -NoNewWindow
           if ($p.ExitCode -ne 0) { Get-Content salida/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
           Get-Content salida/*/diagnostico.log | Select-Object -Last 15
 
@@ -68,7 +68,7 @@ jobs:
       - name: Segunda ejecución sobre los mismos brutos (debe reanudar, no repetir)
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--origen disco_prueba --destino salida2 --brutos brutos --sin-gui --no-abrir --zip-sin-miniaturas" -PassThru -Wait -NoNewWindow
+          $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--origen disco_prueba --destino salida2 --brutos brutos --sin-gui --no-abrir --zip-sin-miniaturas --media-extra disco_prueba_media2" -PassThru -Wait -NoNewWindow
           if ($p.ExitCode -ne 0) { Get-Content salida2/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
           python tests/comprobar_resultado.py salida2 brutos --ffprobe bin/ffprobe.exe --reanudado
 
@@ -107,7 +107,7 @@ jobs:
         shell: pwsh
         run: |
           Set-Content dist/DiagnosticoAvid/config_brutos.json '{"agrupar": "proyecto", "formato_salida": "auto", "excluir_importados": false}' -Encoding utf8NoBOM
-          $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--origen disco_prueba --destino salida3 --brutos brutos_proyecto --sin-gui --no-abrir" -PassThru -Wait -NoNewWindow
+          $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--origen disco_prueba --destino salida3 --brutos brutos_proyecto --sin-gui --no-abrir --media-extra disco_prueba_media2" -PassThru -Wait -NoNewWindow
           if ($p.ExitCode -ne 0) { Get-Content salida3/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
           Remove-Item dist/DiagnosticoAvid/config_brutos.json
           python tests/comprobar_resultado.py salida3 brutos_proyecto --ffprobe bin/ffprobe.exe --agrupar proyecto

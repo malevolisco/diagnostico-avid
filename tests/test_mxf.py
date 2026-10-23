@@ -147,7 +147,8 @@ class AudioPorCanales(unittest.TestCase):
                            capture_output=True, check=True)
         d = json.loads(r.stdout)
         pistas = [{"tipo": s["codec_type"], "canales": s.get("channels"), "ancho": s.get("width"), "alto": s.get("height"),
-                   "fps": s.get("r_frame_rate"), "field_order": s.get("field_order"),
+                   "fps": s.get("r_frame_rate"), "field_order": s.get("field_order"), "color_primarias": s.get("color_primaries"),
+                   "color_transfer": s.get("color_transfer"), "color_matriz": s.get("color_space"), "color_rango": s.get("color_range"),
                    "duracion": float(s["duration"]) if s.get("duration") else None} for s in d["streams"]]
         return {"ruta": nombre, "pistas": pistas, "duracion": float(d["format"]["duration"])}
 
@@ -205,3 +206,101 @@ class AudioPorCanales(unittest.TestCase):
         seg, _, _ = self.segmento(["v.mxf", "a.wav", "largo.wav"], 4)
         for d in self.duraciones_audio(seg):
             self.assertAlmostEqual(d, 2.0, delta=0.05)  # rellenado y cortado a la duración del vídeo
+
+
+@unittest.skipUnless(FFMPEG and FFPROBE, "sin ffmpeg/ffprobe")
+class VideoDeCualquierOrigen(AudioPorCanales):
+    """Cualquier vídeo sale XDCAM conforme, derecho, sin deformar y con su duración real: vertical de móvil, HDR, velocidad
+    variable, 4K 50p, 23,976p y SD anamórfico."""
+
+    def convertir(self, nombre, pistas=4):
+        seg, _, info = self.segmento([nombre], pistas)
+        dur = self.perfil(nombre)["duracion"]
+        ok, texto = mxf_util.ficha_tecnica(FFPROBE, seg, {"pistas": pistas, "tc": "00:00:00:00", "duracion": round(dur * 25) / 25})
+        self.assertTrue(ok, texto)
+        return seg, info
+
+    def ancho_de_imagen(self, ruta):
+        """Ancho de la imagen sin las bandas negras (cropdetect)."""
+        r = subprocess.run([FFMPEG, "-hide_banner", "-i", str(ruta), "-vf", "cropdetect=limit=24:round=2:reset=0", "-f", "null", "-"],
+                           capture_output=True, text=True)
+        return int(r.stderr.rsplit("crop=", 1)[1].split(":")[0])
+
+    def test_movil_vertical_sale_derecho_con_bandas(self):
+        self.ff("-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=30:d=2", "-f", "lavfi", "-i", "sine=r=48000:d=2", "-c:v", "libx264",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(self.tmp / "tumbado.mp4"))
+        self.ff("-display_rotation:v:0", "90", "-i", str(self.tmp / "tumbado.mp4"), "-c", "copy", str(self.tmp / "vertical.mp4"))
+        seg, _ = self.convertir("vertical.mp4")
+        self.assertAlmostEqual(self.ancho_de_imagen(seg), 608, delta=8)  # 1080 de alto x 9/16: vertical, centrado entre bandas
+
+    def psnr(self, a, b):
+        """PSNR del bruto `a` frente a la referencia `b`, que siempre es BT.709 sin etiquetar. Se etiqueta aquí: si no, ffmpeg 7
+        la toma por BT.601 al compararla con el bruto (que sí va etiquetado) y la convierte, y sale ~24 dB aunque sean iguales."""
+        ref = "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv,format=yuv422p"
+        r = subprocess.run([FFMPEG, "-hide_banner", "-i", str(a), "-i", str(b), "-lavfi", "[0:v]format=yuv422p[x];[1:v]%s[y];[x][y]psnr" % ref,
+                            "-f", "null", "-"], capture_output=True, text=True)
+        return float(r.stderr.split("average:")[1].split()[0])
+
+    def hdr(self, transfer, nombre, npl):
+        """Una imagen normal (BT.709) pasada a HDR como haría una cámara: al convertirla al bruto debe parecerse a la original."""
+        self.ff("-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=25:d=2", "-vf", "format=yuv422p", "-c:v", "ffv1", str(self.tmp / "ref.mkv"))
+        self.ff("-i", str(self.tmp / "ref.mkv"), "-vf", "zscale=tin=bt709:pin=bt709:min=bt709:t=%s:p=bt2020:m=bt2020nc:npl=%d,format=yuv420p10le"
+                % (transfer, npl), "-c:v", "libx265", "-x265-params", "log-level=error", "-color_primaries", "bt2020", "-color_trc", transfer,
+                "-colorspace", "bt2020nc", str(self.tmp / nombre))
+        seg, info = self.convertir(nombre)
+        self.assertNotIn("aviso_video", info)
+        return self.psnr(seg, self.tmp / "ref.mkv"), info
+
+    # Umbrales medidos (oct. 2026): sin convertir el HDR sale ~14-15 dB frente a la original y con el mapeo de tonos hable
+    # ~16; con la conversión, ~30 con ffmpeg 6.1 y 7.0 (los ~24 que salían en Windows eran de la comparación, no del bruto).
+    def test_hdr_hlg_se_pasa_a_bt709(self):
+        psnr, info = self.hdr("arib-std-b67", "hlg.mov", 100)
+        self.assertEqual(info["color"], "HLG")
+        self.assertGreater(psnr, 27, "PSNR %.1f dB" % psnr)
+
+    def test_hdr_pq_se_pasa_a_bt709(self):
+        psnr, info = self.hdr("smpte2084", "pq.mov", 203)
+        self.assertEqual(info["color"], "PQ")
+        self.assertGreater(psnr, 27, "PSNR %.1f dB" % psnr)
+
+    def test_hd_sin_etiqueta_de_color_no_cambia_de_color(self):
+        """HD sin la matriz de color en el fichero: es BT.709 (ffmpeg suponía BT.601 y corría los colores: 24,7 dB)."""
+        self.ff("-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=25:d=2", "-vf", "format=yuv422p", "-c:v", "ffv1", str(self.tmp / "sin_etiqueta.mkv"))
+        seg, _ = self.convertir("sin_etiqueta.mkv")
+        psnr = self.psnr(seg, self.tmp / "sin_etiqueta.mkv")
+        self.assertGreater(psnr, 35, "PSNR %.1f dB" % psnr)
+
+    def test_entrelazado_sin_marcar_se_detecta(self):
+        """Un fichero entrelazado que no lo dice: idet lo ve y se separan los campos como debe."""
+        self.ff("-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=50:d=2", "-vf", "tinterlace=interleave_top,setfield=prog", "-c:v", "ffv1",
+                str(self.tmp / "sin_marca.mkv"))
+        self.assertEqual(eb.detectar_campos(FFMPEG, self.tmp / "sin_marca.mkv"), "tt")
+        self.ff("-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=25:d=2", "-c:v", "ffv1", str(self.tmp / "progresivo.mkv"))
+        self.assertEqual(eb.detectar_campos(FFMPEG, self.tmp / "progresivo.mkv"), "progressive")
+
+    def test_velocidad_variable_conserva_duracion_y_audio(self):
+        self.ff("-f", "lavfi", "-i", "testsrc2=s=1280x720:r=30:d=3", "-f", "lavfi", "-i", "sine=r=48000:d=3",
+                "-vf", "setpts='(N+0.4*mod(N\\,3))/30/TB'", "-fps_mode", "passthrough", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", str(self.tmp / "vfr.mp4"))
+        seg, _ = self.convertir("vfr.mp4")
+        dur_video = self.perfil("vfr.mp4")["duracion"]
+        for d in self.duraciones_audio(seg):
+            self.assertAlmostEqual(d, dur_video, delta=0.1)
+
+    def test_4k_50p(self):
+        self.ff("-f", "lavfi", "-i", "testsrc2=s=3840x2160:r=50:d=1", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                str(self.tmp / "4k.mp4"))
+        seg, _ = self.convertir("4k.mp4")
+        self.assertGreaterEqual(self.ancho_de_imagen(seg), 1900)
+
+    def test_23976_conserva_la_duracion(self):
+        self.ff("-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=24000/1001:d=2", "-c:v", "prores_ks", "-profile:v", "1", str(self.tmp / "cine.mov"))
+        seg, _ = self.convertir("cine.mov")
+        r = subprocess.run([FFPROBE, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(seg)], capture_output=True, text=True)
+        self.assertAlmostEqual(float(r.stdout), self.perfil("cine.mov")["duracion"], delta=0.08)  # misma duración: no se acelera
+
+    def test_sd_anamorfico_16_9_ocupa_todo(self):
+        self.ff("-f", "lavfi", "-i", "testsrc2=s=720x576:r=25:d=2", "-vf", "setsar=64/45", "-c:v", "mpeg2video", "-flags", "+ildct+ilme",
+                "-top", "1", str(self.tmp / "sd169.mxf"))
+        seg, _ = self.convertir("sd169.mxf")
+        self.assertGreaterEqual(self.ancho_de_imagen(seg), 1900)

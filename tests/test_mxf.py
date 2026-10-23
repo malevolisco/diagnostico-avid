@@ -8,6 +8,7 @@ Uso:  python -m unittest discover -s tests -v
 """
 
 import hashlib
+import json
 import shutil
 import subprocess
 import sys
@@ -123,3 +124,84 @@ class AcabadoProfesional(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(FFMPEG and FFPROBE, "sin ffmpeg/ffprobe")
+class AudioPorCanales(unittest.TestCase):
+    """Cada canal del clip es una pista del bruto (un estéreo en un solo fichero da dos; un 5.1, seis) y todo el audio
+    dura lo mismo que el vídeo, para que al unir los clips el sonido no se desplace."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def ff(self, *args):
+        subprocess.run([FFMPEG, "-v", "error", "-y"] + list(args), check=True, capture_output=True)
+
+    def perfil(self, nombre):
+        """Lo que guarda el análisis de un fichero (mxf.json): sus flujos con tipo, canales y duración."""
+        r = subprocess.run([FFPROBE, "-v", "error", "-show_streams", "-show_format", "-of", "json", str(self.tmp / nombre)],
+                           capture_output=True, check=True)
+        d = json.loads(r.stdout)
+        pistas = [{"tipo": s["codec_type"], "canales": s.get("channels"), "ancho": s.get("width"), "alto": s.get("height"),
+                   "fps": s.get("r_frame_rate"), "field_order": s.get("field_order"),
+                   "duracion": float(s["duration"]) if s.get("duration") else None} for s in d["streams"]]
+        return {"ruta": nombre, "pistas": pistas, "duracion": float(d["format"]["duration"])}
+
+    def segmento(self, ficheros, pistas):
+        mxf = {f: self.perfil(f) for f in ficheros}
+        clip = {"clave": "K", "nombre": "C", "ficheros": ficheros, "fichero_video": ficheros[0], "duracion": mxf[ficheros[0]]["duracion"]}
+        plan = {"modo": "convertir", "pistas_audio": pistas, "destino": {"xdcam": True}, "fps": 25.0}
+        info = {}
+        seg, err, cmd = eb.hacer_segmento(clip, 1, plan, self.tmp, mxf, self.tmp, FFMPEG, self.cfg, info=info)
+        self.assertIsNotNone(seg, err)
+        return seg, eb.canales_clip(clip, mxf), info
+
+    def volumen(self, ruta, pista):
+        r = subprocess.run([FFMPEG, "-hide_banner", "-i", str(ruta), "-map", "0:a:%d" % pista, "-af", "volumedetect", "-f", "null", "-"],
+                           capture_output=True, text=True)
+        return float(r.stderr.split("mean_volume:")[1].split("dB")[0])
+
+    def duraciones_audio(self, ruta):
+        r = subprocess.run([FFPROBE, "-v", "error", "-select_streams", "a", "-show_entries", "stream=duration", "-of", "csv=p=0", str(ruta)],
+                           capture_output=True, text=True, check=True)
+        return [float(x) for x in r.stdout.split()]
+
+    def video_con_estereo(self, nombre, dur=2):
+        """Vídeo con un estéreo dentro: el canal izquierdo con tono y el derecho en silencio."""
+        self.ff("-f", "lavfi", "-i", "testsrc2=s=1280x720:r=25:d=%d" % dur, "-f", "lavfi", "-i", "sine=f=440:r=48000:d=%d" % dur,
+                "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-filter_complex", "[1:a][2:a]join=inputs=2:channel_layout=stereo[a]",
+                "-map", "0:v", "-map", "[a]", "-t", str(dur), "-c:v", "mpeg2video", "-c:a", "pcm_s16le", str(self.tmp / nombre))
+
+    def test_estereo_en_un_fichero_son_dos_pistas(self):
+        self.video_con_estereo("movil.mov")
+        seg, canales, info = self.segmento(["movil.mov"], 4)
+        self.assertEqual([(c["flujo"], c["canal"], c["de"]) for c in canales], [(0, 0, 2), (0, 1, 2)])
+        vol = [self.volumen(seg, k) for k in range(4)]
+        self.assertGreater(vol[0], -40)  # izquierdo: tono
+        self.assertLess(vol[1], -80)  # derecho: silencio (antes se perdía y la pista 1 llevaba la mezcla)
+        self.assertLess(max(vol[2:]), -80)
+        ok, texto = mxf_util.ficha_tecnica(FFPROBE, seg, {"pistas": 4, "tc": "00:00:00:00", "duracion": 2.0})
+        self.assertTrue(ok, texto)
+
+    def test_estereo_dentro_y_51_aparte_son_ocho(self):
+        self.video_con_estereo("clip.mov")
+        self.ff("-f", "lavfi", "-i", "sine=f=1000:r=48000:d=2", "-af", "pan=5.1|c0=c0|c1=c0|c2=c0|c3=c0|c4=c0|c5=c0",
+                "-c:a", "pcm_s24le", str(self.tmp / "clip_51.wav"))
+        seg, canales, _ = self.segmento(["clip.mov", "clip_51.wav"], 8)
+        self.assertEqual([c["ruta"] for c in canales], ["clip.mov"] * 2 + ["clip_51.wav"] * 6)
+        vol = [self.volumen(seg, k) for k in range(8)]
+        self.assertGreater(vol[0], -40)
+        self.assertLess(vol[1], -80)
+        self.assertTrue(all(v > -40 for v in vol[2:]), vol)
+
+    def test_audio_mas_corto_que_el_video(self):
+        self.ff("-f", "lavfi", "-i", "testsrc2=s=1280x720:r=25:d=2", "-c:v", "mpeg2video", str(self.tmp / "v.mxf"))
+        self.ff("-f", "lavfi", "-i", "sine=f=440:r=48000:d=1", "-c:a", "pcm_s16le", str(self.tmp / "a.wav"))
+        self.ff("-f", "lavfi", "-i", "sine=f=440:r=48000:d=3", "-c:a", "pcm_s16le", str(self.tmp / "largo.wav"))
+        seg, _, _ = self.segmento(["v.mxf", "a.wav", "largo.wav"], 4)
+        for d in self.duraciones_audio(seg):
+            self.assertAlmostEqual(d, 2.0, delta=0.05)  # rellenado y cortado a la duración del vídeo

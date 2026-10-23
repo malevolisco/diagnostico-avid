@@ -106,6 +106,17 @@ Usa el último análisis del disco: no lo repite.
 cambias de página sin guardar, pregunta. Lo que se ve en el montaje es
 exactamente lo que se exporta.
 
+Pestaña "Origen del material" (arriba a la izquierda, junto a "Brutos")
+- Una fila por procedencia: la carpeta de la que se importaron los clips y
+  el bin. Dice cuántos clips son, cuánto duran, unos ejemplos, lo que
+  propone el programa y por qué. Arriba y en naranja, lo dudoso.
+- Marca una o varias filas (Ctrl para varias) y elige abajo: "Entra",
+  "Fuera: agencia", "Fuera: importado" o "Como propone el programa".
+- "Guardar" lo deja en origen.json, en la carpeta de brutos, y rehace los
+  brutos con lo elegido. Con "Recordar para otros discos" marcado, además
+  se acuerda para siempre (por ejemplo, que la carpeta "Compras" es de
+  agencia): se guarda en config_brutos.json, junto al programa.
+
 Página 3 · Exportar
 - A la izquierda, los ajustes con los valores recomendados ya puestos:
   - Formato XDCAM HD422 50 Mb/s 1080i25 16:9.

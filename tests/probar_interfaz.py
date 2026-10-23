@@ -6,8 +6,9 @@ Prueba de la ventana (interfaz.py) de principio a fin sobre el disco de prueba, 
   python tests/probar_interfaz.py DISCO CARPETA_INFORME CARPETA_BRUTOS CARPETA_CAPTURAS
 
 1 · Disco: Montaje sin análisis avisa en vez de fallar; analizar; la tarjeta "Último análisis" se rellena.
-2 · Montaje: "Fuera del bruto" con agencia, efecto e importado; bajar un clip, deshacer, volver a bajar; al
-   cambiar de página pregunta y guarda montaje.json.
+2 · Montaje: "Fuera del bruto" con agencia, efecto e importado. Pestaña "Origen del material": el bin "compras" sale
+   arriba como dudoso; se marca "Fuera: agencia", se guarda origen.json y el montaje se rehace con ese clip fuera.
+   Bajar un clip, deshacer, volver a bajar; al cambiar de página pregunta y guarda montaje.json.
 3 · Exportar: piezas sin marcar; un TC no válido desactiva el botón y dice por qué; exportar; cada bruto acaba en
    "Terminado" y "Conforme · MD5".
 Deja capturas de cada página en CARPETA_CAPTURAS. Los diálogos se contestan solos (sí). Sale con 1 si algo no cuadra.
@@ -114,6 +115,40 @@ def montaje():
     fuera = " | ".join(pm.lb_f.get(0, "end"))
     for motivo in ("agencia", "efecto de Avid", "importado"):
         comprobar(motivo in fuera, "Fuera del bruto sin '%s': %s" % (motivo, fuera))
+    app.raiz.after(100, origen)
+
+
+@seguro
+def origen():
+    app.sel_pestanas[0].elegir("origen")
+    po = app.pantalla_origen
+    comprobar(po is not None, "no hay pestaña Origen del material")
+    filas = [po.tv.item(i, "values") for i in po.tv.get_children()]
+    compras = next((n for n, v in enumerate(filas) if v[1] == "compras.avb"), None)
+    comprobar(compras is not None and compras < 3 and "Dudoso" in filas[compras][5],
+              "el bin compras debe salir arriba como dudoso: %s" % filas[:4])
+    captura("2b_origen.png")
+    po.tv.selection_set(str(compras))
+    po.elegir("agencia")
+    comprobar(po.cambios and filas[compras] != po.tv.item(str(compras), "values"), "al elegir debe quedar marcado y sin guardar")
+    po.guardar()
+    esperar(lambda: app.pantalla_origen is not None and app.pantalla_origen is not po, origen_aplicado, limite=60)
+
+
+@seguro
+def origen_aplicado():
+    datos = json.loads((Path(BRUTOS) / "origen.json").read_text(encoding="utf-8"))
+    comprobar([d["clase"] for d in datos["decisiones"] if d["bin"] == "compras.avb"] == ["agencia"], "origen.json: %s" % datos)
+    comprobar(app.pestana_montaje == "origen", "tras guardar debe seguir en la pestaña de origen")
+    pm = app.montaje
+    pm.cb_p.current(pm.proyectos.index("ORIGEN"))
+    pm.elegir_proyecto("ORIGEN")
+    fuera = " | ".join(pm.lb_f.get(0, "end"))
+    comprobar("VISTA AEREA" in fuera and "agencia" in fuera, "tras elegir agencia, VISTA AEREA debe salir del bruto: %s" % fuera)
+    app.sel_pestanas[0].elegir("brutos")
+    p = "15 SEPT CENTROAMERICA"
+    pm.cb_p.current(pm.proyectos.index(p))
+    pm.elegir_proyecto(p)
     esperar(lambda: all(c.get("clave") in pm.listos for c, _, _ in pm.tramos() if c.get("fichero_video")), montar, limite=180)
 
 

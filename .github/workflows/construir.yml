@@ -50,7 +50,7 @@ jobs:
           Get-Content build.txt
 
       - name: Construir ejecutable
-        run: pyinstaller --noconfirm --clean --noconsole --onedir --name DiagnosticoAvid --add-data "bin;bin" --add-data "build.txt;." --hidden-import interfaz --hidden-import tema --hidden-import ventana_montaje --hidden-import montaje --hidden-import mxf_util diagnostico_avid.py
+        run: pyinstaller --noconfirm --clean --noconsole --onedir --name DiagnosticoAvid --add-data "bin;bin" --add-data "build.txt;." --hidden-import interfaz --hidden-import tema --hidden-import ventana_montaje --hidden-import ventana_origen --hidden-import montaje --hidden-import mxf_util diagnostico_avid.py
 
       - name: Disco de prueba simulado
         run: python tests/crear_disco_prueba.py disco_prueba --ffmpeg bin/ffmpeg.exe --ffprobe bin/ffprobe.exe

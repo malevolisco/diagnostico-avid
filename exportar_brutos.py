@@ -631,6 +631,58 @@ def leer_decisiones_origen(carpeta_brutos):
         return []
 
 
+# Lo que se puede elegir en la pantalla "Origen del material" (None = como propone el programa)
+ELECCIONES_ORIGEN = [("propio", "Entra"), ("agencia", "Fuera: agencia"), ("importado", "Fuera: importado"),
+                     (None, "Como propone el programa")]
+
+
+def grupos_de_origen(clips, cfg):
+    """Para la pantalla "Origen del material": los clips agrupados por procedencia (carpeta de la que se importaron y
+    bin), con lo que propone el programa, el motivo más repetido, unos ejemplos y lo elegido para este disco
+    (cfg['decisiones_origen']). Los efectos de Avid no salen. Primero los grupos con dudosos; luego, los más largos."""
+    sin_elegir = dict(cfg, decisiones_origen=[])
+    elegido = {((d.get("carpeta") or ""), (d.get("bin") or "")): d["clase"] for d in cfg.get("decisiones_origen") or ()}
+    grupos = {}
+    for c in clips:
+        if c.get("render"):
+            continue
+        clave = procedencia(c)
+        g = grupos.setdefault(clave, {"carpeta": clave[0], "bin": clave[1], "clips": [], "segundos": 0.0,
+                                      "clases": Counter(), "motivos": Counter(), "elegido": elegido.get(clave)})
+        clase, motivo, seguro = clasificar(c, sin_elegir)
+        g["clips"].append(c)
+        g["segundos"] += c.get("duracion") or 0
+        g["clases"][clase if seguro else "dudoso"] += 1
+        g["motivos"][motivo] += 1
+    for g in grupos.values():
+        g["dudosos"] = g["clases"].get("dudoso", 0)
+        g["propuesta"] = " · ".join("%s %d" % (CLASES_ORIGEN[k], n) for k, n in g["clases"].most_common()) \
+            if len(g["clases"]) > 1 else CLASES_ORIGEN[next(iter(g["clases"]))]
+        g["motivo"] = g["motivos"].most_common(1)[0][0]
+        g["ejemplos"] = [c["nombre"] for c in g["clips"][:3]]
+    return sorted(grupos.values(), key=lambda g: (g["dudosos"] == 0, -g["segundos"], g["carpeta"], g["bin"]))
+
+
+def guardar_decisiones_origen(carpeta_brutos, decisiones):
+    """Escribe origen.json en la carpeta de brutos: [{"carpeta", "bin", "clase"}] (solo las que no son None)."""
+    datos = {"version": 1,
+             "_comentario": "Origen del material elegido a mano para este disco (pantalla Montaje → Origen del material). "
+                            "carpeta: de dónde se importó, sin letra de unidad; bin; clase: propio | agencia | importado",
+             "decisiones": [d for d in decisiones if d.get("clase") in CLASES_ORIGEN]}
+    ruta = Path(carpeta_brutos) / "origen.json"
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text(json.dumps(datos, ensure_ascii=False, indent=2), encoding="utf-8")
+    return ruta
+
+
+def regla_de_origen(carpeta, nbin, clase):
+    """La regla para config_brutos.json → reglas_origen ("Recordar para otros discos"): por carpeta si se importó de
+    una; si no (capturado), por el nombre del bin sin la extensión."""
+    if carpeta:
+        return {"carpeta": carpeta, "clase": clase}
+    return {"bin": re.sub(r"\.avb$", "", nbin or "", flags=re.IGNORECASE), "clase": clase}
+
+
 def es_de_camara(c, cfg):
     """Material de cámara según el bin: ruta de tarjeta (CONTENTS, PRIVATE, DCIM...), nombre de fichero de cámara
     o un origen de cámara en config_origen.json (p. ej. los nombres de clip de P2)."""

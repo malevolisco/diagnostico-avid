@@ -243,6 +243,43 @@ class Visor(unittest.TestCase):
         self.assertEqual(montaje.sacar_fotogramas("no-existe-ffmpeg", video, self.tmp / "visor", "K:1/a"), ruta)  # ya hecho
         self.assertEqual(ruta.stat().st_mtime_ns, antes)
 
+    def test_dos_a_la_vez_con_el_mismo_clip(self):
+        """Al rehacer el montaje, el de antes y el nuevo pueden sacar los fotogramas del mismo clip a la vez: los dos
+        deben acabar con los fotogramas (con un temporal compartido, uno se quedaba sin nada)."""
+        import subprocess
+        from concurrent.futures import ThreadPoolExecutor
+        video = self.tmp / "clip.mxf"
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=720x576:r=25:d=20", "-c:v", "mpeg2video",
+                        "-f", "mxf", str(video)], check=True)
+        for vuelta in range(3):
+            visor = self.tmp / ("visor%d" % vuelta)
+            with ThreadPoolExecutor(4) as ex:
+                rutas = list(ex.map(lambda _: montaje.sacar_fotogramas("ffmpeg", video, visor, "K"), range(4)))
+            self.assertTrue(all(r and r.exists() for r in rutas), rutas)
+            self.assertEqual(len(montaje.fotogramas(rutas[0])), 20)
+            self.assertEqual(list(visor.glob("*.tmp")), [])
+
+    def test_windows_no_deja_sustituir_el_fichero(self):
+        """En Windows, sustituir un fichero que otro acaba de escribir da "Access is denied": vale el del otro."""
+        import subprocess
+        from unittest import mock
+        video = self.tmp / "clip.mxf"
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=720x576:r=25:d=3", "-c:v", "mpeg2video",
+                        "-f", "mxf", str(video)], check=True)
+        visor = self.tmp / "visor"
+
+        def denegado(origen, destino):
+            Path(destino).write_bytes(b"\xff\xd8 del otro")  # el otro acabó justo a la vez
+            raise PermissionError(5, "Access is denied")
+
+        with mock.patch.object(Path, "replace", denegado):
+            ruta = montaje.sacar_fotogramas("ffmpeg", video, visor, "K")
+        self.assertEqual(ruta, montaje.fichero_visor(visor, "K"))
+        self.assertEqual(list(visor.glob("*.tmp")), [])
+        with mock.patch.object(Path, "replace", lambda o, d: (_ for _ in ()).throw(PermissionError(5, "Access is denied"))):
+            self.assertIsNone(montaje.sacar_fotogramas("ffmpeg", video, self.tmp / "visor2", "K"))  # y nadie lo hizo: fallo
+        self.assertEqual(list((self.tmp / "visor2").glob("*")), [])
+
     def test_fallo_de_ffmpeg(self):
         self.assertIsNone(montaje.sacar_fotogramas("ffmpeg", self.tmp / "no_existe.mxf", self.tmp / "visor", "K"))
         self.assertEqual(list((self.tmp / "visor").glob("*")), [])

@@ -349,6 +349,23 @@ def fecha_grabacion(c):
         return None
 
 
+DESFASE_RELOJ_HORAS = 12  # más diferencia entre la grabación y el volcado se avisa (reloj de la cámara mal puesto)
+
+
+def fecha_imposible(grabacion, volcado=None, ahora=None):
+    """Por qué una fecha de grabación no puede ser buena, o None (docs/diseno_cualquier_disco.md, apartado 5): antes de
+    2000, en el futuro, o el 1 de enero lejos del volcado (las cámaras con el reloj sin poner arrancan el 1/1). Un 1 de
+    enero cerca del volcado puede ser de verdad (Año Nuevo), así que vale."""
+    ahora = ahora or dt.datetime.now()
+    if grabacion.year < 2000:
+        return "anterior a 2000"
+    if grabacion > ahora + dt.timedelta(days=1):
+        return "en el futuro"
+    if (grabacion.month, grabacion.day) == (1, 1) and volcado and abs(volcado - grabacion) > dt.timedelta(days=2):
+        return "1 de enero lejos del volcado: reloj de la cámara sin poner"
+    return None
+
+
 def fecha_clip(c, mxf_por_ruta):
     """La fecha que manda (Adrián, oct. 2026): la de grabación si consta; si no, la del fichero de media (volcado)."""
     return fecha_grabacion(c) or fecha_media(c, mxf_por_ruta)
@@ -1506,7 +1523,7 @@ COLUMNAS_SHOTLIST = [  # (cabecera, clave de la fila, ancho)
     ("Duración", "duracion", 11), ("TC original", "tc_original", 14), ("Fecha fichero", "fecha", 18), ("Fecha grabación", "fecha_grabacion", 18),
     ("Montaje", "montaje", 14), ("Códec origen", "codec", 12), ("Resolución origen", "resolucion", 14), ("Pistas audio", "pistas", 8),
     ("Sonoridad (LUFS)", "lufs", 10), ("Pico (dBFS)", "pico", 10), ("Ganancia (dB)", "ganancia", 10), ("Aviso audio", "aviso_audio", 26),
-    ("Color origen", "color", 10), ("Aviso vídeo", "aviso_video", 26),
+    ("Color origen", "color", 10), ("Aviso vídeo", "aviso_video", 26), ("Aviso fecha", "aviso_fecha", 30),
     ("Estado", "estado", 14), ("Ficheros origen", "ficheros", 60), ("Fichero importado (según bin)", "fichero_origen", 50),
     ("Disco de origen (según bin)", "volumenes", 24), ("Origen", "origen_texto", 24), ("Por qué", "origen_motivo", 40),
     ("Origen (reglas del bin)", "origen", 20), ("Referencia agencia", "ref_agencia", 18), ("Slug", "slug", 40)]
@@ -1586,7 +1603,7 @@ def _fila_clip(i, proyecto, c, mxf_por_ruta):
     texto = (proyecto_principal(c) or "SIN_PROYECTO") + (" (también en %s)" % ", ".join(otros) if otros else "")
     return {"n": i, "proyecto": texto, "proyecto_principal": proyecto_principal(c) or "SIN_PROYECTO", "clip": c["nombre"], "tc_original": c.get("timecode"),
             "fecha": mxf_por_ruta.get(c.get("fichero_video") or c["ficheros"][0], {}).get("modificado"),
-            "fecha_grabacion": c.get("fecha_grabacion"),
+            "fecha_grabacion": c.get("fecha_grabacion"), "aviso_fecha": c.get("aviso_fecha"),
             "codec": c.get("codec_video"), "resolucion": c.get("resolucion"), "pistas": c.get("num_audio"),
             "ficheros": "; ".join(c["ficheros"]), "miniatura": c.get("miniatura"), "tc_in": None, "tc_out": None, "duracion": None,
             "fichero_origen": c.get("fichero_origen"), "volumenes": ", ".join(c.get("volumenes") or []),

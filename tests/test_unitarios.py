@@ -800,6 +800,32 @@ class CortesYGrabacion(unittest.TestCase):
         r = da.fijar_fechas_grabacion(clips)
         self.assertEqual((r["clips"], clips[0]["fecha_grabacion"]), (1, "2019-09-16 14:02:10"))
 
+    def test_fechas_de_grabacion_imposibles(self):
+        D, f = eb.dt.datetime, eb.fecha_imposible
+        ahora, volcado = D(2026, 10, 23, 12), D(2021, 9, 15, 10)
+        self.assertEqual(f(D(1999, 12, 31, 23), volcado, ahora), "anterior a 2000")
+        self.assertEqual(f(D(2027, 3, 1), volcado, ahora), "en el futuro")
+        self.assertIn("reloj de la cámara sin poner", f(D(2015, 1, 1, 0, 3), volcado, ahora))
+        self.assertIsNone(f(D(2022, 1, 1, 0, 30), D(2022, 1, 1, 9), ahora))  # Nochevieja de verdad: el volcado cuadra
+        self.assertIsNone(f(D(2021, 9, 14, 9), volcado, ahora))  # un día antes del volcado: normal
+        self.assertIsNone(f(D(2021, 9, 15, 9)))  # sin volcado ni "ahora": solo cuenta lo absoluto
+
+    @unittest.skipIf(da is None, "sin pyavb")
+    def test_fecha_imposible_y_reloj_desfasado_en_el_analisis(self):
+        mxf = [{"ruta": r, "modificado": "2021-09-15 10:00:00"} for r in ("a.mxf", "b.mxf", "c.mxf", "d.mxf")]
+        clips = [{"fichero_video": "a.mxf", "columnas": {"Shoot Date": "01/01/2000", "Shoot Time": "00:03:00"}},
+                 {"fichero_video": "b.mxf", "columnas": {"Shoot Date": "01/01/1970", "Shoot Time": "00:00:10"}},
+                 {"fichero_video": "c.mxf", "columnas": {"Shoot Date": "16/09/2021", "Shoot Time": "12:00:00"}},
+                 {"fichero_video": "d.mxf", "columnas": {"Shoot Date": "15/09/2021", "Shoot Time": "08:00:00"}}]
+        r = da.fijar_fechas_grabacion(clips, mxf)
+        self.assertEqual((r["clips"], sum(r["imposibles"].values()), r["desfasados"]), (2, 2, 1))
+        self.assertNotIn("fecha_grabacion", clips[0])  # no se usa: se ordena por el volcado
+        self.assertIn("01/01/2000", clips[0]["aviso_fecha"])
+        self.assertIn("anterior a 2000", clips[1]["aviso_fecha"])
+        self.assertEqual(clips[2]["fecha_grabacion"], "2021-09-16 12:00:00")  # desfasada: se usa, con aviso
+        self.assertIn("26 h", clips[2]["aviso_fecha"])
+        self.assertNotIn("aviso_fecha", clips[3])
+
     @unittest.skipIf(da is None, "sin pyavb")
     def test_buscar_el_ultimo_analisis_del_disco(self):
         for nombre, origen, fecha in [("Diagnostico_X_20261020_0900", "F:/DISCO 1", "2026-10-20 09:00"),

@@ -536,7 +536,7 @@ def leer_fecha(texto):
             f = dt.datetime.strptime(t, fmt)
         except ValueError:
             continue
-        if 1980 <= f.year <= 2100:
+        if 1900 <= f.year <= 2100:  # las imposibles (1970, 1/1 de fábrica...) se descartan con aviso en fijar_fechas_grabacion
             return f, "%H" in fmt
     return None, False
 
@@ -572,22 +572,39 @@ def buscar_fecha_grabacion(c):
     return None, solo_fecha
 
 
-def fijar_fechas_grabacion(clips):
-    """Pone fecha_grabacion ("AAAA-MM-DD HH:MM:SS") y su fuente en los clips donde se encuentra. Devuelve el resumen."""
-    fuentes, solo_fecha, columnas = Counter(), Counter(), Counter()
+def fijar_fechas_grabacion(clips, mxf=()):
+    """Pone fecha_grabacion ("AAAA-MM-DD HH:MM:SS") y su fuente en los clips donde se encuentra. Devuelve el resumen.
+    Una fecha imposible (antes de 2000, en el futuro, 1/1 de fábrica) no se usa: el clip se ordena por el volcado y lleva
+    aviso_fecha. Si la de grabación se aleja más de 12 h del volcado, también se avisa (reloj de la cámara desfasado),
+    pero se usa: así se ordenó siempre."""
+    mxf_por_ruta = {m["ruta"]: m for m in mxf}
+    ahora = dt.datetime.now()
+    fuentes, solo_fecha, columnas, imposibles = Counter(), Counter(), Counter(), Counter()
+    desfasados = 0
     for c in clips:
         columnas.update(c.get("columnas") or {})
         columnas.update("MXF: " + k for k in (c.get("comentarios") or {}))
         f, fuente = buscar_fecha_grabacion(c)
         if f:
+            volcado = exportar_brutos.fecha_media(c, mxf_por_ruta) if exportar_brutos and mxf_por_ruta else None
+            motivo = exportar_brutos.fecha_imposible(f, volcado, ahora) if exportar_brutos else None
+            if motivo:
+                c["aviso_fecha"] = "fecha de grabación imposible (%s, %s): se ordena por la del volcado" % (f.strftime("%d/%m/%Y %H:%M"), motivo)
+                imposibles[motivo] += 1
+                continue
             c["fecha_grabacion"], c["fecha_grabacion_fuente"] = f.strftime("%Y-%m-%d %H:%M:%S"), fuente
             fuentes[fuente] += 1
+            if volcado and abs(f - volcado) > dt.timedelta(hours=exportar_brutos.DESFASE_RELOJ_HORAS):
+                c["aviso_fecha"] = "la hora de grabación se aleja %d h del volcado (¿reloj de la cámara desfasado?)" % round(
+                    abs((f - volcado).total_seconds()) / 3600)
+                desfasados += 1
         elif fuente:
             solo_fecha[fuente] += 1
     res = {"clips": sum(fuentes.values()), "fuentes": dict(fuentes.most_common()), "solo_fecha": dict(solo_fecha.most_common()),
-           "columnas_vistas": dict(columnas.most_common(30))}
-    LOG.info("Fecha de grabación: %d de %d clips (%s); columnas de usuario vistas: %s", res["clips"], len(clips),
-             res["fuentes"] or "ninguna", ", ".join(res["columnas_vistas"]) or "ninguna")
+           "columnas_vistas": dict(columnas.most_common(30)), "imposibles": dict(imposibles.most_common()), "desfasados": desfasados}
+    LOG.info("Fecha de grabación: %d de %d clips (%s); imposibles %d; a más de 12 h del volcado %d; columnas de usuario vistas: %s",
+             res["clips"], len(clips), res["fuentes"] or "ninguna", sum(imposibles.values()), desfasados,
+             ", ".join(res["columnas_vistas"]) or "ninguna")
     return res
 
 
@@ -1050,7 +1067,7 @@ def cruzar(proyectos, bins, clips, mxf=(), enlaces=None):
                                 for clip, nbin in pr["offline_items"][:200]],
         })
     LOG.info("Cruce: coincidencias %s; huérfanos %d; renders %d; compartidos %d", dict(coincidencias), len(huerfanos), len(renders), len(compartidos))
-    grabacion = fijar_fechas_grabacion(clips)
+    grabacion = fijar_fechas_grabacion(clips, mxf)
     return {
         "fecha_grabacion": grabacion,
         "modo_coincidencia": dict(coincidencias),
@@ -1181,6 +1198,12 @@ def construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmp
     else:
         avisos.append(("info", "No se ha encontrado la hora de grabación (cámara) en ningún clip: los brutos se ordenan por la hora del volcado "
                        "(fecha del fichero). Columnas de usuario en los bins: %s." % (", ".join(list(g.get("columnas_vistas") or {})[:12]) or "ninguna")))
+    if g.get("imposibles"):
+        avisos.append(("aviso", "%d clips tienen una fecha de grabación imposible (%s): se ordenan por la fecha del volcado. "
+                       "El shotlist lo dice en \"Aviso fecha\"." % (sum(g["imposibles"].values()), "; ".join("%s (%d)" % kv for kv in g["imposibles"].items()))))
+    if g.get("desfasados"):
+        avisos.append(("info", "%d clips tienen la hora de grabación a más de 12 h de su volcado: puede que el reloj de la cámara "
+                       "estuviera mal puesto (zona horaria, día cambiado). Se ordenan por la de grabación, como el resto." % g["desfasados"]))
     if cruce.get("renders"):
         avisos.append(("info", "%d clips físicos son renders de efectos (títulos, fundidos). Se excluyen de los brutos." % cruce["renders"]))
     if cruce.get("compartidos"):

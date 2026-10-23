@@ -282,8 +282,12 @@ def main():
     P = D / "ORIGEN"
     P.mkdir()
     (P / "ORIGEN.avp").write_bytes(b"avp")
-    bin_con(P / "ORIGEN Bin.avb", [("ENTREVISTA ALCALDE", sin_media % 0xE03, 50, r"E:\material\entrevista alcalde.mov"),
-                                    ("RECURSO SIN PISTAS", ur, 50, r"D:\varios\plano recurso.mp4")])
+    # Fechas (parte 5): la Panasonic con el reloj sin poner (1/1/2000 de fábrica: se descarta y se ordena por el volcado)
+    # y el importado sin pistas con el reloj un día adelantado (26 h tras el volcado: se usa, con aviso)
+    bin_con(P / "ORIGEN Bin.avb", [("ENTREVISTA ALCALDE", sin_media % 0xE03, 50, r"E:\material\entrevista alcalde.mov",
+                                     {"Shoot Date": "01/01/2000", "Shoot Time": "00:03:00"}),
+                                    ("RECURSO SIN PISTAS", ur, 50, r"D:\varios\plano recurso.mp4",
+                                     {"Shoot Date": "16/09/2021", "Shoot Time": "12:00:00"})])
     bin_con(P / "compras.avb", [("VISTA AEREA", uc, 50, r"C:\material\compras\vista aerea.mp4")])
 
     # Huérfano con vídeo, solo-audio huérfano y fichero en cuarentena.

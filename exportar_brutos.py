@@ -925,9 +925,33 @@ def ganancia_r128(lufs):
     return round(max(-R128_TOPE, min(R128_TOPE, R128_OBJETIVO - lufs)), 1)
 
 
-def medir_audio(ffmpeg, ruta):
-    """Sonoridad integrada (LUFS) y pico (dBFS) de la primera pista de audio de un fichero. None si no se puede."""
-    cmd = [ffmpeg, "-nostats", "-hide_banner", "-i", str(ruta), "-map", "0:a:0", "-af", "ebur128=peak=sample", "-f", "null", "-"]
+def canales_clip(clip, mxf_por_ruta):
+    """Cada canal de audio del clip, en orden: [{"ruta", "flujo", "canal", "de"}]. Primero el audio que vaya dentro del
+    fichero de vídeo (un MOV o un MXF OP1a de cámara), luego los ficheros de audio; en cada fichero, sus flujos de audio, y
+    en cada flujo, sus canales. En la media de Avid (un fichero mono por pista) es una pista por fichero, como siempre; un
+    estéreo en un solo fichero da dos y un 5.1, seis."""
+    salida = []
+    video = clip.get("fichero_video")
+    for ruta in [video] + [r for r in clip.get("ficheros") or [] if r != video]:
+        flujos = [x for x in (mxf_por_ruta.get(ruta) or {}).get("pistas", []) if x.get("tipo") == "audio"] if ruta else []
+        for i, flujo in enumerate(flujos):
+            n = max(1, int(flujo.get("canales") or 1))
+            salida += [{"ruta": ruta, "flujo": i, "canal": c, "de": n} for c in range(n)]
+    return salida
+
+
+def duracion_video(clip, mxf_por_ruta):
+    """Duración del vídeo del clip (la del flujo de vídeo; si no consta, la del fichero o la del clip)."""
+    m = mxf_por_ruta.get(clip.get("fichero_video")) or {}
+    pv = next((x for x in m.get("pistas", []) if x.get("tipo") == "video"), {})
+    return pv.get("duracion") or m.get("duracion") or clip.get("duracion")
+
+
+def medir_audio(ffmpeg, ruta, flujo=0, canal=None):
+    """Sonoridad integrada (LUFS) y pico (dBFS) de un canal de audio de un fichero (flujo de audio y canal dentro de él;
+    sin canal, el flujo entero). None si no se puede."""
+    filtro = ("pan=mono|c0=c%d," % canal if canal is not None else "") + "ebur128=peak=sample"
+    cmd = [ffmpeg, "-nostats", "-hide_banner", "-i", str(ruta), "-map", "0:a:%d" % flujo, "-af", filtro, "-f", "null", "-"]
     try:
         r = subprocess.run(cmd, capture_output=True, timeout=600, **flags_subproceso())
     except Exception as e:
@@ -1060,13 +1084,14 @@ def args_video(plan, mxf_video, cfg):
 
 def hacer_segmento(clip, idx, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, nombre=None, info=None):
     """Convierte un clip (V + sus audios) en un MXF OP1a intermedio homogéneo, con las pistas de audio del bruto según
-    enrutado_audio (las que el clip no tiene, en silencio) y los niveles pedidos. info (dict) recibe lo medido para el
+    enrutado_audio (las que el clip no tiene, en silencio) y los niveles pedidos. Cada pista del bruto es un canal del clip
+    (canales_clip): un estéreo da dos pistas. Todo el audio dura lo mismo que el vídeo (el corto se rellena con silencio y
+    el largo se corta), para que al unir los clips el sonido no se desplace. info (dict) recibe lo medido para el
     shotlist: lufs, pico, ganancia, aviso_audio. Devuelve (ruta | None, error, comando)."""
     info = {} if info is None else info
     salida = tmp / (nombre or "seg_%05d.mxf" % idx)
     video = ruta_larga(Path(origen) / clip["fichero_video"])
-    audios = [ruta_larga(Path(origen) / r) for r in clip["ficheros"] if r != clip["fichero_video"]
-              and any(p["tipo"] == "audio" for p in mxf_por_ruta.get(r, {}).get("pistas", []))]
+    audios = canales_clip(clip, mxf_por_ruta)  # "pista del clip" = canal
     n = plan["pistas_audio"]
     enrutado = list(cfg.get("enrutado_audio") or [])
     fuentes = [(enrutado[k] if k < len(enrutado) else k + 1) for k in range(n)]  # pista del clip (1..8) o 0 = silencio
@@ -1082,7 +1107,8 @@ def hacer_segmento(clip, idx, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, nomb
     medidas = {}
     if usadas and (cfg.get("medidor_audio", True) or niveles == "r128"):
         for r in usadas:
-            medidas[r] = medir_audio(ffmpeg, audios[r - 1])
+            ch = audios[r - 1]
+            medidas[r] = medir_audio(ffmpeg, ruta_larga(Path(origen) / ch["ruta"]), ch["flujo"], ch["canal"] if ch["de"] > 1 else None)
     ganancias = {}
     for k, r in enumerate(fuentes):
         if not 0 < r <= len(audios):
@@ -1112,24 +1138,29 @@ def hacer_segmento(clip, idx, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, nomb
         info["aviso_audio"] = "; ".join(avisos)
 
     cmd = [ffmpeg, "-v", "error", "-y", "-i", str(video)]
-    entrada = {}
+    entradas = {clip["fichero_video"]: 0}  # fichero -> número de entrada de ffmpeg
     for r in usadas:
-        entrada[r] = len(entrada) + 1
-        cmd += ["-i", str(audios[r - 1])]
-    if any(not 0 < r <= len(audios) for r in fuentes):
-        dur = clip.get("duracion")  # silencio de la duración del clip: con -shortest se recortaría el vídeo a la pista más corta
-        entrada[0] = len(entrada) + 1
-        cmd += (["-t", "%.3f" % dur] if dur else []) + ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono"]
-    cmd += ["-map", "0:v:0"]
-    for r in fuentes:
-        cmd += ["-map", "%d:a:0" % entrada[r if 0 < r <= len(audios) else 0]]
+        if audios[r - 1]["ruta"] not in entradas:
+            entradas[audios[r - 1]["ruta"]] = len(entradas)
+            cmd += ["-i", ruta_larga(Path(origen) / audios[r - 1]["ruta"])]
+    grafo = []
+    for k, r in enumerate(fuentes):
+        if 0 < r <= len(audios):  # un canal concreto del clip, a mono y 48 kHz
+            ch = audios[r - 1]
+            cadena = "[%d:a:%d]pan=mono|c0=c%d,aresample=48000" % (entradas[ch["ruta"]], ch["flujo"], ch["canal"])
+        else:
+            cadena = "anullsrc=r=48000:cl=mono"
+        if k in ganancias:
+            cadena += ",volume=%.1fdB" % ganancias[k]
+        grafo.append(cadena + ",apad[a%d]" % k)  # apad: el audio corto se alarga con silencio hasta el final del vídeo
+    if grafo:
+        cmd += ["-filter_complex", ";".join(grafo)]
+    cmd += ["-map", "0:v:0"] + sum((["-map", "[a%d]" % k] for k in range(len(fuentes))), [])
     cmd += args_video(plan, mxf_por_ruta.get(clip["fichero_video"], {}), cfg)
     if n:
         cmd += ["-c:a", "pcm_s24le", "-ar", "48000", "-ac", "1"]
-        for k, g in sorted(ganancias.items()):
-            cmd += ["-filter:a:%d" % k, "volume=%.1fdB" % g]
-    if 0 in entrada and not clip.get("duracion"):
-        cmd += ["-shortest"]
+    dur = duracion_video(clip, mxf_por_ruta)
+    cmd += ["-t", "%.3f" % dur] if dur else ["-shortest"]  # todo, también el audio largo, a la duración del vídeo
     cmd += ["-f", "mxf", str(salida)]
     ok, err = ejecutar_ffmpeg(cmd, timeout_segmento(clip.get("duracion")))
     if not ok:

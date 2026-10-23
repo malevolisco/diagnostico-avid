@@ -1,0 +1,76 @@
+# Plan: que valga para cualquier disco
+
+**Diseño:** `docs/diseno_cualquier_disco.md` (aprobado por Adrián el 23/10/2026: "me encaja"). Si este plan y el diseño no coinciden, manda el diseño.
+
+**Restricciones comunes:**
+- Destino XDCAM HD422 50 Mb/s 1080i25 16:9; el disco de origen solo se lee.
+- Nada falla en silencio: lo que no se puede, se salta y se lista con el motivo.
+- Cada parte se fusiona por separado, con su build de Windows en verde, el escaneo Opsera antes de cada commit y los commits a nombre de Adrián.
+- El disco simulado y `comprobar_resultado.py` crecen con cada parte.
+
+---
+
+### Parte 1: audio por canales
+
+**Ficheros:** `exportar_brutos.py`, `diagnostico_avid.py` (`agrupar_clips`), `tests/test_unitarios.py`, `tests/test_mxf.py`.
+
+- `canales_clip(clip, mxf_por_ruta) -> [{"ruta", "flujo", "canal", "de"}]`: cada canal de audio del clip, en orden.
+  - Primero el audio que vaya dentro del fichero de vídeo (MOV o MXF OP1a de cámara), luego los ficheros de audio por su orden.
+  - En cada fichero, sus flujos de audio; en cada flujo, sus canales.
+- `num_audio` de cada clip pasa a ser el número de canales (en la media de Avid, que es mono, no cambia nada).
+- `hacer_segmento`:
+  - cada pista del bruto sale de un canal (`pan=mono|c0=cN`), a 48 kHz;
+  - con `apad` y `-t` igual a la duración del vídeo: el audio más corto se rellena con silencio y el más largo se corta, así que el sonido nunca se desplaza al unir;
+  - el silencio sale de `anullsrc` en el mismo grafo;
+  - las ganancias van en la misma cadena de filtros.
+- `medir_audio(ffmpeg, ruta, flujo=0, canal=None)`: mide un canal concreto.
+- Las pistas que pasen de 8 se avisan en el shotlist ("no entran las pistas 9… del clip", como ahora).
+
+**Pruebas:**
+- Unitarias de `canales_clip`:
+  - Avid OP-Atom (mono por fichero) igual que antes;
+  - un MOV con estéreo dentro, que da 2 canales;
+  - un MOV con estéreo más un WAV de 5.1 aparte, que da 8.
+- Con ffmpeg real:
+  - estéreo con el canal izquierdo con tono y el derecho en silencio: sale la pista 1 con sonido y la 2 muda;
+  - 5.1: salen 6 pistas, más 2 de silencio en XDCAM;
+  - audio de 1 s con vídeo de 2 s: todas las pistas duran 2 s;
+  - ficha técnica conforme.
+- Lo de siempre: el disco simulado de principio a fin, reanudar, montaje y ventana.
+
+### Parte 2: vídeo girado, HDR y velocidad variable
+
+- El perfil de vídeo añade rotación, color (primarias, transferencia, matriz) y velocidad (`r_frame_rate` frente a `avg_frame_rate`).
+- `filtros_xdcam`:
+  - `transpose` según la rotación;
+  - HLG o PQ: `zscale` y `tonemap` a BT.709; si no hay `zscale`, sin ese paso y con aviso;
+  - velocidad variable: `fps=50` con el reloj real del fichero y el audio con `aresample=async`.
+- Si el campo es `unknown`, un muestreo corto con `idet`.
+- La build de Windows comprueba que el ffmpeg trae `zscale`.
+- Pruebas con ffmpeg real (vertical, HLG en HEVC de 10 bits, velocidad variable, 4K 50p, 23,976p, SD anamórfico) y los mismos casos en el disco simulado.
+
+### Parte 3: media enlazada (AMA) y varias carpetas
+
+- El análisis pasa ffprobe también por MOV, MP4, MXF, MTS, AVI y WAV fuera de `Avid MediaFiles` cuando un bin los enlaza.
+- Para encontrar la media:
+  1. la ruta del bin, cambiando la letra de unidad;
+  2. si no está, por nombre y tamaño en el inventario.
+- Página Disco: "Añadir otra carpeta de media…".
+- Aviso de disco de Mac cuando no se puede leer o la media está y no se ve.
+- Disco simulado: un MOV enlazado con estéreo dentro, que debe entrar en el bruto con sus 2 pistas.
+
+### Parte 4: origen por señales y pantalla "Origen del material"
+
+- `clasificar(clip) -> (clase, motivo, seguro)` con las señales del diseño.
+- `origen.json` en la carpeta de brutos; reglas recordadas en `config_brutos.json → reglas_origen`.
+- Pestaña "Origen del material" en Montaje.
+- Shotlist con la columna Origen.
+- Ante la duda, entra marcado "para revisar".
+
+### Parte 5: fechas imposibles
+
+Fecha de grabación antes de 2000, en el futuro o el 1/1 de fábrica: se ignora y se avisa. Además, aviso de reloj desfasado de más de 12 h.
+
+### Parte 6: documentación y entrega final
+
+`INSTRUCCIONES.txt`, `LEEME_tecnico.md` y `NOTAS_DESARROLLO.md` en cada parte; aquí el repaso final.

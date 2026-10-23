@@ -418,6 +418,19 @@ class NombresDeBruto(unittest.TestCase):
         self.assertEqual(eb.nombre_bruto("P", [f("2021-10-02"), f("2021-09-19")]), "P SEPTIEMBRE A OCTUBRE DE 2021")
 
 
+def audio_del_comando(cmd):
+    """[(fichero o "anullsrc=…", cadena de filtros)] de cada pista de audio de un comando de hacer_segmento, en orden."""
+    entradas = [cmd[i + 1] for i, x in enumerate(cmd) if x == "-i"]
+    grafo = cmd[cmd.index("-filter_complex") + 1].split(";") if "-filter_complex" in cmd else []
+    salida = []
+    for cadena in grafo:
+        if cadena.startswith("["):
+            salida.append((Path(entradas[int(cadena[1:].split(":")[0])]).name, cadena))
+        else:
+            salida.append(("anullsrc=r=48000:cl=mono", cadena))
+    return salida
+
+
 class OpcionesExportacion(unittest.TestCase):
     """Panel de opciones: validación, pistas en XDCAM, enrutado, ganancias, R128, medidor y firma."""
 
@@ -433,7 +446,7 @@ class OpcionesExportacion(unittest.TestCase):
             return True, ""
         eb.ejecutar_ffmpeg = ejecutar
         self.medidas = {}
-        eb.medir_audio = lambda ffmpeg, ruta: self.medidas.get(Path(ruta).name, {"lufs": -23.0, "pico": -6.0})
+        eb.medir_audio = lambda ffmpeg, ruta, *canal: self.medidas.get(Path(ruta).name, {"lufs": -23.0, "pico": -6.0})
 
     def tearDown(self):
         eb.ejecutar_ffmpeg, eb.medir_audio = self._orig
@@ -479,10 +492,8 @@ class OpcionesExportacion(unittest.TestCase):
         plan = {"modo": "convertir", "pistas_audio": pistas, "destino": {"xdcam": True}, "fps": 25.0}
         info = {}
         seg, err, cmd = eb.hacer_segmento(clip, 1, plan, self.tmp, mxf, self.tmp, "ffmpeg", cfg, info=info)
-        entradas = [cmd[i + 1] for i, x in enumerate(cmd) if x == "-i"]
-        mapas = [cmd[i + 1] for i, x in enumerate(cmd) if x == "-map"]
-        audio = [Path(entradas[int(m.split(":")[0])]).name for m in mapas[1:]]
-        return audio, cmd, info
+        self.cadenas = audio_del_comando(cmd)
+        return [nombre for nombre, _ in self.cadenas], cmd, info
 
     def test_enrutado_y_silencio(self):
         audio, _, info = self.segmento(dict(self.cfg, enrutado_audio=[2, 1]))
@@ -498,18 +509,17 @@ class OpcionesExportacion(unittest.TestCase):
 
     def test_ganancia_por_pista(self):
         _, cmd, info = self.segmento(dict(self.cfg, niveles_audio="ganancia", ganancia_db=[3, 0, -2]))
-        texto = " ".join(cmd)
-        self.assertIn("-filter:a:0 volume=3.0dB", texto)
-        self.assertNotIn("-filter:a:1 ", texto)
-        self.assertNotIn("-filter:a:2 ", texto)  # la pista 3 es silencio: no se toca
+        ganancias = [cadena for _, cadena in self.cadenas]
+        self.assertIn("volume=3.0dB", ganancias[0])
+        self.assertNotIn("volume", ganancias[1])
+        self.assertNotIn("volume", ganancias[2])  # la pista 3 es silencio: no se toca
         self.assertEqual(info["ganancia"], "1: +3.0")
 
     def test_r128_con_tope_y_medidor(self):
         self.medidas = {"A1.mxf": {"lufs": -45.0, "pico": -30.0}, "A2.mxf": {"lufs": -23.0, "pico": 0.0}}
         _, cmd, info = self.segmento(dict(self.cfg, niveles_audio="r128"))
-        texto = " ".join(cmd)
-        self.assertIn("-filter:a:0 volume=12.0dB", texto)
-        self.assertNotIn("-filter:a:1 ", texto)  # ya está a -23
+        self.assertIn("volume=12.0dB", self.cadenas[0][1])
+        self.assertNotIn("volume", self.cadenas[1][1])  # ya está a -23
         self.assertEqual((info["lufs"], info["pico"]), (-23.0, 0.0))
         self.assertIn("saturado", info["aviso_audio"])
         self.assertIn("tope", info["aviso_audio"])
@@ -522,7 +532,7 @@ class OpcionesExportacion(unittest.TestCase):
 
     def test_sin_medidor_no_mide(self):
         llamadas = []
-        eb.medir_audio = lambda ffmpeg, ruta: llamadas.append(ruta) or {"lufs": None, "pico": None}
+        eb.medir_audio = lambda ffmpeg, ruta, *canal: llamadas.append(ruta) or {"lufs": None, "pico": None}
         self.segmento(dict(self.cfg, medidor_audio=False))
         self.assertEqual(llamadas, [])
 

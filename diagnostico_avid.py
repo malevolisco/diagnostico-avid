@@ -776,7 +776,6 @@ def agrupar_clips(mxf):
     clips = []
     for clave, fichs in grupos.items():
         video = [f for f in fichs if any(p["tipo"] == "video" for p in f["pistas"])]
-        audio = [f for f in fichs if any(p["tipo"] == "audio" for p in f["pistas"])]
         pv = next((p for f in video for p in f["pistas"] if p["tipo"] == "video"), None)
         dur = max((f["duracion"] or 0) for f in fichs) if fichs else None
         clips.append({
@@ -785,7 +784,7 @@ def agrupar_clips(mxf):
             "ficheros": [f["ruta"] for f in fichs],
             "fichero_video": video[0]["ruta"] if video else None,
             "num_video": len(video),
-            "num_audio": len(audio),
+            "num_audio": sum(max(1, int(p.get("canales") or 1)) for f in fichs for p in f["pistas"] if p["tipo"] == "audio"),  # canales
             "duracion": dur,
             "bytes": sum(f["bytes"] for f in fichs),
             "codec_video": pv["codec"] if pv else None,

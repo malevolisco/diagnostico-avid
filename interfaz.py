@@ -76,7 +76,7 @@ class App:
         self.zip_minis = tk.BooleanVar(value=True)
         self.seguido = tk.BooleanVar(value=False)
         self.cola = queue.Queue()
-        self.estado = {"ocupado": None, "cerrar": False, "proyectos": None}  # ocupado: None | "analisis" | "exportacion" | "actualizacion"
+        self.estado = {"ocupado": None, "cerrar": False, "proyectos": None, "media_extra": []}  # ocupado: None | "analisis" | "exportacion" | "actualizacion"
         self.pagina = None
         self.montaje = None  # PantallaMontaje
         self.clave_montaje = None
@@ -202,6 +202,16 @@ class App:
             ttk.Entry(t, textvariable=var).grid(row=fila + 1, column=1, sticky="ew", pady=4)
             ttk.Button(t, text="Elegir…", command=lambda v=var, tt=titulo: self.elegir_carpeta(v, tt)).grid(row=fila + 1, column=2, padx=(8, 0))
             ttk.Label(t, text=ayuda, style="Tarjeta.Suave.TLabel").grid(row=fila + 1, column=3, sticky="w", padx=(10, 0))
+        fila_extra = len(("Disco de Avid", "Informe", "Carpeta de brutos")) + 1
+        ttk.Label(t, text="Más media", style="Tarjeta.TLabel", width=18).grid(row=fila_extra, column=0, sticky="w", pady=4)
+        self.lbl_extra = ttk.Label(t, text="", style="Tarjeta.Suave.TLabel")
+        self.lbl_extra.grid(row=fila_extra, column=1, sticky="w", pady=4)
+        caja = ttk.Frame(t, style="Cabecera.TFrame")  # mismo fondo que la tarjeta, sin borde
+        caja.grid(row=fila_extra, column=2, columnspan=2, sticky="w", padx=(8, 0))
+        ttk.Button(caja, text="Añadir…", command=self.anadir_media).pack(side="left")
+        self.bt_quitar_extra = ttk.Button(caja, text="Quitar", style="Fantasma.TButton", command=self.quitar_media)
+        self.bt_quitar_extra.pack(side="left", padx=(6, 0))
+        self.pintar_media_extra()
         t.columnconfigure(1, weight=1)
 
         fila = ttk.Frame(izq, style="Fondo.TFrame")
@@ -243,6 +253,25 @@ class App:
         self.bt_siguiente = ttk.Button(t, text="Ir a Montaje →", style="Elegido.TButton", command=lambda: self.ir("montaje"))
         self.bt_siguiente.pack(anchor="w", pady=(10, 0))
         self.pintar_proyectos()
+
+    def pintar_media_extra(self):
+        extra = self.estado["media_extra"]
+        self.lbl_extra.configure(text="; ".join(extra) if extra else "opcional: media en otros discos")
+        self.bt_quitar_extra.state(["!disabled"] if extra else ["disabled"])
+
+    def anadir_media(self):
+        from tkinter import filedialog
+        if self.estado["ocupado"]:
+            return
+        carpeta = filedialog.askdirectory(title="Otra carpeta con media (solo se lee)", parent=self.raiz)
+        if carpeta and carpeta not in self.estado["media_extra"]:
+            self.estado["media_extra"].append(carpeta)
+            self.pintar_media_extra()
+
+    def quitar_media(self):
+        if not self.estado["ocupado"] and self.estado["media_extra"]:
+            self.estado["media_extra"].pop()
+            self.pintar_media_extra()
 
     def plegar(self):
         if self.avanzadas.winfo_ismapped():
@@ -352,7 +381,7 @@ class App:
         # las variables de tkinter se leen aquí: el hilo no puede tocarlas
         datos = dict(origen=self.origen.get(), destino_base=self.destino.get(), hacer_miniaturas=self.minis.get(),
                      brutos=self.brutos.get() if seguido else None, zip_miniaturas=self.zip_minis.get(),
-                     proyectos_brutos=self.estado["proyectos"] if seguido else None)
+                     proyectos_brutos=self.estado["proyectos"] if seguido else None, carpetas_media=list(self.estado["media_extra"]))
         threading.Thread(target=self.hilo_analisis, args=(datos,), daemon=True).start()
 
     def hilo_analisis(self, datos):

@@ -148,7 +148,7 @@ class AudioPorCanales(unittest.TestCase):
         d = json.loads(r.stdout)
         pistas = [{"tipo": s["codec_type"], "canales": s.get("channels"), "ancho": s.get("width"), "alto": s.get("height"),
                    "fps": s.get("r_frame_rate"), "field_order": s.get("field_order"), "color_primarias": s.get("color_primaries"),
-                   "color_transfer": s.get("color_transfer"),
+                   "color_transfer": s.get("color_transfer"), "color_matriz": s.get("color_space"),
                    "duracion": float(s["duration"]) if s.get("duration") else None} for s in d["streams"]]
         return {"ruta": nombre, "pistas": pistas, "duracion": float(d["format"]["duration"])}
 
@@ -248,15 +248,24 @@ class VideoDeCualquierOrigen(AudioPorCanales):
         self.assertNotIn("aviso_video", info)
         return self.psnr(seg, self.tmp / "ref.mkv"), info
 
+    # Umbrales medidos (oct. 2026): sin convertir el HDR sale ~14-15 dB frente a la original y con el mapeo de tonos hable
+    # ~16; con la conversión, ~30 en Linux (ffmpeg 6.1) y ~24 en Windows (ffmpeg 7.1.1, otra versión de zimg y x265).
     def test_hdr_hlg_se_pasa_a_bt709(self):
         psnr, info = self.hdr("arib-std-b67", "hlg.mov", 100)
         self.assertEqual(info["color"], "HLG")
-        self.assertGreater(psnr, 25)  # sin convertir sale ~15 dB: colores lavados
+        self.assertGreater(psnr, 21, "PSNR %.1f dB" % psnr)
 
     def test_hdr_pq_se_pasa_a_bt709(self):
         psnr, info = self.hdr("smpte2084", "pq.mov", 203)
         self.assertEqual(info["color"], "PQ")
-        self.assertGreater(psnr, 25)
+        self.assertGreater(psnr, 21, "PSNR %.1f dB" % psnr)
+
+    def test_hd_sin_etiqueta_de_color_no_cambia_de_color(self):
+        """HD sin la matriz de color en el fichero: es BT.709 (ffmpeg suponía BT.601 y corría los colores: 24,7 dB)."""
+        self.ff("-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=25:d=2", "-vf", "format=yuv422p", "-c:v", "ffv1", str(self.tmp / "sin_etiqueta.mkv"))
+        seg, _ = self.convertir("sin_etiqueta.mkv")
+        psnr = self.psnr(seg, self.tmp / "sin_etiqueta.mkv")
+        self.assertGreater(psnr, 35, "PSNR %.1f dB" % psnr)
 
     def test_entrelazado_sin_marcar_se_detecta(self):
         """Un fichero entrelazado que no lo dice: idet lo ve y se separan los campos como debe."""

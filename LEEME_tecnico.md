@@ -141,6 +141,25 @@ Se crea con valores por defecto al primer uso. Claves: `formato_salida` (`xdcam_
 - Rutas de Windows antiguas sin UTF-8: pyavb las lee como Mac Roman ("Mis vÌdeos", "IÒigo"); se recodifican como Windows-1252 (1.012 clips).
 - Dos bins (`TARJETA 1/2 POPOCATEPETL.avb`) dan "not a avb file"; hay copias `… POPO OK.avb` que sí se leen.
 
+## Media enlazada (AMA) y media repartida en varios discos (oct. 2026)
+
+- **Media enlazada** (`buscar_enlazados`, `localizar`). Un clip de bin sin MXF de Avid (enlazado con AMA, o importado y con la media borrada) cuyo fichero original está en el disco se analiza (MOV, MP4, MXF, MTS, AVI, WAV…) y entra como cualquier clip (`cruce.json → modo_coincidencia.enlace`).
+  - El fichero se busca por nombre. Si hay varios con el mismo nombre (C0001.MP4 de dos tarjetas), gana el que comparte más carpetas por el final de la ruta, así que da igual la letra de unidad, que venga de un Mac o que se haya movido la carpeta. Si no se puede saber cuál es, no se adivina.
+  - En el bruto, el clip lleva el nombre del bin.
+  - Solo se analizan los ficheros enlazados por algún bin: las copias de tarjetas que hay sueltas en el disco no se duplican.
+- **Más carpetas de media** (`carpetas_media`, `--media-extra "A;B"`, "Más media" en la página Disco). Se inventarían con rutas completas (`Path(origen) / ruta` vale igual). Así un clip cuya media de Avid está en otro disco se encuentra por su UMID como siempre.
+- **Avisos**:
+  - clips enlazados encontrados;
+  - clips enlazados a ficheros que no están, con un ejemplo y el consejo de añadir la carpeta;
+  - si la mayoría de esas rutas son de Mac (`/Volumes/…`, `Macintosh HD:`), se dice que hace falta leer ese disco en un Mac o copiarlo.
+- **Disco simulado**: proyecto ENLACES con un vertical de móvil con estéreo (izquierdo mudo, derecho con tono) en `RODAJE/XDROOT/Clip` y un HDR HLG de GoPro en `RODAJE/DCIM/100GOPRO`, enlazados con la letra E:, y un clip cuya media está en `disco_prueba_media2`. El comprobador mira:
+  - que entren los tres;
+  - que el vertical salga derecho y centrado (cropdetect: ~608 de ancho);
+  - que la pista 1 vaya muda y la 2 con sonido;
+  - que el GoPro salga como HLG.
+- También se arregla en el modo "formato mayoritario" (`formato_salida = auto`): ya encaja sin deformar, convierte HDR y lee el HD sin etiqueta como BT.709, igual que en XDCAM.
+- **HD sin etiqueta de color**: ffmpeg suponía BT.601 y los colores salían algo corridos (24,7 dB de PSNR frente al original). Ahora el HD sin etiqueta se lee como BT.709 y el SD como BT.601 (`matriz_entrada`): idéntico.
+
 ## Discos de China (Corresponsalía de Pekín, oct. 2026)
 
 Por un disco real de la corresponsalía de Pekín (carpetas de proyecto `AAAAMMDD_China …`, DNxHD 120 1080i50 con 8 pistas, tarjetas Sony XDROOT, material de dron y de Sony A7 importado desde el PC y un bin `… agencias.avb`):

@@ -263,9 +263,11 @@ def clasificar_origen(reglas, nombre, fichero_origen):
 # Paso 1: inventario del disco
 # ---------------------------------------------------------------------------
 
-def inventariar(origen, progreso):
-    """Recorre todo el disco. Devuelve lista de dicts con cada fichero."""
+def inventariar(origen, progreso, absoluta=False):
+    """Recorre todo el disco. Devuelve lista de dicts con cada fichero. absoluta: las rutas se guardan completas (las de una
+    carpeta de media aparte, en otro disco); si no, relativas al disco de origen. Path(origen) / ruta vale para las dos."""
     raiz_disco = ruta_larga(origen, siempre=True)  # en Windows, \\?\ para poder leer rutas de más de 260 caracteres
+    base = Path(os.path.abspath(str(origen))) if absoluta else Path()
     ficheros = []
     n = 0
     for raiz, dirs, nombres in os.walk(raiz_disco, onerror=lambda e: no_legible(None, "carpeta", e)):
@@ -273,7 +275,7 @@ def inventariar(origen, progreso):
         dirs[:] = [d for d in dirs if d.lower() not in CARPETAS_SISTEMA]
         for nombre in nombres:
             ruta = Path(raiz) / nombre
-            rel = Path(relativa(raiz, raiz_disco), nombre)
+            rel = base / relativa(raiz, raiz_disco) / nombre
             try:
                 st = ruta.stat()
             except OSError as e:
@@ -732,8 +734,9 @@ def resumir_mxf(datos):
     }
 
 
-def analizar_mxf(ficheros, origen, ffprobe, progreso):
-    objetivo = [f for f in ficheros if f["ext"] == ".mxf"]
+def analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=None, enlazado=False):
+    """ffprobe de los MXF del inventario, o de los ficheros de objetivo (la media enlazada: enlazado=True)."""
+    objetivo = [f for f in ficheros if f["ext"] == ".mxf"] if objetivo is None else objetivo
     resultados = []
     total = len(objetivo)
     hechos = 0
@@ -745,7 +748,7 @@ def analizar_mxf(ficheros, origen, ffprobe, progreso):
         partes = [p.lower() for p in Path(f["ruta"]).parts]
         base = {"ruta": f["ruta"], "nombre": f["nombre"], "bytes": f["bytes"], "modificado": f["modificado"],
                 "en_cuarentena": "quarantined files" in partes, "en_creating": "creating" in partes,
-                "en_media": es_ruta_media(partes), "error": err}
+                "en_media": es_ruta_media(partes), "error": err, "enlazado": enlazado}
         if datos:
             base.update(resumir_mxf(datos))
         return base
@@ -759,7 +762,7 @@ def analizar_mxf(ficheros, origen, ffprobe, progreso):
             resultados.append(fut.result())
             hechos += 1
             if hechos % 25 == 0 or hechos == total:
-                progreso("MXF: %d/%d analizados" % (hechos, total))
+                progreso("%s: %d/%d analizados" % ("Media enlazada" if enlazado else "MXF", hechos, total))
     resultados.sort(key=lambda r: r["ruta"])
     LOG.info("MXF analizados: %d (%d con error)", len(resultados), sum(1 for r in resultados if r["error"]))
     return resultados
@@ -776,7 +779,7 @@ def agrupar_clips(mxf):
     for m in mxf:
         if m.get("error"):
             continue
-        clave = m.get("umid") or ("NOMBRE:" + (m.get("nombre_clip") or m["nombre"]))
+        clave = m.get("umid") or ("ENLACE:" + m["ruta"] if m.get("enlazado") else "NOMBRE:" + (m.get("nombre_clip") or m["nombre"]))
         grupos[clave].append(m)
 
     clips = []
@@ -812,7 +815,74 @@ def agrupar_clips(mxf):
 RE_NOMBRE_RENDER = re.compile(r",[^,]+,\d+(\.\w+\.\d+)*$")
 
 
-def cruzar(proyectos, bins, clips, mxf=()):
+EXT_ENLAZABLE = {".mov", ".mp4", ".m4v", ".mxf", ".mts", ".m2ts", ".avi", ".mkv", ".mpg", ".mpeg", ".mp2", ".wav", ".aif", ".aiff",
+                 ".mp3", ".m4a", ".3gp"}
+
+
+def partes_ruta(texto):
+    """Componentes de una ruta de Windows, Mac (/Volumes/..., 'Macintosh HD:...') o Linux."""
+    return [x for x in re.split(r"[\\/:]+", str(texto or "")) if x]
+
+
+def localizar(fichero_origen, indice):
+    """El fichero del disco que corresponde a la ruta que guarda el bin (media enlazada): por nombre y, si hay varios
+    con ese nombre (C0001.MP4 de dos tarjetas), el que comparte más carpetas por el final. Da igual la letra de unidad,
+    que venga de un Mac o que la carpeta se haya movido. None si no está o si no se puede saber cuál es."""
+    partes = [x.lower() for x in partes_ruta(fichero_origen)]
+    candidatos = indice.get(partes[-1], []) if partes else []
+    if len(candidatos) <= 1:
+        return candidatos[0] if candidatos else None
+
+    def comun(f):
+        q = [x.lower() for x in partes_ruta(f["ruta"])]
+        n = 0
+        while n < min(len(q), len(partes)) and q[-1 - n] == partes[-1 - n]:
+            n += 1
+        return n
+    puntos = sorted(((comun(f), f["ruta"], f) for f in candidatos), key=lambda t: -t[0])
+    return puntos[0][2] if puntos[0][0] > puntos[1][0] else None
+
+
+def buscar_enlazados(bins, ficheros, mxf):
+    """Media enlazada (AMA) o importada cuya media de Avid no está: clips de bin sin MXF de Avid cuyo fichero original
+    (la ruta que guarda el bin) sí está en el disco. Devuelve (ficheros del inventario que hay que analizar,
+    {ruta del bin: ruta en el disco}, [rutas del bin que no están en el disco])."""
+    materiales = set()
+    for m in mxf:
+        if m.get("umid"):
+            materiales.add(material(m["umid"]))
+        materiales.update(material(p["file_package_umid"]) for p in m.get("pistas", []) if p.get("file_package_umid"))
+    indice = defaultdict(list)
+    for f in ficheros:
+        if f["ext"] in EXT_ENLAZABLE:
+            indice[f["nombre"].lower()].append(f)
+    ya = {m["ruta"] for m in mxf}
+    analizar, enlaces, faltan = {}, {}, []
+    for b in bins:
+        for clip in b["clips"] if b.get("ok") else []:
+            origen = clip.get("fichero_origen")
+            if not origen or clip.get("render") or origen in enlaces:
+                continue
+            ids = [(clip.get("mob_id") or {}).get(k) for k in ("le", "be")]
+            ids += [(fu.get("mob_id") or {}).get(k) for fu in clip.get("fuentes", []) for k in ("le", "be")]
+            if any(material(i) in materiales for i in ids if i):
+                continue  # tiene su media de Avid
+            f = localizar(origen, indice)
+            if f:
+                enlaces[origen] = f["ruta"]
+                if f["ruta"] not in ya:
+                    analizar[f["ruta"]] = f
+            else:
+                faltan.append(origen)
+    return list(analizar.values()), enlaces, sorted(set(faltan))
+
+
+def es_ruta_de_mac(texto):
+    t = str(texto or "")
+    return t.startswith(("/Volumes/", "/Users/")) or t.startswith("Macintosh HD") or bool(re.match(r"^[^\\/:]+:[^\\]", t) and not re.match(r"^[A-Za-z]:", t))
+
+
+def cruzar(proyectos, bins, clips, mxf=(), enlaces=None):
     """Relaciona clips de bin (MobID) con clips físicos (UMID de los MXF).
 
     Vía principal: número de material del master clip == material del
@@ -821,8 +891,11 @@ def cruzar(proyectos, bins, clips, mxf=()):
     Los clips 'precompute' (renders de efectos) se marcan y no cuentan como
     material. Un clip físico puede pertenecer a varios proyectos.
 
+    Media enlazada: enlaces ({ruta del bin: ruta en el disco}, de buscar_enlazados) para los que no tienen MXF de Avid.
+
     Cruce aproximado: solo en un proyecto donde el exacto no ha dado ninguna coincidencia, por nombre
     y duración, y solo si el emparejamiento es único en los dos sentidos (lo demás queda como ambiguo)."""
+    enlaces = enlaces or {}
     por_clave = {c["clave"]: c for c in clips}
     por_material = {material(c["clave"]): c for c in clips if c["clave"] and not c["clave"].startswith("NOMBRE:")}
     por_fichero_pkg = {}
@@ -873,6 +946,10 @@ def cruzar(proyectos, bins, clips, mxf=()):
                             break
                     if fisico:
                         break
+            if not fisico and clip.get("fichero_origen") in enlaces and enlaces[clip["fichero_origen"]] in ruta_a_clip:
+                fisico, modo = ruta_a_clip[enlaces[clip["fichero_origen"]]], "enlace"
+                if fisico["clave"].startswith("ENLACE:") and clip.get("nombre"):
+                    fisico["nombre"] = clip["nombre"]  # el nombre del bin, no el del fichero (C0001.MP4)
             for v in clip.get("volumenes", []):
                 pr["volumenes"][v] += 1
             if fisico:
@@ -1102,6 +1179,18 @@ def construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmp
     mezcla = [p["proyecto"] for p in cruce["por_proyecto"] if p["mezcla_formatos"]]
     if mezcla:
         avisos.append(("info", "Proyectos con mezcla de formatos (habrá que convertir al unir el bruto): " + ", ".join(mezcla)))
+    enl = cruce.get("enlazados") or {}
+    if enl.get("encontrados"):
+        avisos.append(("info", "%d clips con media enlazada (AMA) o importada encontrados fuera de Avid MediaFiles: se exportan como los demás."
+                       % enl["encontrados"]))
+    if enl.get("faltan"):
+        if enl.get("de_mac") and enl["de_mac"] >= enl["faltan"] / 2:
+            avisos.append(("aviso", "%d clips enlazados a ficheros de un disco de Mac (rutas como %s) que no están aquí. Windows no lee los "
+                                    "discos de Mac sin un programa aparte: hay que leerlos en un Mac o copiarlos a un disco de Windows y "
+                                    "añadirlos como carpeta de media." % (enl["faltan"], (enl.get("ejemplos_faltan") or ["?"])[0])))
+        else:
+            avisos.append(("aviso", "%d clips enlazados o importados cuyo fichero original no está en este disco (p. ej. %s). Si están en "
+                                    "otro disco, añádelo como carpeta de media y vuelve a analizar." % (enl["faltan"], (enl.get("ejemplos_faltan") or ["?"])[0])))
     especiales = casos_de_video(mxf)
     if especiales:
         avisos.append(("info", "Vídeo que se convierte con cuidado: %s. Sale XDCAM normal (enderezado, en BT.709, con su duración real)."
@@ -1341,7 +1430,7 @@ def guardar_json(destino, nombre, datos):
 
 
 def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_miniaturas=0, abrir=True, brutos=None,
-             zip_miniaturas=True, proyectos_brutos=None):
+             zip_miniaturas=True, proyectos_brutos=None, carpetas_media=()):
     """proyectos_brutos: nombres de los proyectos de los que hacer brutos (None = todos; "SIN_PROYECTO" = clips sin bin).
     El análisis se hace del disco entero (hace falta para saber qué media es de cada proyecto); las miniaturas,
     solo de los clips de los proyectos elegidos."""
@@ -1377,6 +1466,11 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
         NO_LEGIBLES.clear()
         ficheros = inventariar(origen, progreso)
         comprobar_origen(origen, analizando=True)
+        for extra in carpetas_media or ():  # media repartida en otros discos o carpetas (solo lectura)
+            if not Path(extra).exists():
+                raise FileNotFoundError("No existe la carpeta de media: %s" % extra)
+            progreso("1/6 Inventariando la carpeta de media %s..." % extra)
+            ficheros += inventariar(extra, progreso, absoluta=True)
         escribir_inventario_csv(ficheros, destino)
 
         progreso("2/6 Detectando proyectos y leyendo bins...")
@@ -1388,12 +1482,18 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
 
         progreso("3/6 Analizando ficheros MXF...")
         mxf = analizar_mxf(ficheros, origen, ffprobe, progreso) if ffmpeg_ok else []
+        enlazados, enlaces, faltan = buscar_enlazados(bins, ficheros, mxf) if ffmpeg_ok else ([], {}, [])
+        if enlazados:
+            progreso("3/6 Media enlazada (AMA) o importada sin MXF de Avid: %d ficheros en el disco..." % len(enlazados))
+            mxf = sorted(mxf + analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=enlazados, enlazado=True), key=lambda r: r["ruta"])
         comprobar_origen(origen, analizando=True)  # si no, los MXF sin leer parecerían dañados
         guardar_json(destino, "mxf.json", mxf)
 
         progreso("4/6 Reconstruyendo clips y cruzando con los bins...")
         clips = agrupar_clips(mxf)
-        cruce = cruzar(proyectos, bins, clips, mxf)
+        cruce = cruzar(proyectos, bins, clips, mxf, enlaces)
+        cruce["enlazados"] = {"encontrados": len(enlaces), "faltan": len(faltan), "ejemplos_faltan": faltan[:50],
+                              "de_mac": sum(1 for x in faltan if es_ruta_de_mac(x)), "carpetas_media": [str(x) for x in carpetas_media or ()]}
 
         if hacer_miniaturas and ffmpeg_ok:
             progreso("5/6 Generando miniaturas...")
@@ -1655,6 +1755,7 @@ def main():
     ap.add_argument("--brutos", help="Carpeta donde exportar un MXF por proyecto (fase 2)")
     ap.add_argument("--zip-sin-miniaturas", action="store_true", help="El zip para enviar no lleva las miniaturas (el informe local sí)")
     ap.add_argument("--proyectos", help='Brutos solo de estos proyectos, separados por ";" (SIN_PROYECTO = clips sin bin). Por defecto, todos')
+    ap.add_argument("--media-extra", help='Otras carpetas con media del disco (media repartida en varios discos), separadas por ";". Solo se leen')
     ap.add_argument("--listar-proyectos", action="store_true", help="Lista los proyectos de --origen (lectura rápida) y sale")
     ap.add_argument("--usar-analisis", metavar="CARPETA", help="Exporta los brutos (--brutos) con un análisis ya hecho (carpeta Diagnostico_...), sin repetirlo")
     ap.add_argument("--sin-actualizar", action="store_true", help="Sin efecto (se mantiene por compatibilidad): ya no se busca versión nueva al abrir")
@@ -1691,7 +1792,8 @@ def main():
         ejecutar(args.origen, args.destino, hacer_miniaturas=not args.sin_miniaturas,
                  max_miniaturas=args.max_miniaturas, abrir=not args.no_abrir, brutos=args.brutos,
                  zip_miniaturas=not args.zip_sin_miniaturas,
-                 proyectos_brutos=[x.strip() for x in args.proyectos.split(";") if x.strip()] if args.proyectos else None)
+                 proyectos_brutos=[x.strip() for x in args.proyectos.split(";") if x.strip()] if args.proyectos else None,
+                 carpetas_media=[x.strip() for x in args.media_extra.split(";") if x.strip()] if args.media_extra else ())
         return
     try:
         lanzar_gui(sin_actualizar=args.sin_actualizar)

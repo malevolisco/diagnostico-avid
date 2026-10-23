@@ -1102,6 +1102,44 @@ class DiscosDeChina(unittest.TestCase):
         self.assertEqual(eb.ruta_larga("corta"), "corta")
 
 
+@unittest.skipIf(da is None, "sin pyavb")
+class MediaEnlazada(unittest.TestCase):
+    """Media enlazada (AMA) o importada sin MXF de Avid: el fichero original se busca en el disco esté donde esté."""
+
+    def inventario(self, rutas):
+        return [{"ruta": r, "nombre": r.replace("\\", "/").rsplit("/", 1)[-1], "ext": "." + r.rsplit(".", 1)[-1].lower()} for r in rutas]
+
+    def indice(self, rutas):
+        from collections import defaultdict
+        i = defaultdict(list)
+        for f in self.inventario(rutas):
+            i[f["nombre"].lower()].append(f)
+        return i
+
+    def test_localizar(self):
+        i = self.indice([r"RODAJE\TARJETA A\XDROOT\Clip\C0001.MP4", r"RODAJE\TARJETA B\XDROOT\Clip\C0001.MP4", r"varios\dron.mov"])
+        # otra letra de unidad, y dos C0001.MP4: manda la carpeta de la tarjeta
+        self.assertEqual(da.localizar(r"E:\RODAJE\TARJETA B\XDROOT\Clip\C0001.MP4", i)["ruta"], r"RODAJE\TARJETA B\XDROOT\Clip\C0001.MP4")
+        self.assertEqual(da.localizar("/Volumes/RODAJE/varios/DRON.MOV", i)["ruta"], r"varios\dron.mov")  # de un Mac y en mayúsculas
+        self.assertIsNone(da.localizar(r"E:\otro\C0001.MP4", i))  # dos candidatos y ninguno encaja mejor: no se adivina
+        self.assertIsNone(da.localizar(r"E:\no_esta.mov", i))
+
+    def test_solo_los_que_no_tienen_media_de_avid(self):
+        bins = [{"ok": True, "clips": [
+            {"nombre": "con media", "fichero_origen": r"E:\x\a.mov", "mob_id": {"le": "AA" * 16}},
+            {"nombre": "enlazado", "fichero_origen": r"E:\x\b.mov", "mob_id": {"le": "BB" * 16}},
+            {"nombre": "falta", "fichero_origen": "/Volumes/MAC/c.mov", "mob_id": {"le": "CC" * 16}},
+            {"nombre": "render", "fichero_origen": r"E:\x\d.mov", "render": True}]}]
+        ficheros = self.inventario([r"x\a.mov", r"x\b.mov", r"x\d.mov"])
+        analizar, enlaces, faltan = da.buscar_enlazados(bins, ficheros, [{"ruta": "m.mxf", "umid": "AA" * 16}])
+        self.assertEqual([f["ruta"] for f in analizar], [r"x\b.mov"])
+        self.assertEqual(enlaces, {r"E:\x\b.mov": r"x\b.mov"})
+        self.assertEqual(faltan, ["/Volumes/MAC/c.mov"])
+        self.assertTrue(da.es_ruta_de_mac("/Volumes/MAC/c.mov"))
+        self.assertTrue(da.es_ruta_de_mac("Macintosh HD:Users:a:b.mov"))
+        self.assertFalse(da.es_ruta_de_mac(r"E:\x\b.mov"))
+
+
 try:
     import tkinter  # noqa: F401
     TK_OK = True

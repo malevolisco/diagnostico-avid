@@ -51,6 +51,11 @@ Página 1 · Disco
      carpeta. Nunca el propio disco de Avid.
    - Carpeta de brutos (solo si quieres los brutos): la carpeta del disco
      con espacio donde dejarlos.
+   - Más media (opcional): si parte de la media está en otro disco o en
+     otra carpeta (por ejemplo, un segundo disco con su propia carpeta
+     "Avid MediaFiles"), pulsa "Añadir…" y elígela. También se lee sin
+     modificarla. Si el informe dice que hay clips enlazados a ficheros que
+     no están en el disco, es aquí donde se añade la carpeta donde estén.
 3. "Proyectos: todos..." sirve para no hacerlos todos de una vez: sale la
    lista de proyectos del disco (tarda unos segundos) y marcas los que
    quieres ahora. Los que ya tienen brutos en esa carpeta salen con

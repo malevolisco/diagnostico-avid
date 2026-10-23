@@ -794,6 +794,18 @@ def analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=None, enlazado=Fa
 # Paso 4: agrupar MXF por clip y cruzar con bins
 # ---------------------------------------------------------------------------
 
+def resolucion_vista(pv):
+    """Resolución tal como se ve. Los móviles guardan el vídeo vertical tumbado (1920x1080) con una marca de giro de 90°:
+    se da girada (1080x1920) y se dice que es vertical, para que no parezca que el bruto la ha deformado."""
+    if not pv:
+        return None
+    ancho, alto = pv.get("ancho"), pv.get("alto")
+    if pv.get("rotacion") and int(pv["rotacion"]) % 180:
+        ancho, alto = alto, ancho
+        return "%sx%s (%s)" % (ancho, alto, "vertical" if (alto or 0) > (ancho or 0) else "girado")
+    return "%sx%s" % (ancho, alto)
+
+
 def agrupar_clips(mxf):
     """Los MXF OP-Atom llevan una pista por fichero; los que comparten UMID
     son el mismo clip. Los que no tienen UMID se agrupan por nombre."""
@@ -819,7 +831,7 @@ def agrupar_clips(mxf):
             "duracion": dur,
             "bytes": sum(f["bytes"] for f in fichs),
             "codec_video": pv["codec"] if pv else None,
-            "resolucion": ("%sx%s" % (pv["ancho"], pv["alto"])) if pv else None,
+            "resolucion": resolucion_vista(pv),
             "fps": pv["fps"] if pv else None,
             "timecode": next((f.get("timecode") for f in fichs if f.get("timecode")), None),
             "comentarios": next((f["comentarios"] for f in fichs if f.get("comentarios")), {}),

@@ -178,7 +178,9 @@ clips en orden de fecha y de 2 horas como mucho:
    Panasonic DC-GH5", "carpeta Downloads", "importado de \varios, sin
    pistas de origen"...).
    Vídeos de cualquier cámara, todos al mismo formato de archivo:
-   - El vídeo vertical de móvil sale derecho, con bandas negras a los lados.
+   - El vídeo vertical de móvil sale derecho y sin deformar: respeta su
+     proporción (9:16) dentro del cuadro 16:9, con pillarbox (bandas negras
+     a los lados). En el shotlist consta como "1080x1920 (vertical)".
    - El HDR (HLG, PQ) se pasa a color normal (BT.709) para que no salga
      lavado; la columna "Color origen" del shotlist dice cuál era.
    - Cada canal de audio es una pista del bruto: un estéreo da 2 pistas.

@@ -704,6 +704,12 @@ def resumir_mxf(datos):
             "fps": s.get("r_frame_rate"),
             "pix_fmt": s.get("pix_fmt"),
             "field_order": s.get("field_order"),
+            "fps_medio": s.get("avg_frame_rate"),
+            "color_primarias": s.get("color_primaries"),
+            "color_transfer": s.get("color_transfer"),
+            "color_matriz": s.get("color_space"),
+            "rotacion": next((int(d["rotation"]) for d in s.get("side_data_list") or [] if "rotation" in d), None)
+                        or (int(st["rotate"]) if str(st.get("rotate") or "").lstrip("-").isdigit() else None),
             "muestreo": s.get("sample_rate"),
             "canales": s.get("channels"),
             "bits": s.get("bits_per_raw_sample"),
@@ -1020,6 +1026,25 @@ def miniaturas(clips, origen, ffmpeg, destino, progreso, maximo=0):
 # Paso 6: resumen y avisos
 # ---------------------------------------------------------------------------
 
+def casos_de_video(mxf):
+    """Cuántos ficheros de vídeo son verticales o girados, HDR (HLG, PQ), de gama amplia (BT.2020) o de velocidad variable."""
+    from collections import Counter
+    cuenta = Counter()
+    for m in mxf:
+        pv = next((p for p in m.get("pistas") or [] if p.get("tipo") == "video"), None)
+        if not pv:
+            continue
+        if pv.get("rotacion") and int(pv["rotacion"]) % 180:
+            cuenta["vertical (girado)"] += 1
+        color = exportar_brutos.color_de(pv) if EXPORT_OK else None
+        if color:
+            cuenta["HDR " + color if color != "BT.2020" else "gama amplia BT.2020"] += 1
+        a, b = (exportar_brutos.fps_num(pv.get(k)) if pv.get(k) and pv.get(k) != "0/0" else None for k in ("fps", "fps_medio"))
+        if a and b and abs(a - b) / a > 0.01:
+            cuenta["velocidad variable"] += 1
+    return dict(cuenta)
+
+
 def construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmpeg_ok):
     bytes_total = sum(f["bytes"] for f in ficheros)
     bytes_media = sum(f["bytes"] for f in ficheros if f["ext"] in EXT_MEDIA)
@@ -1077,6 +1102,10 @@ def construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmp
     mezcla = [p["proyecto"] for p in cruce["por_proyecto"] if p["mezcla_formatos"]]
     if mezcla:
         avisos.append(("info", "Proyectos con mezcla de formatos (habrá que convertir al unir el bruto): " + ", ".join(mezcla)))
+    especiales = casos_de_video(mxf)
+    if especiales:
+        avisos.append(("info", "Vídeo que se convierte con cuidado: %s. Sale XDCAM normal (enderezado, en BT.709, con su duración real)."
+                       % ", ".join("%s %d" % kv for kv in especiales.items())))
     sin_audio = sum(1 for c in clips if c["num_video"] and not c["num_audio"])
     if sin_audio:
         avisos.append(("info", "%d clips de vídeo sin pista de audio." % sin_audio))

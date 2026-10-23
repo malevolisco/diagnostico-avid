@@ -1084,6 +1084,14 @@ class DiscosDeChina(unittest.TestCase):
         filtros = eb.args_video({"modo": "convertir", "destino": {"xdcam": True}}, {"pistas": [dv]}, self.cfg)
         self.assertIn("bwdif", filtros[filtros.index("-vf") + 1])
 
+    @unittest.skipIf(da is None, "sin pyavb")
+    def test_casos_de_video_en_el_informe(self):
+        v = lambda **kw: {"pistas": [dict({"tipo": "video", "fps": "30/1", "fps_medio": "30/1"}, **kw)]}
+        mxf = [v(rotacion=-90), v(rotacion=180), v(color_transfer="arib-std-b67"), v(color_transfer="smpte2084"),
+               v(color_primarias="bt2020"), v(fps_medio="2910/100"), v(), {"pistas": [{"tipo": "audio"}]}]
+        self.assertEqual(da.casos_de_video(mxf), {"vertical (girado)": 1, "HDR HLG": 1, "HDR PQ": 1, "gama amplia BT.2020": 1,
+                                                  "velocidad variable": 1})
+
     def test_rutas_largas_solo_en_windows(self):
         larga = "C:\\" + "\\".join(["北京 0916 entrevista larga con nombre"] * 10) + "\\DJI_0012.MP4"
         if os.name == "nt":

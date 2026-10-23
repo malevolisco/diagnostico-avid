@@ -149,13 +149,23 @@ clips en orden de fecha y de 2 horas como mucho:
    - _ficha.txt: comprobación del formato del fichero ya exportado. Debe
      decir "Veredicto: CONFORME".
    - .md5: huella del fichero, para comprobar que una copia es idéntica.
-   No se incluyen los ficheros importados (agencias, internet, móvil: los que
-   el informe marca como "Fichero importado" o de agencia) ni los fundidos,
-   rótulos y efectos renderizados por Avid. Lo de un bin que se llame
-   "agencias" (por ejemplo "20260916 agencias.avb") cuenta como agencia.
-   Sí entra el material de cámara propia aunque se copiara al ordenador
-   antes de importarlo (dron DJI_0012, Sony C0380...): el informe lo marca
-   como "Cámara (fichero importado)".
+   De dónde viene cada clip lo decide el programa por pistas, de más a menos
+   fiables: lo que dice el propio fichero (marca y modelo de la cámara, un
+   móvil, una descarga de internet), la carpeta de la que se importó (una
+   tarjeta de cámara, Descargas, WhatsApp...), el nombre del bin (por
+   ejemplo "20260916 agencias.avb") y el nombre del fichero (DJI_0012,
+   C0380, IMG_1234...).
+   - No entran: agencias, descargas, vídeos de móvil y los fundidos,
+     rótulos y efectos renderizados por Avid.
+   - Sí entra el material de cámara propia aunque se copiara al ordenador
+     antes de importarlo.
+   - Ante la duda, entra: un fichero importado del que no hay ninguna pista
+     (por ejemplo, de "Mis vídeos" con un nombre cualquiera) va al bruto
+     marcado "Dudoso · para revisar".
+   El shotlist lo dice en la columna "Origen" ("Material propio", "Dudoso ·
+   para revisar"...) y la siguiente, "Por qué", da el motivo ("metadatos:
+   Panasonic DC-GH5", "carpeta Downloads", "importado de \varios, sin
+   pistas de origen"...).
    Convertir a HD es lento: el programa convierte varios clips a la vez,
    pero cuenta con del orden de media hora de ordenador por cada hora de
    material (depende del PC). Con un disco grande, mejor por proyectos con

@@ -356,7 +356,10 @@ class ProyectoMes(unittest.TestCase):
               # MXF importado de una tarjeta P2: el origen dice "Fichero importado" pero la ruta es de tarjeta
               self.clip("0001AB", "2019-09-16 12:00:00", 1, origen="Fichero importado", fichero_origen=r"E:\CARD01\CONTENTS\VIDEO\0001AB.MXF"),
               self.clip("X,Dissolve,1", "2019-09-16 12:00:00", 0.1, proyectos=(), render=True)]
-        self.assertEqual(self.nombres(cs), {"P SEPTIEMBRE DE 2019": ["0016Q3", "0001AB"]})
+        # VID_0001 (nombre de móvil) y la agencia, fuera. SIN RUTA es importado según el bin, pero sin ninguna pista de
+        # dónde viene: entra marcado "para revisar" (ante la duda, entra; Adrián, 23/10/2026)
+        self.assertEqual(self.nombres(cs), {"P SEPTIEMBRE DE 2019": ["0016Q3", "SIN RUTA", "0001AB"]})
+        self.assertEqual(eb.clasificar(cs[2], self.cfg)[0], "dudoso")
         self.cfg["excluir_importados"] = False
         self.assertEqual(len(self.nombres(cs)["P SEPTIEMBRE DE 2019"]), 5)
 
@@ -1103,6 +1106,107 @@ class DiscosDeChina(unittest.TestCase):
 
 
 @unittest.skipIf(da is None, "sin pyavb")
+class OrigenPorSenales(unittest.TestCase):
+    """Parte 4 del plan: el origen se decide por lo que dice el fichero y de dónde se importó; los nombres son pistas."""
+
+    def setUp(self):
+        self.cfg = dict(eb.CONFIG_DEFECTO)
+
+    def clip(self, fichero=None, origen="Sin determinar", bins=("material.avb",), **kw):
+        c = {"nombre": "X", "origen": origen, "bins": list(bins)}
+        if fichero:
+            c["fichero_origen"] = fichero
+        c.update(kw)
+        return c
+
+    def test_marca_de_metadatos(self):
+        m = eb.marca_de_metadatos
+        self.assertEqual(m({"com.apple.quicktime.make": "Apple", "com.apple.quicktime.model": "iPhone 13"}), ("Apple iPhone 13", "movil"))
+        self.assertEqual(m({"make": "Panasonic", "model": "DC-GH5"}), ("Panasonic DC-GH5", "camara"))
+        self.assertEqual(m({"make": "Canon", "model": "Canon EOS R5"}), ("Canon EOS R5", "camara"))
+        self.assertEqual(m({"com.android.version": "13"}), ("Android", "movil"))
+        self.assertEqual(m({}, [{"handler_name": "\tGoPro AVC  "}]), ("GoPro", "camara"))
+        self.assertEqual(m({"encoder": "DJIMavic3"}), ("DJI", "camara"))
+        self.assertEqual(m({"major_brand": "XAVC"}), ("Sony (XAVC)", "camara"))
+        self.assertEqual(m({"company_name": "Sony", "product_name": "PMW-500"}), ("Sony PMW-500", "camara"))
+        self.assertEqual(m({}, [{"handler_name": "ISO Media file produced by Google Inc."}]), ("YouTube/Google", "internet"))
+        # Los MXF de Avid y lo recodificado con ffmpeg no dicen nada de la cámara
+        self.assertEqual(m({"company_name": "Avid Technology, Inc.", "product_name": "Media Composer"}), (None, None))
+        self.assertEqual(m({"encoder": "Lavf60.16.100", "major_brand": "isom"}), (None, None))
+
+    def test_metadatos_de_camara_con_nombre_desconocido_es_propio(self):
+        c = self.clip(r"E:\material\entrevista alcalde.mov", marca="Panasonic DC-GH5", marca_tipo="camara")
+        self.assertEqual(eb.clasificar(c, self.cfg), ("propio", "metadatos: Panasonic DC-GH5", True))
+        self.assertFalse(eb.es_importado(c, self.cfg))
+
+    def test_sin_pistas_es_dudoso_y_entra(self):
+        c = self.clip(r"D:\varios\plano recurso.mp4")
+        clase, motivo, seguro = eb.clasificar(c, self.cfg)
+        self.assertEqual((clase, seguro), ("dudoso", False))
+        self.assertIn("varios", motivo)
+        self.assertFalse(eb.es_importado(c, self.cfg))  # ante la duda, entra
+        self.assertIsNone(eb.motivo_descarte(c, self.cfg))
+        self.assertEqual(eb.texto_origen(clase, motivo, seguro), "Dudoso · para revisar")
+
+    def test_bin_de_compras_es_dudoso_no_agencia(self):
+        c = self.clip(r"C:\material\compras\vista aerea.mp4", bins=["compras.avb"])
+        self.assertEqual(eb.clasificar(c, self.cfg)[0], "dudoso")
+
+    def test_lo_elegido_manda_y_queda_como_revisado(self):
+        c = self.clip(r"C:\material\compras\vista aerea.mp4", bins=["compras.avb"])
+        cfg = dict(self.cfg, decisiones_origen=[{"carpeta": r"\material\compras", "bin": "compras.avb", "clase": "agencia"}])
+        clase, motivo, seguro = eb.clasificar(c, cfg)
+        self.assertEqual((clase, seguro), ("agencia", True))
+        self.assertEqual(eb.texto_origen(clase, motivo, seguro), "Agencia · revisado")
+        # Otra letra de unidad (otro PC): es la misma procedencia
+        self.assertEqual(eb.clasificar(self.clip(r"F:\material\compras\otra.mp4", bins=["compras.avb"]), cfg)[0], "agencia")
+
+    def test_regla_recordada_para_otros_discos(self):
+        cfg = dict(self.cfg, reglas_origen=[{"carpeta": "Compras", "clase": "agencia"}, {"bin": "señal", "clase": "importado"}])
+        self.assertEqual(eb.clasificar(self.clip(r"C:\Users\a\COMPRAS\x.mp4"), cfg)[0], "agencia")
+        self.assertEqual(eb.clasificar(self.clip(r"C:\x\y.mp4", bins=["Señal 24h.avb"]), cfg)[0], "importado")
+        self.assertEqual(eb.clasificar(self.clip(r"C:\x\y.mp4"), cfg)[0], "dudoso")
+
+    def test_pistas_contrarias_es_dudoso(self):
+        # Una tarjeta de cámara... con un vídeo de móvil según sus metadatos
+        c = self.clip(r"E:\CARD01\CONTENTS\CLIP\x.mp4", marca="Apple iPhone 13", marca_tipo="movil")
+        clase, motivo, seguro = eb.clasificar(c, self.cfg)
+        self.assertEqual((clase, seguro), ("dudoso", False))
+        self.assertIn("contrarias", motivo)
+
+    def test_casos_de_siempre(self):
+        cl = lambda c: eb.clasificar(c, self.cfg)[0]
+        # Reuters (por el nombre) y el bin de agencias, aunque estén en Descargas: agencia
+        self.assertEqual(cl(self.clip(r"C:\Users\c\Downloads\x_RTRMADV_y.MP4", origen="Agencia Reuters")), "agencia")
+        self.assertEqual(cl(self.clip(r"C:\Users\c\Downloads\CCTV.mp4", origen="Agencia (bin de agencias)")), "agencia")
+        # Dron y A7 copiados al PC: propio por el nombre del fichero, aunque estén en el Escritorio
+        self.assertEqual(cl(self.clip(r"C:\Users\c\Desktop\China\dron\DJI_0012.MP4", origen="Cámara (fichero importado)")), "propio")
+        self.assertEqual(cl(self.clip(r"D:\北京\A7III\C0380.MP4")), "propio")
+        # Móvil y descargas: fuera
+        self.assertEqual(cl(self.clip(r"C:\Users\a\Desktop\videos movil\VID_20210915_101500.mp4")), "importado")
+        self.assertEqual(cl(self.clip(r"C:\Users\a\Downloads\video.mp4")), "importado")
+        self.assertEqual(cl(self.clip(r"C:\Users\a\WhatsApp Video\x.mp4")), "importado")
+        # Tarjeta, capturado (sin ruta) y render
+        self.assertEqual(cl(self.clip(r"E:\TARJETAS\CARD01\CONTENTS\VIDEO\0001AB.MXF", origen="Fichero importado")), "propio")
+        self.assertEqual(cl(self.clip()), "propio")
+        self.assertEqual(cl(self.clip(render=True)), "efecto")
+
+    def test_anotar_y_leer_decisiones(self):
+        cs = [self.clip(r"D:\varios\a.mp4"), self.clip()]
+        eb.anotar_origen(cs, self.cfg)
+        self.assertEqual([c["origen_texto"] for c in cs], ["Dudoso · para revisar", "Material propio"])
+        d = Path(tempfile.mkdtemp())
+        try:
+            self.assertEqual(eb.leer_decisiones_origen(d), [])
+            (d / "origen.json").write_text(json.dumps({"decisiones": [{"carpeta": "\\varios", "bin": "material.avb", "clase": "propio"},
+                                                                      {"carpeta": "x", "clase": "inventada"}]}), encoding="utf-8")
+            self.assertEqual(len(eb.leer_decisiones_origen(d)), 1)
+            (d / "origen.json").write_text("{roto", encoding="utf-8")
+            self.assertEqual(eb.leer_decisiones_origen(d), [])
+        finally:
+            shutil.rmtree(d)
+
+
 class MediaEnlazada(unittest.TestCase):
     """Media enlazada (AMA) o importada sin MXF de Avid: el fichero original se busca en el disco esté donde esté."""
 

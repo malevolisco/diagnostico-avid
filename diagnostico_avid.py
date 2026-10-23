@@ -722,7 +722,11 @@ def resumir_mxf(datos):
         })
     umid = (tags.get("material_package_umid") or "").upper().replace("0X", "")
     comentarios = {k[len("comment_"):]: v for k, v in tags.items() if k.startswith("comment_")}
+    marca, marca_tipo = (exportar_brutos.marca_de_metadatos(tags, [s.get("tags") for s in datos.get("streams", [])])
+                         if exportar_brutos else (None, None))
     return {
+        "marca": marca,
+        "marca_tipo": marca_tipo,
         "duracion": float(fmt["duration"]) if fmt.get("duration") else None,
         "formato": fmt.get("format_long_name"),
         "umid": umid,
@@ -807,6 +811,8 @@ def agrupar_clips(mxf):
             "render": False,
             "origen": "Sin determinar",
             "origen_detalle": {},
+            "marca": next((f["marca"] for f in fichs if f.get("marca")), None),
+            "marca_tipo": next((f["marca_tipo"] for f in fichs if f.get("marca")), None),
         })
     clips.sort(key=lambda c: c["nombre"])
     LOG.info("Clips reconstruidos: %d", len(clips))
@@ -912,8 +918,10 @@ def cruzar(proyectos, bins, clips, mxf=(), enlaces=None):
                         "origenes": Counter()}
     por_proyecto = defaultdict(nuevo_pr)
 
-    def asignar(fisico, clip, proyecto, pr):
+    def asignar(fisico, clip, proyecto, pr, nbin):
         pr["online"] += 1
+        if nbin and nbin not in fisico.setdefault("bins", []):  # para el origen: el nombre del bin es una pista
+            fisico["bins"].append(nbin)
         pr["claves"].add(fisico["clave"])
         if clip.get("fichero_origen") and not fisico.get("fichero_origen"):
             fisico["fichero_origen"] = clip["fichero_origen"]
@@ -966,7 +974,7 @@ def cruzar(proyectos, bins, clips, mxf=(), enlaces=None):
             pr["clips_bin"] += 1
             if fisico:
                 coincidencias[modo] += 1
-                asignar(fisico, clip, b["proyecto"], pr)
+                asignar(fisico, clip, b["proyecto"], pr, b["nombre"])
             else:
                 pr["offline"] += 1
                 pr["offline_items"].append((clip, b["nombre"]))
@@ -991,7 +999,7 @@ def cruzar(proyectos, bins, clips, mxf=(), enlaces=None):
         for i, cs in candidatos.items():
             if len(cs) == 1 and veces[cs[0]["clave"]] == 1:
                 cs[0]["coincidencia"] = "aproximada"
-                asignar(cs[0], pr["offline_items"][i][0], proyecto, pr)
+                asignar(cs[0], pr["offline_items"][i][0], proyecto, pr, pr["offline_items"][i][1])
                 coincidencias["nombre_duracion"] += 1
                 pr["aproximados"] += 1
                 emparejados.add(i)
@@ -1642,6 +1650,9 @@ def montaje_de(carpeta_analisis, carpeta_brutos):
     import montaje
     clips, cruce, mxf, resumen = cargar_analisis(carpeta_analisis)
     cfg = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json")
+    # Lo elegido en "Origen del material" para este disco, igual que al exportar (si no, el montaje y los brutos no cuadran)
+    cfg = dict(cfg, decisiones_origen=exportar_brutos.leer_decisiones_origen(carpeta_brutos))
+    exportar_brutos.anotar_origen(clips, cfg)
     return montaje.Montaje.desde_analisis(clips, cruce, mxf, cfg, carpeta_brutos), clips, cruce, mxf, resumen, cfg
 
 

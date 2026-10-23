@@ -68,7 +68,7 @@ CONFIG_DEFECTO = {
     "horas_por_bruto": 2,
     "_horas_por_bruto": "Duración máxima de un bruto (proyecto_mes y dias). El clip que la pasaría no se añade: abre el bruto siguiente",
     "excluir_importados": True,
-    "_excluir_importados": "true = fuera de los brutos los ficheros importados (agencias, internet, móvil...): origen 'Fichero importado' o de agencia, o un fichero que el bin guarda con ruta y no viene de una tarjeta",
+    "_excluir_importados": "true = fuera de los brutos lo que viene de fuera (agencias, descargas, móvil...), decidido por pistas: metadatos del fichero, carpeta de la que se importó, nombre del bin y del fichero. Lo dudoso entra marcado 'para revisar' en el shotlist",
     "dia_empieza_hora": 6,
     "_dia_empieza_hora": "agrupar=dias: lo volcado antes de esta hora cuenta como del día anterior (volcados de madrugada)",
     "partir_por_tarjeta": True,
@@ -78,11 +78,13 @@ CONFIG_DEFECTO = {
     "tarjeta_minimo_minutos": 5,
     "_tarjeta_minimo_minutos": "Una tanda con menos de estos minutos de material se junta con la tanda más cercana del mismo origen (si está a menos de 24 h). 0 = no juntar",
     "importados_aparte": True,
-    "_importados_aparte": "Los ficheros importados (MP4 de descargas, móvil, agencias no reconocidas...: el bin guarda su ruta y no es una tarjeta) van al bruto _IMPORTADOS del proyecto",
+    "_importados_aparte": "Con excluir_importados = false, lo importado de fuera (descargas, móvil...) va al bruto _IMPORTADOS del proyecto. Lo dudoso va con el material",
     "camara_propia_regex": r"^(DJI_\d{3,5}|C\d{4}|MAH\d{5}|MVI_\d{4}|GH\d{6}|GX\d{6}|GOPR\d{4}|GP\d{6}|DSC_?\d{4}|P\d{7}|A\d{3}C\d{3}|\d{8}_C\d{3,4})(\D|$)",
     "_camara_propia_regex": "Ficheros de cámara propia importados desde una carpeta del PC (no desde la tarjeta): son material aunque el bin no guarde una ruta de tarjeta. Se mira el nombre del fichero que guarda el bin. Por defecto: dron DJI, Sony (C0001), Canon (MVI_), GoPro, Panasonic (P1000123), Nikon (DSC_), Zoom (MAH), ARRI/Blackmagic (A001C002). Los del móvil (IMG_) siguen siendo importados",
     "bins_agencia_regex": r"agencia|reuters|\bafp\b|\befe\b|\bap\b|eurovisi|\bebu\b|xinhua|\bcctv\b|\bcgtn\b",
     "_bins_agencia_regex": "Bins cuyo nombre indica material de agencia (p. ej. '20260916 agencias.avb'): lo que hay en ellos y no es de cámara cuenta como agencia",
+    "reglas_origen": [],
+    "_reglas_origen": "Decisiones de la pantalla 'Origen del material' marcadas 'Recordar para otros discos', p. ej. [{\"carpeta\": \"Compras\", \"clase\": \"agencia\"}]. carpeta: trozo de la ruta de la que se importó; bin: trozo del nombre del bin; clase: propio | agencia | importado",
     "agencias_aparte": True,
     "origenes_agencia": ["Agencia"],
     "_origenes_agencia": "Clips cuyo origen (según config_origen.json) empieza por alguno de estos textos van al bruto _AGENCIAS del proyecto",
@@ -466,6 +468,169 @@ def es_bin_de_agencia(nombre_bin, cfg):
         return False
 
 
+# ---------------------------------------------------------------------------
+# Origen del material por señales (docs/diseno_cualquier_disco.md, apartado 4)
+# ---------------------------------------------------------------------------
+
+CLASES_ORIGEN = {"propio": "Material propio", "agencia": "Agencia", "importado": "Importado de fuera",
+                 "efecto": "Efecto de Avid", "dudoso": "Dudoso"}
+# Nombres de fichero de móvil: IMG_1234.MOV (iPhone), VID_20210915_101500.mp4 y PXL_... (Android), VID-20210915-WA0001 (WhatsApp)
+MOVIL_REGEX = r"^(IMG_\d{4}|IMG_\d{8}_\d{6}|VID_\d{4,}|PXL_\d{8}|VID-\d{8}-WA\d+|.*-WA\d{4})(\D|$)"
+# Carpetas de las que lo importado viene de fuera: descargas y mensajería
+CARPETAS_DE_FUERA = r"(^|[\\/])(downloads|descargas|whatsapp[^\\/]*|telegram[^\\/]*|wechat[^\\/]*)([\\/]|$)"
+# Marcas de móvil en los metadatos (make): el resto de marcas es de cámara
+MARCAS_MOVIL = ("apple", "samsung", "xiaomi", "huawei", "honor", "google", "oneplus", "oppo", "vivo", "motorola", "realme", "nokia", "lg")
+# Quien escribe el fichero y no es una cámara (MXF de Avid, recodificados...)
+NO_CAMARA = ("avid", "ffmpeg", "lavf", "adobe", "apple final cut", "telestream", "harmonic", "evs", "blackmagic design davinci")
+
+
+def marca_de_metadatos(tags_formato, tags_flujos=()):
+    """(marca, tipo) según los metadatos del fichero; tipo 'camara', 'movil' o 'internet'. (None, None) si no dicen nada.
+    Ejemplos: el make/model de un iPhone o una Panasonic, el handler de GoPro, el XAVC de Sony, la compañía de un MXF de cámara."""
+    t = {str(k).lower(): str(v) for k, v in (tags_formato or {}).items()}
+    flujos = [{str(k).lower(): str(v) for k, v in (f or {}).items()} for f in tags_flujos or ()]
+    make = t.get("com.apple.quicktime.make") or t.get("make") or t.get("com.android.manufacturer") or ""
+    model = t.get("com.apple.quicktime.model") or t.get("model") or t.get("com.android.model") or ""
+    make, model = make.strip(), model.strip()
+    if make:
+        marca = model if model.lower().startswith(make.lower()) else " ".join(x for x in (make, model) if x)
+        return marca, ("movil" if make.lower().startswith(MARCAS_MOVIL) else "camara")
+    if t.get("com.android.version"):
+        return "Android", "movil"
+    handlers = " ".join(f.get("handler_name", "") for f in flujos) + " " + t.get("handler_name", "")
+    if "produced by google" in handlers.lower() or t.get("major_brand", "").lower() == "dash":
+        return "YouTube/Google", "internet"
+    if "gopro" in handlers.lower() or t.get("firmware", "").upper().startswith(("HD", "H1", "H2")):
+        return "GoPro", "camara"
+    if "dji" in (handlers + " " + t.get("encoder", "")).lower():
+        return "DJI", "camara"
+    if t.get("major_brand", "").upper().startswith("XAVC") or "xavc" in t.get("compatible_brands", "").lower():
+        return "Sony (XAVC)", "camara"
+    compania = (t.get("company_name") or "").strip()
+    if compania and not compania.lower().startswith(NO_CAMARA):
+        return " ".join(x for x in [compania, (t.get("product_name") or "").strip()] if x), "camara"
+    return None, None
+
+
+def _base_fichero(ruta):
+    return re.sub(r"\.[A-Za-z0-9]{2,4}$", "", re.split(r"[\\/]+", str(ruta or ""))[-1])
+
+
+def procedencia(c):
+    """De dónde viene el clip, para agrupar en la pantalla de origen y recordar decisiones: (carpeta de la que se
+    importó o '', bin). La carpeta, con barras \\ y sin la letra de unidad (cambia de un PC a otro)."""
+    ruta = str(c.get("fichero_origen") or "").replace("/", "\\")
+    carpeta = ruta.rsplit("\\", 1)[0] if "\\" in ruta else ""
+    carpeta = re.sub(r"^[A-Za-z]:", "", carpeta)
+    return carpeta, (c.get("bins") or [""])[0]
+
+
+def decision_de_origen(c, cfg):
+    """La clase que alguien eligió para la procedencia del clip: en este disco (origen.json, cfg['decisiones_origen'])
+    o como regla para todos (config_brutos.json → reglas_origen). (clase, motivo) o None."""
+    carpeta, nbin = procedencia(c)
+    for d in cfg.get("decisiones_origen") or ():
+        if d.get("clase") in CLASES_ORIGEN and (d.get("carpeta") or "") == carpeta and (d.get("bin") or "") == nbin:
+            return d["clase"], "elegido en este disco"
+    ruta = str(c.get("fichero_origen") or "").replace("/", "\\").lower()
+    for r in cfg.get("reglas_origen") or ():
+        if r.get("clase") not in CLASES_ORIGEN or not (r.get("carpeta") or r.get("bin")):
+            continue
+        if r.get("carpeta") and str(r["carpeta"]).replace("/", "\\").lower() not in ruta:
+            continue
+        if r.get("bin") and str(r["bin"]).lower() not in nbin.lower():
+            continue
+        return r["clase"], "regla recordada (%s)" % (r.get("carpeta") or "bin " + r["bin"])
+    return None
+
+
+def senales_de_origen(c, cfg):
+    """[(fuerza, clase, motivo)]: lo que dice cada pista. 3 = el fichero o la tarjeta; 2 = nombres y carpetas."""
+    s = []
+    origen = str(c.get("origen") or "")
+    fichero = c.get("fichero_origen")
+    if origen == "Agencia (bin de agencias)":
+        s.append((2, "agencia", "bin de agencias"))
+    elif origen.startswith(tuple(cfg.get("origenes_agencia") or ())):
+        s.append((3, "agencia", origen))
+    if c.get("marca"):
+        clase = {"camara": "propio", "movil": "importado", "internet": "importado"}.get(c.get("marca_tipo"))
+        if clase:
+            que = {"camara": "metadatos", "movil": "móvil, metadatos", "internet": "descargado, metadatos"}[c["marca_tipo"]]
+            s.append((3, clase, "%s: %s" % (que, c["marca"])))
+    tarjeta = carpeta_tarjeta(fichero)
+    if tarjeta is not None:
+        marca = next((x for x in re.split(r"[\\/]+", str(fichero)) if x.upper() in MARCAS_TARJETA), "")
+        s.append((3, "propio", "carpeta de tarjeta (%s)" % marca))
+    if es_fichero_de_camara(fichero, cfg) or (origen.startswith("Cámara") and not tarjeta):
+        s.append((2, "propio", "nombre de fichero de cámara" if fichero else origen))
+    if fichero and re.search(MOVIL_REGEX, _base_fichero(fichero), re.IGNORECASE):
+        s.append((2, "importado", "nombre de fichero de móvil"))
+    m = re.search(CARPETAS_DE_FUERA, str(fichero or ""), re.IGNORECASE)
+    if m:
+        s.append((2, "importado", "carpeta %s" % m.group(2)))
+    return s
+
+
+def clasificar(c, cfg):
+    """Origen de un clip por señales: (clase, motivo, seguro). clase: propio | agencia | importado | efecto | dudoso.
+    Manda lo que se eligió a mano; si no, la pista más fuerte. Si las más fuertes se contradicen (propio frente a fuera),
+    dudoso. Un fichero importado sin ninguna pista, también dudoso: entra en el bruto marcado "para revisar"
+    (Adrián, 23/10/2026: ante la duda, entra). Sin ruta de importación (capturado, tarjeta en Avid), propio."""
+    if c.get("render"):
+        return "efecto", "efecto de Avid", True
+    elegido = decision_de_origen(c, cfg)
+    if elegido:
+        return elegido[0], elegido[1], True
+    senales = senales_de_origen(c, cfg)
+    if not senales:
+        if c.get("fichero_origen"):
+            carpeta = procedencia(c)[0] or "?"
+            return "dudoso", "importado de %s, sin pistas de origen" % carpeta, False
+        if str(c.get("origen") or "").startswith("Fichero importado"):
+            return "dudoso", "importado (según el bin), sin ruta ni pistas de origen", False
+        return "propio", "sin ruta de importación (capturado o de tarjeta)", True
+    fuerza = max(f for f, _, _ in senales)
+    arriba = [(cl, m) for f, cl, m in senales if f == fuerza]
+    clases = {cl for cl, _ in arriba}
+    motivos = "; ".join(dict.fromkeys(m for _, m in arriba))
+    if len(clases) == 1:
+        return clases.pop(), motivos, True
+    if clases <= {"agencia", "importado"}:
+        return "agencia", motivos, True
+    return "dudoso", "pistas contrarias: " + motivos, False
+
+
+def texto_origen(clase, motivo, seguro):
+    """Lo que sale en el shotlist y en la ventana: 'Material propio', 'Dudoso · para revisar', 'Agencia · revisado'."""
+    if not clase:
+        return ""
+    if not seguro:
+        return CLASES_ORIGEN[clase] + " · para revisar"
+    return CLASES_ORIGEN[clase] + (" · revisado" if motivo in ("elegido en este disco",) or str(motivo).startswith("regla recordada") else "")
+
+
+def anotar_origen(clips, cfg):
+    """Pone en cada clip origen_clase, origen_motivo, origen_seguro y origen_texto (clasificar)."""
+    for c in clips:
+        clase, motivo, seguro = clasificar(c, cfg)
+        c["origen_clase"], c["origen_motivo"], c["origen_seguro"] = clase, motivo, seguro
+        c["origen_texto"] = texto_origen(clase, motivo, seguro)
+
+
+def leer_decisiones_origen(carpeta_brutos):
+    """Lo elegido en la pantalla 'Origen del material' para este disco (origen.json en la carpeta de brutos)."""
+    ruta = Path(carpeta_brutos) / "origen.json"
+    if not ruta.exists():
+        return []
+    try:
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+        return [d for d in datos.get("decisiones", []) if isinstance(d, dict) and d.get("clase") in CLASES_ORIGEN]
+    except Exception as e:
+        LOG.warning("origen.json ilegible (%s); no se aplica", e)
+        return []
+
+
 def es_de_camara(c, cfg):
     """Material de cámara según el bin: ruta de tarjeta (CONTENTS, PRIVATE, DCIM...), nombre de fichero de cámara
     o un origen de cámara en config_origen.json (p. ej. los nombres de clip de P2)."""
@@ -474,17 +639,8 @@ def es_de_camara(c, cfg):
 
 
 def es_importado(c, cfg):
-    """Fichero importado (agencias, internet, móvil...). Agencia, siempre fuera. Material de cámara (es_de_camara),
-    nunca: un MXF de P2 importado de la tarjeta, o un DJI_0012.MP4 copiado a una carpeta del PC antes de importarlo.
-    Si no, con ruta en el bin es importado; sin ruta, lo dice el origen."""
-    origen = str(c.get("origen") or "")
-    if origen.startswith(tuple(cfg.get("origenes_agencia") or ())):
-        return True
-    if es_de_camara(c, cfg):
-        return False
-    if c.get("fichero_origen"):
-        return True
-    return origen.startswith("Fichero importado")
+    """De fuera (agencia, internet, móvil...) según clasificar: lo dudoso no, porque ante la duda entra."""
+    return clasificar(c, cfg)[0] in ("agencia", "importado")
 
 
 def excluido(c, cfg):
@@ -496,7 +652,7 @@ def motivo_descarte(c, cfg):
     if c.get("render") and not cfg.get("renders_en_piezas", False):
         return "efecto de Avid"
     if excluido(c, cfg):
-        return "agencia" if str(c.get("origen") or "").startswith(tuple(cfg.get("origenes_agencia") or ())) else "importado"
+        return clasificar(c, cfg)[0]
     return None
 
 
@@ -740,7 +896,6 @@ def grupos_por_dias(clips, cruce, mxf_por_ruta, cfg):
     Cada clip va una sola vez aunque esté en varios proyectos."""
     secuencias = {p["proyecto"]: {_normal(n) for n in p.get("secuencias_nombres", [])} for p in (cruce or {}).get("por_proyecto", [])}
     rx = re.compile(cfg["piezas_regex"]) if cfg.get("piezas_regex") else None
-    prefijos = tuple(cfg.get("origenes_agencia") or ())
     familias = {"material": [], "agencias": [], "piezas": []}
     for c in clips:
         if c.get("render"):
@@ -754,7 +909,7 @@ def grupos_por_dias(clips, cruce, mxf_por_ruta, cfg):
             familias["piezas"].append(c)
         elif excluido(c, cfg):
             continue
-        elif cfg.get("agencias_aparte", True) and prefijos and str(c.get("origen") or "").startswith(prefijos):
+        elif cfg.get("agencias_aparte", True) and clasificar(c, cfg)[0] == "agencia":
             familias["agencias"].append(c)
         else:
             familias["material"].append(c)
@@ -801,14 +956,13 @@ def grupos_por_proyecto(clips, cruce, mxf_por_ruta, cfg):
 
     secuencias = {p["proyecto"]: {_normal(n) for n in p.get("secuencias_nombres", [])} for p in (cruce or {}).get("por_proyecto", [])}
     rx = re.compile(cfg["piezas_regex"]) if cfg.get("piezas_regex") else None
-    prefijos = tuple(cfg.get("origenes_agencia") or ())
     grupos = []
     for proyecto in sorted(por_proyecto):
         normales, renders = por_proyecto[proyecto]["normales"], por_proyecto[proyecto]["renders"]
         base = nombre_seguro(proyecto, 50)
         piezas = [c for c in normales if cfg.get("piezas_aparte", True) and es_pieza(c, secuencias.get(proyecto, set()), rx)]
         resto = [c for c in normales if c not in piezas and not excluido(c, cfg)]
-        agencias = [c for c in resto if cfg.get("agencias_aparte", True) and prefijos and str(c.get("origen") or "").startswith(prefijos)]
+        agencias = [c for c in resto if cfg.get("agencias_aparte", True) and clasificar(c, cfg)[0] == "agencia"]
         resto = [c for c in resto if c not in agencias]
         importados = [c for c in resto if cfg.get("importados_aparte", True) and es_importado(c, cfg)]
         resto = [c for c in resto if c not in importados]
@@ -1302,7 +1456,8 @@ COLUMNAS_SHOTLIST = [  # (cabecera, clave de la fila, ancho)
     ("Sonoridad (LUFS)", "lufs", 10), ("Pico (dBFS)", "pico", 10), ("Ganancia (dB)", "ganancia", 10), ("Aviso audio", "aviso_audio", 26),
     ("Color origen", "color", 10), ("Aviso vídeo", "aviso_video", 26),
     ("Estado", "estado", 14), ("Ficheros origen", "ficheros", 60), ("Fichero importado (según bin)", "fichero_origen", 50),
-    ("Disco de origen (según bin)", "volumenes", 24), ("Origen", "origen", 20), ("Referencia agencia", "ref_agencia", 18), ("Slug", "slug", 40)]
+    ("Disco de origen (según bin)", "volumenes", 24), ("Origen", "origen_texto", 24), ("Por qué", "origen_motivo", 40),
+    ("Origen (reglas del bin)", "origen", 20), ("Referencia agencia", "ref_agencia", 18), ("Slug", "slug", 40)]
 
 
 def escribir_shotlist(ruta, proyecto, filas, quitados=None):
@@ -1383,7 +1538,7 @@ def _fila_clip(i, proyecto, c, mxf_por_ruta):
             "codec": c.get("codec_video"), "resolucion": c.get("resolucion"), "pistas": c.get("num_audio"),
             "ficheros": "; ".join(c["ficheros"]), "miniatura": c.get("miniatura"), "tc_in": None, "tc_out": None, "duracion": None,
             "fichero_origen": c.get("fichero_origen"), "volumenes": ", ".join(c.get("volumenes") or []),
-            "origen": c.get("origen"), "ref_agencia": (c.get("origen_detalle") or {}).get("id"), "slug": (c.get("origen_detalle") or {}).get("slug")}
+            "origen": c.get("origen"), "origen_texto": c.get("origen_texto"), "origen_motivo": c.get("origen_motivo"), "ref_agencia": (c.get("origen_detalle") or {}).get("id"), "slug": (c.get("origen_detalle") or {}).get("slug")}
 
 
 def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffprobe, progreso, cfg, miniaturas_dir=None,
@@ -1692,6 +1847,12 @@ def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso,
         except Exception as e:
             LOG.warning("brutos_resultado.json anterior ilegible (%s); se exporta todo", e)
 
+    cfg = dict(cfg, decisiones_origen=leer_decisiones_origen(destino))
+    anotar_origen(clips, cfg)
+    dudosos = [c for c in clips if c.get("origen_clase") == "dudoso"]
+    if dudosos:
+        LOG.info("Origen dudoso (entran marcados 'para revisar'): %d clips, p. ej. %s", len(dudosos),
+                 "; ".join("%s (%s)" % (c["nombre"], c["origen_motivo"]) for c in dudosos[:5]))
     if cortes:
         LOG.info("Cortes elegidos a mano en %d proyectos", len(cortes))
     if proyectos is not None and cfg.get("agrupar", "proyecto_mes") == "dias":  # los bloques por días mezclan proyectos

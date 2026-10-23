@@ -48,7 +48,8 @@ def main():
     # + importado + render sin bin + 4 de China. huerfanos: HUERFANO, SOLOAUDIO, CUARENTENA y los 2 "APROX B" (el render no cuenta).
     # China: 2 bins, uno en una ruta de más de 260 caracteres (en Windows hay que leerlo con \\?\).
     # ENLACES: 2 ficheros enlazados (AMA) fuera de Avid MediaFiles y 1 clip con la media en otra carpeta (--media-extra).
-    esperado = {"proyectos": 6, "bins": 9, "bins_ilegibles": 1, "offline": 3, "renders_en_bins": 1, "clips_compartidos": 1, "clips_fisicos": 25,
+    # ORIGEN: 2 bins (uno "compras"), un MOV enlazado de una Panasonic y 2 clips importados sin pistas de origen.
+    esperado = {"proyectos": 7, "bins": 11, "bins_ilegibles": 1, "offline": 3, "renders_en_bins": 1, "clips_compartidos": 1, "clips_fisicos": 28,
                 "huerfanos": 5}
     for k, v in esperado.items():
         if r.get(k) != v:
@@ -56,8 +57,8 @@ def main():
     modos = r.get("modo_coincidencia") or {}
     if not modos.get("le"):
         fallo("el cruce bin<->MXF por identificador no ha coincidido con nada: %r" % modos)
-    if modos.get("enlace") != 2:
-        fallo("media enlazada (AMA): %r clips enlazados encontrados, esperados 2" % modos.get("enlace"))
+    if modos.get("enlace") != 3:
+        fallo("media enlazada (AMA): %r clips enlazados encontrados, esperados 3" % modos.get("enlace"))
     if modos.get("nombre_duracion") != 1:
         fallo("cruce aproximado: nombre_duracion = %r, esperado 1" % modos.get("nombre_duracion"))
     cruce = json.loads((carpeta / "cruce.json").read_text(encoding="utf-8"))
@@ -98,6 +99,8 @@ def main():
                            "20260916_CHINA 北京 SEPTIEMBRE DE 2021": ("convertir", 3, 6.0),
                            # ENLACES: vertical de móvil con estéreo y HDR HLG enlazados (AMA) y el clip del otro disco
                            "ENLACES SEPTIEMBRE DE 2021": ("convertir", 3, 6.0),
+                           # ORIGEN: la Panasonic (propio por los metadatos) y los dos dudosos, que entran marcados
+                           "ORIGEN SEPTIEMBRE DE 2021": ("convertir", 3, 6.0),
                            "ABORTO SEPTIEMBRE DE 2021": ("convertir", 2, 4.0), "APROX SEPTIEMBRE DE 2021": ("convertir", 1, 2.0),
                            "NTSC SEPTIEMBRE DE 2021": ("convertir", 2, 4.0), "SIN PROYECTO SEPTIEMBRE DE 2021": ("convertir", 4, 7.0)}
     else:
@@ -115,6 +118,8 @@ def main():
                            # ENLACES: el del otro disco (DNxHD, se copia) es una tanda sin carpeta de tarjeta; el móvil y la GoPro
                            # comparten carpeta de tarjeta (E:\RODAJE) y se convierten (formatos distintos)
                            "ENLACES_T01_2021-09-15": ("copia", 1, 2.0), "ENLACES_T02_2021-09-15": ("convertir", 2, 4.0),
+                           # ORIGEN: los dudosos entran con el material (no van a _IMPORTADOS); la Panasonic es H.264, se convierte
+                           "ORIGEN_T01_2021-09-15": ("convertir", 3, 6.0),
                            "ABORTO_T01_2021-09-15": ("convertir", 2, 4.0), "APROX_T01_2021-09-15": ("copia", 1, 2.0),
                            "NTSC_T01_2021-09-15": ("copia", 1, 2.0), "NTSC_T02_2021-09-15": ("copia", 1, 2.0),
                            "SIN_PROYECTO_T01_2021-09-15": ("copia", 4, 7.0)}
@@ -162,6 +167,8 @@ def main():
                 fallo("shotlist %s: clips %s, esperados la entrevista, el dron y la A7" % (proy, clips))
             if proy.startswith("ENLACES"):
                 enlaces(proy, Path(a.brutos) / b["shotlist"], mxf, clips, a)
+            if proy.startswith("ORIGEN"):
+                origen_por_senales(proy, Path(a.brutos) / b["shotlist"])
         sep = ";" if proy.startswith("NTSC") and a.agrupar == "proyecto" else ":"
         if not tcs or any(len(t) != 11 or t[8] != sep for t in tcs):
             fallo("shotlist %s: timecodes %r, esperado '%s' antes de los frames" % (proy, tcs, sep))
@@ -188,6 +195,22 @@ def acabado_profesional(proy, b, mxf, tc, a):
     creado = mxf_util.fecha_creacion(mxf) or ""
     if not creado.startswith("20"):
         fallo("bruto %s: sin fecha de creación (%r)" % (proy, creado))
+
+
+def origen_por_senales(proy, shotlist):
+    """ORIGEN: la Panasonic con un nombre que no está en ninguna lista entra como propia por los metadatos; lo importado
+    sin pistas y lo del bin "compras" entran marcados "para revisar", con el motivo."""
+    from openpyxl import load_workbook
+    filas = list(load_workbook(shotlist, read_only=True).active.iter_rows(values_only=True))
+    cab = filas[0]
+    fila = {f[cab.index("Clip")]: dict(zip(cab, f)) for f in filas[1:]}
+    esperado = {"ENTREVISTA ALCALDE": "Material propio", "RECURSO SIN PISTAS": "Dudoso · para revisar",
+                "VISTA AEREA": "Dudoso · para revisar"}
+    visto = {k: (fila.get(k) or {}).get("Origen") for k in esperado}
+    if visto != esperado:
+        fallo("shotlist %s: origen %r, esperado %r" % (proy, visto, esperado))
+    if "Panasonic" not in str(fila["ENTREVISTA ALCALDE"].get("Por qué")) or "compras" not in str(fila["VISTA AEREA"].get("Por qué")):
+        fallo("shotlist %s: motivos %r" % (proy, {k: v.get("Por qué") for k, v in fila.items()}))
 
 
 def ffmpeg_junto_a(ffprobe):

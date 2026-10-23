@@ -270,6 +270,22 @@ def main():
                                      ("GX010045", sin_media % 0xE02, 50, r"E:\RODAJE\DCIM\100GOPRO\GX010045.MP4"),
                                      ("OTRO DISCO", uo, 50)])
 
+    # Origen por señales (parte 4 del plan). Un MOV enlazado de una Panasonic con un nombre que no está en ninguna
+    # lista: material propio por los metadatos. Un clip importado de una carpeta sin pistas y otro de un bin "compras":
+    # dudosos, entran en el bruto marcados "para revisar" (ante la duda, entra).
+    (D / "material").mkdir()
+    ff("-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=25:d=2", "-f", "lavfi", "-i", "sine=r=48000:d=2", "-c:v", "libx264",
+       "-pix_fmt", "yuv420p", "-c:a", "aac", "-metadata", "make=Panasonic", "-metadata", "model=DC-GH5",
+       str(D / "material" / "entrevista alcalde.mov"))
+    ur = clip("RECURSO SIN PISTAS", "7B00E001", 2)
+    uc = clip("VISTA AEREA", "7B00E002", 2)
+    P = D / "ORIGEN"
+    P.mkdir()
+    (P / "ORIGEN.avp").write_bytes(b"avp")
+    bin_con(P / "ORIGEN Bin.avb", [("ENTREVISTA ALCALDE", sin_media % 0xE03, 50, r"E:\material\entrevista alcalde.mov"),
+                                    ("RECURSO SIN PISTAS", ur, 50, r"D:\varios\plano recurso.mp4")])
+    bin_con(P / "compras.avb", [("VISTA AEREA", uc, 50, r"C:\material\compras\vista aerea.mp4")])
+
     # Huérfano con vídeo, solo-audio huérfano y fichero en cuarentena.
     clip("HUERFANO", "AAAA0001", 2, audios=1)
     mka("SOLOAUDIO", M / "SOLOAUDIOA01.BBBB.mxf", 2, 300, "060A2B340101010501010D0013000000000000000000000000000000000000AA")
@@ -279,7 +295,7 @@ def main():
     # Los brutos se llaman por la fecha de su tarjeta.
     dia15 = dt.datetime(2021, 9, 15, 10, 0).timestamp()
     dia10 = dt.datetime(2021, 9, 10, 10, 0).timestamp()
-    for f in list(M.rglob("*.mxf")) + list(M2.rglob("*.mxf")) + list(R.rglob("*.MP4")):
+    for f in list(M.rglob("*.mxf")) + list(M2.rglob("*.mxf")) + list(R.rglob("*.MP4")) + list((D / "material").rglob("*.mov")):
         t = dia10 if f.name.startswith("2017 07 13") else dia15
         os.utime(f, (t, t))
     (M / "msmMMOB.mdb").write_bytes(b"\0" * 100)

@@ -199,6 +199,10 @@ def enlaces(proy, shotlist, mxf, clips, a):
     cab = filas[0]
     fila = {f[cab.index("Clip")]: dict(zip(cab, f)) for f in filas[1:]}
     if fila["GX010045"].get("Color origen") != "HLG":
+        carpeta = sorted(c for c in glob.glob(str(Path(a.informe) / "Diagnostico_*")) if Path(c).is_dir())[-1]
+        leido = [m for m in json.loads((Path(carpeta) / "mxf.json").read_text(encoding="utf-8")) if "GX010045" in m["ruta"]]
+        print("Lo que leyó el análisis del GoPro:", json.dumps(leido, ensure_ascii=False))
+        print("Fila del shotlist:", fila["GX010045"])
         fallo("shotlist %s: el GoPro HDR no sale como HLG (%r)" % (proy, fila["GX010045"].get("Color origen")))
     inicio = sum(int(x) * k for x, k in zip(fila["C0001"]["TC inicio (bruto)"].replace(";", ":").split(":"), (3600, 60, 1, 0.04)))
     r = subprocess.run([shutil.which("ffmpeg") or "ffmpeg", "-hide_banner", "-ss", "%.2f" % (inicio + 0.3), "-t", "1.2", "-i", str(mxf),

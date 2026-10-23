@@ -242,6 +242,8 @@ def enlaces(proy, shotlist, mxf, clips, a):
     filas = list(load_workbook(shotlist, read_only=True).active.iter_rows(values_only=True))
     cab = filas[0]
     fila = {f[cab.index("Clip")]: dict(zip(cab, f)) for f in filas[1:]}
+    if fila["C0001"].get("Resolución origen") != "1080x1920 (vertical)":
+        fallo("shotlist %s: el vertical debe constar como 1080x1920 (vertical): %r" % (proy, fila["C0001"].get("Resolución origen")))
     if fila["GX010045"].get("Color origen") != "HLG":
         carpeta = sorted(c for c in glob.glob(str(Path(a.informe) / "Diagnostico_*")) if Path(c).is_dir())[-1]
         leido = [m for m in json.loads((Path(carpeta) / "mxf.json").read_text(encoding="utf-8")) if "GX010045" in m["ruta"]]

@@ -827,6 +827,15 @@ class CortesYGrabacion(unittest.TestCase):
         self.assertNotIn("aviso_fecha", clips[3])
 
     @unittest.skipIf(da is None, "sin pyavb")
+    def test_resolucion_del_movil_vertical(self):
+        r = da.resolucion_vista
+        self.assertEqual(r({"ancho": 1920, "alto": 1080, "rotacion": 90}), "1080x1920 (vertical)")
+        self.assertEqual(r({"ancho": 1920, "alto": 1080, "rotacion": -90}), "1080x1920 (vertical)")
+        self.assertEqual(r({"ancho": 1920, "alto": 1080, "rotacion": 180}), "1920x1080")  # boca abajo: mismo tamaño
+        self.assertEqual(r({"ancho": 1920, "alto": 1080, "rotacion": None}), "1920x1080")
+        self.assertIsNone(r(None))
+
+    @unittest.skipIf(da is None, "sin pyavb")
     def test_clips_con_media_omf(self):
         cruce = {"por_proyecto": [{"offline_detalle": [{"nombre": "Viejo  OMF"}, {"nombre": "OTRO"}, {"nombre": "VIEJO"}]}]}
         ficheros = [{"ext": ".omf", "nombre": "VIEJO OMFV01.5A1B2C.omf"}, {"ext": ".omf", "nombre": "VIEJO OMFA01.5A1B2D.omf"},

@@ -25,6 +25,7 @@ from pathlib import Path
 
 import tema
 import ventana_montaje as vm
+import ventana_origen as vo
 
 PAGINAS = [("disco", "1 · Disco", "disco"), ("montaje", "2 · Montaje", "montaje"), ("exportar", "3 · Exportar", "exportar")]
 ESTADOS = {"empezando": "Empezando", "uniendo": "Uniendo los clips", "comprobando": "Comprobando (ficha y MD5)"}
@@ -79,6 +80,8 @@ class App:
         self.estado = {"ocupado": None, "cerrar": False, "proyectos": None, "media_extra": []}  # ocupado: None | "analisis" | "exportacion" | "actualizacion"
         self.pagina = None
         self.montaje = None  # PantallaMontaje
+        self.pantalla_origen = None  # PantallaOrigen (pestaña "Origen del material" del montaje)
+        self.pestana_montaje = "brutos"
         self.clave_montaje = None
         self.exp = None  # datos de la página Exportar: clave, resumen, cfg, marcados, estados, resultados
         self.cronometro = None
@@ -122,6 +125,15 @@ class App:
         from tkinter import messagebox
         if clave == self.pagina:
             return
+        if self.pagina == "montaje" and self.pantalla_origen and self.pantalla_origen.cambios:
+            r = messagebox.askyesnocancel("Origen sin guardar", "Hay cambios en el origen del material sin guardar. ¿Guardarlos?\n\n"
+                                          "Sí: se guardan. No: se descartan. Cancelar: sigues en el montaje.", parent=self.raiz)
+            if r is None:
+                return
+            if r:
+                self.pantalla_origen.guardar()  # el montaje se rehace en cuanto pueda (origen_guardado)
+            else:
+                self.cerrar_montaje()
         if self.pagina == "montaje" and self.montaje and self.montaje.cambios:
             r = messagebox.askyesnocancel("Montaje sin guardar", "Hay cambios en el montaje sin guardar. ¿Guardarlos?\n\n"
                                           "Sí: se guardan. No: se descartan. Cancelar: sigues en el montaje.", parent=self.raiz)
@@ -160,6 +172,8 @@ class App:
             self.barra.stop()
         if self.montaje:
             self.montaje.bloquear(que is not None)
+        if self.pantalla_origen:
+            self.pantalla_origen.bloquear(que is not None)
         self.revisar_exportar()
 
     def escribe(self, txt):
@@ -427,7 +441,9 @@ class App:
     def cerrar_montaje(self):
         if self.montaje:
             self.montaje.cerrar()
-        self.montaje, self.clave_montaje = None, None
+        if self.pantalla_origen:
+            self.pantalla_origen.cerrar()
+        self.montaje, self.pantalla_origen, self.clave_montaje = None, None, None
 
     def preparar_montaje(self):
         from tkinter import messagebox
@@ -454,7 +470,7 @@ class App:
         self.raiz.configure(cursor="watch")
         self.raiz.update()
         try:
-            m, _, _, _, resumen, cfg = da.montaje_de(carpeta, self.brutos.get())
+            m, clips, _, _, resumen, cfg = da.montaje_de(carpeta, self.brutos.get())
         except Exception as e:
             da.LOG.error("Montaje: %s\n%s", e, traceback.format_exc())
             self.raiz.configure(cursor="")
@@ -464,11 +480,54 @@ class App:
         if not m.proyectos():
             self.aviso_en("montaje", "No hay brutos", "En este análisis no hay clips de cámara que exportar.")
             return
-        self.montaje = vm.PantallaMontaje(p, m, resumen["origen"], Path(carpeta) / "visor", self.brutos.get(), da.localizar_ffmpeg()[0],
-                                          da.exportar_brutos.clips_a_la_vez(cfg), self.estado["proyectos"], al_cambiar=self.montaje_cambiado)
+        # Dos pestañas, a la izquierda de la cabecera de cada pantalla (sin fila de más: la lista de clips no encoge):
+        # los brutos (montaje) y el origen del material (qué entra y qué no, por procedencia)
+        dudosos = sum(1 for c in clips if c.get("origen_clase") == "dudoso")
+        self.var_pestana = self.tk.StringVar(value=self.pestana_montaje)
+        self.sel_pestanas = []
+
+        def pestanas(cabecera):
+            sel = tema.Seleccion(cabecera, [("brutos", "Brutos"),
+                                            ("origen", "Origen del material" + (" · %d para revisar" % dudosos if dudosos else ""))],
+                                 self.var_pestana, al_cambiar=self.ver_pestana_montaje, estilo="Cabecera")
+            sel.pack(side="left", padx=(0, 16))
+            self.sel_pestanas.append(sel)
+
+        self.cajas_montaje = {k: self.ttk.Frame(p, style="Fondo.TFrame") for k in ("brutos", "origen")}
+        self.montaje = vm.PantallaMontaje(self.cajas_montaje["brutos"], m, resumen["origen"], Path(carpeta) / "visor", self.brutos.get(),
+                                          da.localizar_ffmpeg()[0], da.exportar_brutos.clips_a_la_vez(cfg), self.estado["proyectos"],
+                                          al_cambiar=self.montaje_cambiado, pestanas=pestanas)
+        self.pantalla_origen = vo.PantallaOrigen(self.cajas_montaje["origen"], clips, cfg, self.brutos.get(), al_guardar=self.origen_guardado,
+                                                 recordar=da.recordar_reglas_origen, pestanas=pestanas)
+        self.ver_pestana_montaje()
         self.clave_montaje = clave
         self.montaje.bloquear(self.estado["ocupado"] is not None)
+        self.pantalla_origen.bloquear(self.estado["ocupado"] is not None)
         self.escribe("Montaje con el análisis %s" % carpeta.name)
+
+    def ver_pestana_montaje(self):
+        self.pestana_montaje = self.var_pestana.get()
+        for sel in self.sel_pestanas:
+            sel.pintar()
+        for k, caja in self.cajas_montaje.items():
+            if k == self.pestana_montaje:
+                caja.pack(fill="both", expand=True)
+            else:
+                caja.pack_forget()
+
+    def origen_guardado(self):
+        """Se guardó origen.json: los brutos cambian (entran o salen clips), así que se rehace el montaje."""
+        from tkinter import messagebox
+        if self.montaje and self.montaje.cambios and messagebox.askyesno(
+                "Montaje sin guardar", "Hay cambios en los brutos sin guardar. ¿Guardarlos antes de rehacer los brutos con el origen "
+                "elegido?", parent=self.raiz):
+            self.montaje.guardar()
+        self.pestana_montaje = "origen"
+        self.clave_montaje = None
+        if self.exp:
+            self.exp["clave"] = None  # la cola de exportación se rehace
+        self.escribe("Origen del material guardado (origen.json): se rehacen los brutos")
+        self.raiz.after_idle(self.preparar_montaje)
 
     def montaje_cambiado(self):
         if self.montaje and not self.montaje.cambios and self.exp:  # recién guardado: la cola se rehace con el montaje nuevo
@@ -903,6 +962,14 @@ class App:
     def al_cerrar(self):
         from tkinter import messagebox
         if not self.estado["ocupado"]:
+            if self.pantalla_origen and self.pantalla_origen.cambios:
+                r = messagebox.askyesnocancel("Origen sin guardar", "Hay cambios en el origen del material sin guardar. ¿Guardarlos antes "
+                                              "de cerrar?", parent=self.raiz)
+                if r is None:
+                    return
+                if r:
+                    self.pantalla_origen.al_guardar = None  # se cierra: no hace falta rehacer el montaje
+                    self.pantalla_origen.guardar()
             if self.montaje and self.montaje.cambios:
                 r = messagebox.askyesnocancel("Montaje sin guardar", "Hay cambios en el montaje sin guardar. ¿Guardarlos antes de cerrar?",
                                               parent=self.raiz)

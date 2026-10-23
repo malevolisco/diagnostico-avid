@@ -1207,6 +1207,66 @@ class OrigenPorSenales(unittest.TestCase):
             shutil.rmtree(d)
 
 
+class PantallaDeOrigen(unittest.TestCase):
+    """Parte 4b: la pantalla "Origen del material" agrupa por procedencia, guarda origen.json y recuerda reglas."""
+
+    def setUp(self):
+        self.cfg = dict(eb.CONFIG_DEFECTO)
+        self.d = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def clips(self):
+        c = lambda n, f=None, b="material.avb", d=10.0, **kw: dict({"nombre": n, "fichero_origen": f, "bins": [b], "duracion": d,
+                                                                    "origen": "Sin determinar"}, **kw)
+        return [c("A1", r"D:\varios\a1.mp4"), c("A2", r"E:\varios\a2.mp4", d=20.0),  # misma carpeta en otra unidad
+                c("CAM", r"E:\XDROOT\Clip\C0001.MXF", d=100.0),
+                c("COMPRA", r"C:\material\compras\x.mp4", b="compras.avb", d=5.0),
+                c("CAPTURADO", None, d=50.0),
+                c("FUNDIDO", None, render=True)]
+
+    def test_agrupa_por_procedencia_con_lo_dudoso_arriba(self):
+        gs = eb.grupos_de_origen(self.clips(), self.cfg)
+        self.assertEqual([(g["carpeta"], len(g["clips"])) for g in gs],
+                         [(r"\varios", 2), (r"\material\compras", 1), (r"\XDROOT\Clip", 1), ("", 1)])  # sin el render
+        varios = gs[0]
+        self.assertEqual((varios["dudosos"], varios["segundos"], varios["propuesta"], varios["ejemplos"]), (2, 30.0, "Dudoso", ["A1", "A2"]))
+        self.assertIn("sin pistas", varios["motivo"])
+        self.assertEqual(gs[2]["propuesta"], "Material propio")
+        self.assertIsNone(varios["elegido"])
+
+    def test_guardar_y_aplicar_lo_elegido(self):
+        eb.guardar_decisiones_origen(self.d, [{"carpeta": r"\material\compras", "bin": "compras.avb", "clase": "agencia"},
+                                              {"carpeta": r"\varios", "bin": "material.avb", "clase": None}])
+        decisiones = eb.leer_decisiones_origen(self.d)
+        self.assertEqual(decisiones, [{"carpeta": r"\material\compras", "bin": "compras.avb", "clase": "agencia"}])
+        cfg = dict(self.cfg, decisiones_origen=decisiones)
+        gs = {g["carpeta"]: g for g in eb.grupos_de_origen(self.clips(), cfg)}
+        self.assertEqual(gs[r"\material\compras"]["elegido"], "agencia")
+        self.assertEqual(gs[r"\material\compras"]["propuesta"], "Dudoso")  # la propuesta sigue siendo la del programa
+        compra = next(c for c in self.clips() if c["nombre"] == "COMPRA")
+        self.assertEqual(eb.motivo_descarte(compra, cfg), "agencia")  # y al exportar, fuera
+
+    def test_regla_para_otros_discos(self):
+        self.assertEqual(eb.regla_de_origen(r"\material\compras", "compras.avb", "agencia"),
+                         {"carpeta": r"\material\compras", "clase": "agencia"})
+        self.assertEqual(eb.regla_de_origen("", "Señal 24h.avb", "importado"), {"bin": "Señal 24h", "clase": "importado"})
+
+    @unittest.skipUnless(da, "sin pyavb")
+    def test_recordar_reglas_en_config_brutos(self):
+        original = da.carpeta_base
+        da.carpeta_base = lambda: self.d
+        try:
+            da.recordar_reglas_origen([{"carpeta": "Compras", "clase": "agencia"}, {"bin": "señal", "clase": "importado"}])
+            da.recordar_reglas_origen([{"carpeta": "compras", "clase": "propio"}, {"bin": "señal", "clase": None}])
+            cfg = eb.cargar_config(self.d / "config_brutos.json")
+            self.assertEqual(cfg["reglas_origen"], [{"carpeta": "compras", "clase": "propio"}])  # sustituida y quitada
+            self.assertEqual(cfg["agrupar"], "proyecto_mes")  # el resto de la configuración, intacto
+        finally:
+            da.carpeta_base = original
+
+
 class MediaEnlazada(unittest.TestCase):
     """Media enlazada (AMA) o importada sin MXF de Avid: el fichero original se busca en el disco esté donde esté."""
 

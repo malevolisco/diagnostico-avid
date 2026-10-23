@@ -56,7 +56,9 @@ class PantallaMontaje:
     """Se construye dentro de contenedor (un marco de la ventana). al_cambiar() avisa de que cambió el estado de
     "cambios sin guardar" (para que la ventana pregunte antes de salir de la página)."""
 
-    def __init__(self, contenedor, m, origen, carpeta_visor, carpeta_brutos, ffmpeg, hilos=2, proyectos=None, al_cambiar=None):
+    def __init__(self, contenedor, m, origen, carpeta_visor, carpeta_brutos, ffmpeg, hilos=2, proyectos=None, al_cambiar=None,
+                 pestanas=None):
+        """pestanas(cabecera): pone las pestañas de la página (Brutos | Origen del material) a la izquierda de la cabecera."""
         import tkinter as tk
         from tkinter import ttk
         import tema
@@ -78,8 +80,10 @@ class PantallaMontaje:
 
         cab = ttk.Frame(f, style="Cabecera.TFrame", padding=(16, 8))
         cab.pack(fill="x")
+        if pestanas:
+            pestanas(cab)
         ttk.Label(cab, text="Proyecto", style="Tarjeta.Suave.TLabel").pack(side="left")
-        self.cb_p = ttk.Combobox(cab, state="readonly", width=56)
+        self.cb_p = ttk.Combobox(cab, state="readonly", width=40 if pestanas else 56)
         self.cb_p.pack(side="left", padx=8)
         self.lbl_p = ttk.Label(cab, text="", style="Tarjeta.Suave.TLabel")
         self.lbl_p.pack(side="left", padx=6)

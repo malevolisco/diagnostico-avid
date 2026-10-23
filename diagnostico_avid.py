@@ -1674,6 +1674,21 @@ def resumen_exportacion(carpeta_analisis, carpeta_brutos, proyectos_brutos=None)
             "destino": str(carpeta_brutos)}, cfg
 
 
+def recordar_reglas_origen(nuevas):
+    """'Recordar para otros discos': añade reglas a config_brutos.json → reglas_origen. Una regla de la misma carpeta
+    (o bin) que ya estaba se sustituye; una con clase None la quita."""
+    cfg = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json")
+    clave = lambda r: (str(r.get("carpeta") or "").lower(), str(r.get("bin") or "").lower())
+    cambiadas = {clave(r) for r in nuevas}
+    reglas = [r for r in cfg.get("reglas_origen") or [] if clave(r) not in cambiadas]
+    reglas += [r for r in nuevas if r.get("clase")]
+    cfg["reglas_origen"] = reglas
+    guardar_config_brutos(cfg)
+    LOG.info("Reglas de origen recordadas: %s", "; ".join("%s = %s" % (r.get("carpeta") or "bin " + r.get("bin", ""), r.get("clase"))
+                                                         for r in nuevas))
+    return reglas
+
+
 def guardar_config_brutos(cfg):
     """Guarda las opciones del panel como predeterminadas en config_brutos.json (con los comentarios de siempre)."""
     base = json.loads(json.dumps(exportar_brutos.CONFIG_DEFECTO))

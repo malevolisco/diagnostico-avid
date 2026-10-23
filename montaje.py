@@ -25,6 +25,7 @@ import hashlib
 import json
 import logging
 import subprocess
+import uuid
 from pathlib import Path
 
 import exportar_brutos as eb
@@ -335,7 +336,9 @@ def sacar_fotogramas(ffmpeg, ruta_video, carpeta_visor, clave, timeout=1800):
     if salida.exists() and salida.stat().st_size > 0:
         return salida
     salida.parent.mkdir(parents=True, exist_ok=True)
-    tmp = salida.with_suffix(".tmp")
+    # Temporal propio: al rehacer el montaje (p. ej. tras elegir el origen) el de antes puede seguir sacando los mismos
+    # fotogramas; con un temporal compartido, el que acaba primero se lo llevaba y el otro daba el clip por fallido.
+    tmp = salida.with_name("%s.%s.tmp" % (salida.stem, uuid.uuid4().hex[:8]))
     # -skip_frame nokey: en MPEG-2/H.264 solo se decodifican las imágenes clave (3-4 veces más rápido; para 1 por
     # segundo sobra). En DV, DNxHD o ProRes todas lo son. Medido: ~1 s por minuto de DV, ~10 KB por fotograma.
     cmd = [ffmpeg, "-v", "error", "-y", "-skip_frame", "nokey", "-i", eb.ruta_larga(ruta_video), "-map", "0:v:0", "-an",
@@ -348,8 +351,10 @@ def sacar_fotogramas(ffmpeg, ruta_video, carpeta_visor, clave, timeout=1800):
         tmp.unlink(missing_ok=True)
         return None
     if r.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
-        LOG.warning("Visor: ffmpeg falló con %s: %s", ruta_video, r.stderr.decode("utf-8", "replace")[-300:])
         tmp.unlink(missing_ok=True)
+        if salida.exists() and salida.stat().st_size > 0:  # otro lo terminó mientras tanto
+            return salida
+        LOG.warning("Visor: ffmpeg falló con %s: %s", ruta_video, r.stderr.decode("utf-8", "replace")[-300:])
         return None
     tmp.replace(salida)
     return salida

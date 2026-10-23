@@ -70,7 +70,7 @@ Se hace en dos entregas:
   - shotlist con las columnas Origen y Por qué;
   - ante la duda, entra marcado "para revisar";
   - disco simulado: proyecto ORIGEN.
-- **4b (pantalla)**: pestaña "Origen del material" en Montaje, que escribe `origen.json` y, si se marca "Recordar para otros discos", `reglas_origen`.
+- **4b (pantalla)**: pestaña "Origen del material" en Montaje (`ventana_origen.py`), que escribe `origen.json`, rehace el montaje y, si se marca "Recordar para otros discos", guarda `reglas_origen`. La prueba de la ventana marca el bin "compras" como agencia y comprueba que su clip sale del bruto.
 
 ### Parte 5: fechas imposibles
 

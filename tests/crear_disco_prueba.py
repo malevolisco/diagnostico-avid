@@ -249,8 +249,16 @@ def main():
     ff("-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=25:d=2", *estereo, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(tmp_v))
     ff("-display_rotation:v:0", "90", "-i", str(tmp_v), "-c", "copy", str(R / "XDROOT" / "Clip" / "C0001.MP4"))
     tmp_v.unlink()
-    ff("-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=25:d=2", *estereo, "-c:v", "libx265", "-pix_fmt", "yuv420p10le",
-       "-x265-params", "log-level=error", "-color_primaries", "bt2020", "-color_trc", "arib-std-b67", "-colorspace", "bt2020nc",
+    # Las etiquetas de color van en las imágenes (setparams) y dentro del HEVC (x265-params): con solo las opciones de salida,
+    # el ffmpeg 7.1 de Windows escribía la matriz pero no las primarias ni la transferencia (y el clip no parecía HDR).
+    hlg = "color_primaries=bt2020:color_trc=arib-std-b67:colorspace=bt2020nc:range=tv"
+    estereo_hlg = list(estereo)
+    i = estereo_hlg.index("-filter_complex") + 1
+    estereo_hlg[i] = "[0:v]setparams=%s[v];%s" % (hlg, estereo_hlg[i])
+    estereo_hlg[estereo_hlg.index("0:v")] = "[v]"
+    ff("-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=25:d=2", *estereo_hlg, "-c:v", "libx265", "-pix_fmt", "yuv420p10le",
+       "-x265-params", "log-level=error:colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc:range=limited",
+       "-color_primaries", "bt2020", "-color_trc", "arib-std-b67", "-colorspace", "bt2020nc",
        "-c:a", "aac", str(R / "DCIM" / "100GOPRO" / "GX010045.MP4"))
     # Y un clip cuya media de Avid está en otro disco (la carpeta _media2).
     uo = clip("OTRO DISCO", "6A00D001", 2, carpeta=M2)

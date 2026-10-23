@@ -177,6 +177,13 @@ clips en orden de fecha y de 2 horas como mucho:
    para revisar"...) y la siguiente, "Por qué", da el motivo ("metadatos:
    Panasonic DC-GH5", "carpeta Downloads", "importado de \varios, sin
    pistas de origen"...).
+   Vídeos de cualquier cámara, todos al mismo formato de archivo:
+   - El vídeo vertical de móvil sale derecho, con bandas negras a los lados.
+   - El HDR (HLG, PQ) se pasa a color normal (BT.709) para que no salga
+     lavado; la columna "Color origen" del shotlist dice cuál era.
+   - Cada canal de audio es una pista del bruto: un estéreo da 2 pistas.
+   - La media OMF de los Avid antiguos no se puede exportar (ffmpeg no la
+     lee): el informe la cuenta y marca sus clips "media en OMF".
    Convertir a HD es lento: el programa convierte varios clips a la vez,
    pero cuenta con del orden de media hora de ordenador por cada hora de
    material (depende del PC). Con un disco grande, mejor por proyectos con

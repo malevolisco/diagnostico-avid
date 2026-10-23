@@ -827,6 +827,15 @@ class CortesYGrabacion(unittest.TestCase):
         self.assertNotIn("aviso_fecha", clips[3])
 
     @unittest.skipIf(da is None, "sin pyavb")
+    def test_clips_con_media_omf(self):
+        cruce = {"por_proyecto": [{"offline_detalle": [{"nombre": "Viejo  OMF"}, {"nombre": "OTRO"}, {"nombre": "VIEJO"}]}]}
+        ficheros = [{"ext": ".omf", "nombre": "VIEJO OMFV01.5A1B2C.omf"}, {"ext": ".omf", "nombre": "VIEJO OMFA01.5A1B2D.omf"},
+                    {"ext": ".omf", "nombre": "suelto.omf"}, {"ext": ".mxf", "nombre": "OTROV01.1.mxf"}]
+        self.assertEqual(da.marcar_offline_en_omf(cruce, ficheros), 1)
+        self.assertEqual([o.get("omf") for o in cruce["por_proyecto"][0]["offline_detalle"]], [True, None, None])
+        self.assertEqual(cruce["offline_en_omf"], 1)
+
+    @unittest.skipIf(da is None, "sin pyavb")
     def test_buscar_el_ultimo_analisis_del_disco(self):
         for nombre, origen, fecha in [("Diagnostico_X_20261020_0900", "F:/DISCO 1", "2026-10-20 09:00"),
                                       ("Diagnostico_X_20261021_0900", "F:/DISCO 1", "2026-10-21 09:00"),

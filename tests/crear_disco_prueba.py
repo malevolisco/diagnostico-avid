@@ -287,7 +287,11 @@ def main():
     bin_con(P / "ORIGEN Bin.avb", [("ENTREVISTA ALCALDE", sin_media % 0xE03, 50, r"E:\material\entrevista alcalde.mov",
                                      {"Shoot Date": "01/01/2000", "Shoot Time": "00:03:00"}),
                                     ("RECURSO SIN PISTAS", ur, 50, r"D:\varios\plano recurso.mp4",
-                                     {"Shoot Date": "16/09/2021", "Shoot Time": "12:00:00"})])
+                                     {"Shoot Date": "16/09/2021", "Shoot Time": "12:00:00"}),
+                                    # Media OMF de un Avid antiguo: ffmpeg no la lee; sale offline, marcado "media en OMF"
+                                    ("VIEJO OMF", sin_media % 0xE04)])
+    (D / "OMFI MediaFiles").mkdir()
+    (D / "OMFI MediaFiles" / "VIEJO OMFV01.5A1B2C.omf").write_bytes(b"OMF" * 100)
     bin_con(P / "compras.avb", [("VISTA AEREA", uc, 50, r"C:\material\compras\vista aerea.mp4")])
 
     # Huérfano con vídeo, solo-audio huérfano y fichero en cuarentena.

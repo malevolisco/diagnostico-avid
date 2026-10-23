@@ -44,12 +44,13 @@ def main():
         if not (carpeta / f).exists():
             fallo("falta %s" % f)
     r = json.loads((carpeta / "resumen.json").read_text(encoding="utf-8"))
-    # offline: CLIP OFFLINE + los 2 "APROX B" ambiguos. clips_fisicos: 9 + 2 NTSC + 3 APROX + agencia + pieza
+    # clips_fisicos: 9 + 2 NTSC + 3 APROX + agencia + pieza
     # + importado + render sin bin + 4 de China. huerfanos: HUERFANO, SOLOAUDIO, CUARENTENA y los 2 "APROX B" (el render no cuenta).
     # China: 2 bins, uno en una ruta de más de 260 caracteres (en Windows hay que leerlo con \\?\).
     # ENLACES: 2 ficheros enlazados (AMA) fuera de Avid MediaFiles y 1 clip con la media en otra carpeta (--media-extra).
     # ORIGEN: 2 bins (uno "compras"), un MOV enlazado de una Panasonic y 2 clips importados sin pistas de origen.
-    esperado = {"proyectos": 7, "bins": 11, "bins_ilegibles": 1, "offline": 3, "renders_en_bins": 1, "clips_compartidos": 1, "clips_fisicos": 28,
+    # offline: CLIP OFFLINE, los 2 "APROX B" ambiguos y VIEJO OMF (su media es OMF, que no se lee)
+    esperado = {"proyectos": 7, "bins": 11, "bins_ilegibles": 1, "offline": 4, "renders_en_bins": 1, "clips_compartidos": 1, "clips_fisicos": 28,
                 "huerfanos": 5}
     for k, v in esperado.items():
         if r.get(k) != v:
@@ -59,6 +60,9 @@ def main():
         fallo("el cruce bin<->MXF por identificador no ha coincidido con nada: %r" % modos)
     if modos.get("enlace") != 3:
         fallo("media enlazada (AMA): %r clips enlazados encontrados, esperados 3" % modos.get("enlace"))
+    if json.loads((carpeta / "cruce.json").read_text(encoding="utf-8")).get("offline_en_omf") != 1 \
+            or "media en OMF" not in (carpeta / "informe.html").read_text(encoding="utf-8"):
+        fallo("OMF: el clip VIEJO OMF debe salir offline marcado 'media en OMF' en cruce.json y en el informe")
     if modos.get("nombre_duracion") != 1:
         fallo("cruce aproximado: nombre_duracion = %r, esperado 1" % modos.get("nombre_duracion"))
     cruce = json.loads((carpeta / "cruce.json").read_text(encoding="utf-8"))

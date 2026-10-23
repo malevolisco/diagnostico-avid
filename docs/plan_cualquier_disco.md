@@ -1,5 +1,18 @@
 # Plan: que valga para cualquier disco
 
+**Estado (23/10/2026): hecho entero.** Cada parte se fusionó con su build de Windows en verde:
+
+| Parte | Qué | PR |
+|---|---|---|
+| 1 | Audio por canales | malevolisco/diagnostico-avid#18 |
+| 2 y 3 | Vídeo de cualquier origen (HDR, color, entrelazado sin marcar) y media enlazada (AMA) | malevolisco/diagnostico-avid#19 |
+| 4a | Origen del material por señales | malevolisco/diagnostico-avid#20 |
+| 4b | Pestaña "Origen del material" | malevolisco/diagnostico-avid#21 |
+| 5 | Fechas imposibles y reloj desfasado | malevolisco/diagnostico-avid#22 |
+| 6 | OMF clip a clip y repaso de la documentación | el de este cambio |
+
+Lo que no se puede comprobar sin un disco real está en "No verificable aquí", al final del diseño.
+
 **Diseño:** `docs/diseno_cualquier_disco.md` (aprobado por Adrián el 23/10/2026: "me encaja"). Si este plan y el diseño no coinciden, manda el diseño.
 
 **Restricciones comunes:**
@@ -81,3 +94,5 @@ Hecho (`fecha_imposible`): el 1 de enero solo cuenta como de fábrica si está a
 ### Parte 6: documentación y entrega final
 
 `INSTRUCCIONES.txt`, `LEEME_tecnico.md` y `NOTAS_DESARROLLO.md` en cada parte; aquí el repaso final.
+
+Hecho. Se añadió lo que faltaba del diseño: la media OMF también clip a clip (`marcar_offline_en_omf`: sus clips de bin salen offline, marcados "media en OMF"; disco simulado: "VIEJO OMF").

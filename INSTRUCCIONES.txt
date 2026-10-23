@@ -187,6 +187,11 @@ clips en orden de fecha y de 2 horas como mucho:
    Time"); si no, la del volcado al disco de Avid. Si dos coinciden en el
    mismo segundo, por su timecode. El Excel lleva las dos fechas, y el
    informe dice en cuántos clips se ha encontrado la de grabación.
+   Una fecha de grabación imposible (antes de 2000, en el futuro, o el
+   1 de enero de una cámara con el reloj sin poner) no se usa: el clip va
+   por la del volcado y la columna "Aviso fecha" lo dice. Si la de
+   grabación se aleja más de 12 horas del volcado (reloj de la cámara mal
+   puesto), se usa igual, pero con aviso.
 
 Todo seguido, sin pasar por Montaje ni Exportar: en la página Disco, abre
 "Opciones avanzadas" y marca "Analizar y exportar seguido" antes de pulsar

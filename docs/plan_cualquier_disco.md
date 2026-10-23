@@ -76,6 +76,8 @@ Se hace en dos entregas:
 
 Fecha de grabación antes de 2000, en el futuro o el 1/1 de fábrica: se ignora y se avisa. Además, aviso de reloj desfasado de más de 12 h.
 
+Hecho (`fecha_imposible`): el 1 de enero solo cuenta como de fábrica si está a más de 2 días del volcado (Año Nuevo puede ser de verdad). Aviso en el informe y en la columna "Aviso fecha" del shotlist. Disco simulado: una fecha 01/01/2000 00:03 y un reloj 26 h adelantado en el proyecto ORIGEN.
+
 ### Parte 6: documentación y entrega final
 
 `INSTRUCCIONES.txt`, `LEEME_tecnico.md` y `NOTAS_DESARROLLO.md` en cada parte; aquí el repaso final.

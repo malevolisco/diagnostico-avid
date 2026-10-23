@@ -66,8 +66,10 @@ def main():
     if (aprox.get("clips_aproximados"), aprox.get("clips_ambiguos")) != (1, 2):
         fallo("APROX: aproximados %r, ambiguos %r; esperado 1 y 2" % (aprox.get("clips_aproximados"), aprox.get("clips_ambiguos")))
     grab = (json.loads((carpeta / "cruce.json").read_text(encoding="utf-8")).get("fecha_grabacion") or {})
-    if grab.get("clips") != 2:
-        fallo("fecha de grabación: %r clips, esperados 2 (NTSC, columnas Shoot Date/Time del bin)" % grab.get("clips"))
+    # NTSC (columnas Shoot Date/Time del bin) y el de ORIGEN con el reloj desfasado; la Panasonic del 1/1/2000, descartada
+    if (grab.get("clips"), sum((grab.get("imposibles") or {}).values()), grab.get("desfasados")) != (3, 1, 1):
+        fallo("fecha de grabación: %r clips, %r imposibles, %r desfasados; esperados 3, 1 y 1"
+              % (grab.get("clips"), grab.get("imposibles"), grab.get("desfasados")))
     if r.get("mxf_error"):
         fallo("%d MXF con error de lectura" % r["mxf_error"])
     no_legibles = [x["ruta"].replace("\\", "/") for x in r.get("no_legibles", [])]
@@ -211,6 +213,11 @@ def origen_por_senales(proy, shotlist):
         fallo("shotlist %s: origen %r, esperado %r" % (proy, visto, esperado))
     if "Panasonic" not in str(fila["ENTREVISTA ALCALDE"].get("Por qué")) or "compras" not in str(fila["VISTA AEREA"].get("Por qué")):
         fallo("shotlist %s: motivos %r" % (proy, {k: v.get("Por qué") for k, v in fila.items()}))
+    # Fechas: la del 1/1/2000 no se usa (fecha de grabación vacía, aviso); la de 26 h tras el volcado sí, con aviso
+    alcalde, recurso = fila["ENTREVISTA ALCALDE"], fila["RECURSO SIN PISTAS"]
+    if alcalde.get("Fecha grabación") or "imposible" not in str(alcalde.get("Aviso fecha")) \
+            or not recurso.get("Fecha grabación") or "26 h" not in str(recurso.get("Aviso fecha")):
+        fallo("shotlist %s: fechas %r" % (proy, {k: (v.get("Fecha grabación"), v.get("Aviso fecha")) for k, v in fila.items()}))
 
 
 def ffmpeg_junto_a(ffprobe):

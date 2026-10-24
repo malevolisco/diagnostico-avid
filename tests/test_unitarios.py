@@ -1372,6 +1372,15 @@ class TextosDeLaCola(unittest.TestCase):
         self.assertEqual(interfaz.texto_calidad({"estado": "OK", "conforme": True, "md5": "abc"}), "Conforme · MD5")
         self.assertEqual(interfaz.texto_calidad({"estado": "AVISO", "conforme": False, "md5": "abc"}), "NO CONFORME")
         self.assertEqual(interfaz.texto_calidad({"estado": "OK"}), "Hecho")
+
+    def test_resumen_del_disco_al_elegirlo(self):
+        import interfaz
+        lista = [{"nombre": "ABORTO", "bins": 2, "modificado": "2021-09-15 10:00:00"},
+                 {"nombre": "NTSC", "bins": 1, "modificado": "2021-09-16 18:30:00"},
+                 {"nombre": "(bins sin proyecto)", "bins": 3, "modificado": "2021-09-01 08:00:00"}]
+        self.assertEqual(interfaz.resumen_disco(lista), "2 proyectos · 3 bins · 3 bins sin proyecto · último cambio 16/09/2021")
+        self.assertEqual(interfaz.resumen_disco(lista[:1]), "1 proyecto · 2 bins · último cambio 15/09/2021")
+        self.assertIn("No hay proyectos de Avid", interfaz.resumen_disco([]))
         self.assertEqual(interfaz.texto_calidad(None), "—")
 
 

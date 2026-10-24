@@ -5,7 +5,8 @@ Prueba de la ventana (interfaz.py) de principio a fin sobre el disco de prueba, 
 
   python tests/probar_interfaz.py DISCO CARPETA_INFORME CARPETA_BRUTOS CARPETA_CAPTURAS
 
-1 · Disco: Montaje sin análisis avisa en vez de fallar; analizar; la tarjeta "Último análisis" se rellena.
+1 · Disco: al elegir el disco se leen solos sus proyectos ("7 proyectos · …"), y "Proyectos…" reutiliza esa lectura;
+   Montaje sin análisis avisa en vez de fallar; analizar; la tarjeta "Último análisis" se rellena.
 2 · Montaje: "Fuera del bruto" con agencia, efecto e importado. Pestaña "Origen del material": el bin "compras" sale
    arriba como dudoso; se marca "Fuera: agencia", se guarda origen.json y el montaje se rehace con ese clip fuera.
    Bajar un clip, deshacer, volver a bajar; al cambiar de página pregunta y guarda montaje.json.
@@ -96,6 +97,25 @@ def disco():
     textos = [w.cget("text") for w in todos(app.paginas["montaje"]) if w.winfo_class() == "TLabel"]
     comprobar("Primero analiza el disco" in textos, "Montaje sin análisis debe decir qué hacer: %s" % textos[:2])
     app.ir("disco")
+    esperar(lambda: app.vista_disco["lista"] is not None, disco_leido, limite=60)
+
+
+@seguro
+def disco_leido():
+    texto = app.lbl_disco.cget("text")
+    comprobar(texto.startswith("7 proyectos · 11 bins"), "al elegir el disco deben salir solos sus proyectos: %r" % texto)
+    llamadas = []
+    listar, dialogo = d.listar_proyectos, d.dialogo_proyectos
+
+    def selector(raiz, lista, elegidos, hechos):  # en vez del diálogo: apunta lo que se le ofrece y cancela
+        r["selector"] = [p["nombre"] for p in lista]
+        return None
+
+    d.listar_proyectos = lambda o: llamadas.append(o) or listar(o)
+    d.dialogo_proyectos = selector
+    app.elegir_proyectos()
+    d.listar_proyectos, d.dialogo_proyectos = listar, dialogo
+    comprobar(not llamadas and len(r.get("selector") or []) == 7, "Proyectos… debe reutilizar la lectura: %s, %s" % (llamadas, r.get("selector")))
     captura("1_disco.png")
     app.bt_analizar.invoke()
     comprobar(app.estado["ocupado"] == "analisis", "al pulsar Analizar debe quedar trabajando")

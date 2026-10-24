@@ -56,9 +56,12 @@ Página 1 · Disco
      "Avid MediaFiles"), pulsa "Añadir…" y elígela. También se lee sin
      modificarla. Si el informe dice que hay clips enlazados a ficheros que
      no están en el disco, es aquí donde se añade la carpeta donde estén.
-3. "Proyectos: todos..." sirve para no hacerlos todos de una vez: sale la
-   lista de proyectos del disco (tarda unos segundos) y marcas los que
-   quieres ahora. Los que ya tienen brutos en esa carpeta salen con
+3. Al elegir el disco, el programa lee solo qué proyectos tiene (en unos
+   segundos, sin abrir nada) y lo dice debajo de las carpetas, por ejemplo
+   "7 proyectos · 11 bins · último cambio 15/09/2021". Sirve para ver de un
+   vistazo si es el disco que esperabas.
+   "Proyectos: todos..." sirve para no hacerlos todos de una vez: sale la
+   lista de proyectos del disco y marcas los que quieres ahora. Los que ya tienen brutos en esa carpeta salen con
    "✓ ya tiene brutos"; el botón "Solo los que faltan" marca el resto.
    Otro día, misma carpeta de brutos y eliges los siguientes: los ya hechos
    no se tocan. El análisis lee siempre el disco entero (hace falta para

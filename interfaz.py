@@ -59,6 +59,22 @@ def texto_calidad(res):
     return " · ".join(partes) or ("Hecho" if str(res.get("estado", "")).startswith("OK") else "—")
 
 
+def resumen_disco(lista):
+    """'7 proyectos · 11 bins · último cambio 15/09/2021' a partir de listar_proyectos."""
+    if not lista:
+        return "No hay proyectos de Avid en esta carpeta (ningún .avp ni .avb)."
+    proyectos = [p for p in lista if p["nombre"] != "(bins sin proyecto)"]
+    sueltos = sum(p["bins"] for p in lista if p["nombre"] == "(bins sin proyecto)")
+    bins = sum(p["bins"] for p in proyectos)
+    partes = ["%d proyecto%s" % (len(proyectos), "" if len(proyectos) == 1 else "s"), "%d bin%s" % (bins, "" if bins == 1 else "s")]
+    if sueltos:
+        partes.append("%d bin%s sin proyecto" % (sueltos, "" if sueltos == 1 else "s"))
+    fechas = sorted(p["modificado"] for p in lista if p.get("modificado"))
+    if fechas:
+        partes.append("último cambio %s/%s/%s" % (fechas[-1][8:10], fechas[-1][5:7], fechas[-1][:4]))
+    return " · ".join(partes)
+
+
 class App:
     def __init__(self, da):
         import tkinter as tk
@@ -84,6 +100,9 @@ class App:
         self.pestana_montaje = "brutos"
         self.clave_montaje = None
         self.exp = None  # datos de la página Exportar: clave, resumen, cfg, marcados, estados, resultados
+        # Proyectos del disco elegido, leídos solos al elegirlo (listar_proyectos): el botón "Proyectos…" los reutiliza
+        self.vista_disco = {"origen": None, "lista": None, "turno": 0}
+        self.espera_disco = None
         self.cronometro = None
 
         self.cabecera()
@@ -192,6 +211,7 @@ class App:
         if proyectos:
             self.estado["proyectos"] = None
             self.pintar_proyectos()
+            self.programar_vista_disco()
         if self.pagina == "disco":
             self.pintar_ultimo()
 
@@ -228,8 +248,11 @@ class App:
         self.pintar_media_extra()
         t.columnconfigure(1, weight=1)
 
+        self.lbl_disco = ttk.Label(izq, text="", style="TLabel")
+        self.lbl_disco.pack(anchor="w", pady=(12, 0))
+
         fila = ttk.Frame(izq, style="Fondo.TFrame")
-        fila.pack(fill="x", pady=(14, 0))
+        fila.pack(fill="x", pady=(10, 0))
         self.bt_proy = ttk.Button(fila, text="Proyectos: todos…", command=self.elegir_proyectos)
         self.bt_proy.pack(side="left")
         self.lbl_proy = ttk.Label(fila, text="", style="Suave.TLabel")
@@ -295,6 +318,42 @@ class App:
             self.avanzadas.pack(fill="x", pady=(12, 0), before=self.barra)
             self.bt_avanzadas.configure(text="Opciones avanzadas ▾")
 
+    def programar_vista_disco(self):
+        """Medio segundo después de cambiar la carpeta del disco (para no leer a cada letra si se escribe a mano)."""
+        if self.espera_disco:
+            self.raiz.after_cancel(self.espera_disco)
+        self.espera_disco = self.raiz.after(500, self.leer_vista_disco)
+
+    def leer_vista_disco(self):
+        """Lee los proyectos del disco por detrás (solo nombres de .avp y .avb: segundos) y los resume en la página Disco."""
+        self.espera_disco = None
+        origen = self.origen.get()
+        self.vista_disco.update(origen=None, lista=None, turno=self.vista_disco["turno"] + 1)
+        if not origen:
+            self.lbl_disco.configure(text="", style="TLabel")
+            return
+        if not Path(origen).is_dir():
+            self.lbl_disco.configure(text="Esa carpeta no existe o no se puede abrir.", style="Aviso.TLabel")
+            return
+        self.lbl_disco.configure(text="Leyendo los proyectos del disco…", style="Suave.TLabel")
+        turno, da = self.vista_disco["turno"], self.da
+
+        def leer():
+            try:
+                self.cola.put(("vista_disco", (turno, origen, da.listar_proyectos(origen), None)))
+            except Exception as e:
+                self.cola.put(("vista_disco", (turno, origen, None, str(e))))
+        threading.Thread(target=leer, daemon=True).start()
+
+    def al_leer_disco(self, turno, origen, lista, error):
+        if turno != self.vista_disco["turno"]:  # se cambió de disco mientras se leía: vale la lectura nueva
+            return
+        if error is not None:
+            self.lbl_disco.configure(text="No se han podido leer los proyectos: %s" % error, style="Aviso.TLabel")
+            return
+        self.vista_disco.update(origen=origen, lista=lista)
+        self.lbl_disco.configure(text=resumen_disco(lista), style="TLabel" if lista else "Aviso.TLabel")
+
     def pintar_proyectos(self):
         p = self.estado["proyectos"]
         if p is None:
@@ -352,12 +411,14 @@ class App:
             return
         if not self.origen.get() or not Path(self.origen.get()).exists():
             return messagebox.showwarning("Falta el disco", "Elige primero el disco o la carpeta de Avid.", parent=self.raiz)
-        self.raiz.configure(cursor="watch")
-        self.raiz.update()
-        try:
-            lista = da.listar_proyectos(self.origen.get())
-        finally:
-            self.raiz.configure(cursor="")
+        lista = self.vista_disco["lista"] if self.vista_disco["origen"] == self.origen.get() else None
+        if lista is None:  # aún no se ha leído (o se está leyendo): se lee ahora
+            self.raiz.configure(cursor="watch")
+            self.raiz.update()
+            try:
+                lista = da.listar_proyectos(self.origen.get())
+            finally:
+                self.raiz.configure(cursor="")
         hechos = da.brutos_hechos(self.brutos.get()) if self.brutos.get() else set()
         elegidos = da.dialogo_proyectos(self.raiz, lista, self.estado["proyectos"], hechos)
         if elegidos is None:
@@ -918,6 +979,9 @@ class App:
                     continue
                 if tipo == "evento":
                     self.al_evento(msg)
+                    continue
+                if tipo == "vista_disco":
+                    self.al_leer_disco(*msg)
                     continue
                 if tipo == "actualizacion":
                     if msg == "cambio_lanzado":  # el .bat espera a que se cierre para cambiar de versión y reabrir

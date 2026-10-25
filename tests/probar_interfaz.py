@@ -8,7 +8,8 @@ Prueba de la ventana (interfaz.py) de principio a fin sobre el disco de prueba, 
 1 · Disco: al elegir el disco se leen solos sus proyectos ("7 proyectos · …"), y "Proyectos…" reutiliza esa lectura;
    Montaje sin análisis avisa en vez de fallar; analizar; la tarjeta "Último análisis" se rellena.
 2 · Montaje: "Fuera del bruto" con agencia, efecto e importado. Pestaña "Origen del material": el bin "compras" sale
-   arriba como dudoso; se marca "Fuera: agencia", se guarda origen.json y el montaje se rehace con ese clip fuera.
+   arriba como dudoso; se marca "Fuera: agencia", se guarda origen.json (y se aprende en el fichero de lo aprendido) y el
+   montaje se rehace con ese clip fuera.
    Bajar un clip, deshacer, volver a bajar; al cambiar de página pregunta y guarda montaje.json.
 3 · Exportar: piezas sin marcar; un TC no válido desactiva el botón y dice por qué; exportar; cada bruto acaba en
    "Terminado" y "Conforme · MD5".
@@ -38,6 +39,9 @@ messagebox.askyesnocancel = lambda *a, **k: r.setdefault("preguntas", []).append
 messagebox.showinfo = lambda *a, **k: r.setdefault("info", []).append(a[0])
 messagebox.showwarning = lambda *a, **k: r.setdefault("avisos", []).append(a[:2])
 messagebox.showerror = lambda *a, **k: r["dialogos_error"].append(a[:2])
+APRENDIDO = Path(DESTINO) / "aprendizaje_prueba.json"  # no se toca el config_aprendizaje_origen.json de junto al programa
+APRENDIDO.unlink(missing_ok=True)
+d.ruta_aprendizaje = lambda cfg=None: APRENDIDO
 d.webbrowser.open = lambda *a, **k: None  # que no abra el informe en el navegador
 
 
@@ -160,6 +164,10 @@ def origen_aplicado():
     datos = json.loads((Path(BRUTOS) / "origen.json").read_text(encoding="utf-8"))
     comprobar([d["clase"] for d in datos["decisiones"] if d["bin"] == "compras.avb"] == ["agencia"], "origen.json: %s" % datos)
     comprobar(app.pestana_montaje == "origen", "tras guardar debe seguir en la pestaña de origen")
+    aprendido = json.loads(APRENDIDO.read_text(encoding="utf-8"))["decisiones"]
+    comprobar([(a["clase"], "bin:compras" in a["rasgos"]) for a in aprendido] == [("agencia", True)],
+              "lo decidido debe apuntarse para aprender: %s" % aprendido)
+    comprobar(len(app.pantalla_origen.tv["columns"]) == 9, "falta la columna Aprendido")
     pm = app.montaje
     pm.cb_p.current(pm.proyectos.index("ORIGEN"))
     pm.elegir_proyecto("ORIGEN")

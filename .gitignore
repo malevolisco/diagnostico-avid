@@ -15,3 +15,4 @@ __pycache__/
 .adversarial-review/
 config_brutos.json
 config_origen.json
+config_aprendizaje_origen.json

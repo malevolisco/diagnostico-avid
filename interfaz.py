@@ -559,7 +559,7 @@ class App:
                                           da.localizar_ffmpeg()[0], da.exportar_brutos.clips_a_la_vez(cfg), self.estado["proyectos"],
                                           al_cambiar=self.montaje_cambiado, pestanas=pestanas)
         self.pantalla_origen = vo.PantallaOrigen(self.cajas_montaje["origen"], clips, cfg, self.brutos.get(), al_guardar=self.origen_guardado,
-                                                 recordar=da.recordar_reglas_origen, pestanas=pestanas)
+                                                 recordar=da.recordar_reglas_origen, pestanas=pestanas, aprendizaje=da.ruta_aprendizaje(cfg))
         self.ver_pestana_montaje()
         self.clave_montaje = clave
         self.montaje.bloquear(self.estado["ocupado"] is not None)

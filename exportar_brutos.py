@@ -85,6 +85,8 @@ CONFIG_DEFECTO = {
     "_bins_agencia_regex": "Bins cuyo nombre indica material de agencia (p. ej. '20260916 agencias.avb'): lo que hay en ellos y no es de cámara cuenta como agencia",
     "reglas_origen": [],
     "_reglas_origen": "Decisiones de la pantalla 'Origen del material' marcadas 'Recordar para otros discos', p. ej. [{\"carpeta\": \"Compras\", \"clase\": \"agencia\"}]. carpeta: trozo de la ruta de la que se importó; bin: trozo del nombre del bin; clase: propio | agencia | importado",
+    "aprendizaje_origen": "",
+    "_aprendizaje_origen": "Dónde se guarda lo aprendido de las decisiones de 'Origen del material' (solo palabras y formas de nombre, nunca vídeo). Vacío = config_aprendizaje_origen.json junto al programa. Una carpeta compartida (p. ej. \\\\servidor\\archivo\\aprendizaje.json) sirve para aprender en equipo",
     "agencias_aparte": True,
     "origenes_agencia": ["Agencia"],
     "_origenes_agencia": "Clips cuyo origen (según config_origen.json) empieza por alguno de estos textos van al bruto _AGENCIAS del proyecto",

@@ -1733,6 +1733,12 @@ def resumen_exportacion(carpeta_analisis, carpeta_brutos, proyectos_brutos=None)
             "destino": str(carpeta_brutos)}, cfg
 
 
+def ruta_aprendizaje(cfg=None):
+    """Fichero de lo aprendido sobre el origen (aprendizaje.py): el de config_brutos.json → aprendizaje_origen o, si está
+    vacío, config_aprendizaje_origen.json junto al programa (el actualizador conserva los config_*.json)."""
+    return Path((cfg or {}).get("aprendizaje_origen") or carpeta_base() / "config_aprendizaje_origen.json")
+
+
 def recordar_reglas_origen(nuevas):
     """'Recordar para otros discos': añade reglas a config_brutos.json → reglas_origen. Una regla de la misma carpeta
     (o bin) que ya estaba se sustituye; una con clase None la quita."""

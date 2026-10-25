@@ -23,9 +23,10 @@ Estas notas recogen lo que no está en el código: cómo probar, lo aprendido de
 | `montaje.py` | Lógica de la pantalla de montaje (quitar, mover, cortar, renombrar, deshacer; `montaje.json` en la carpeta de brutos) y fotogramas del visor (`.mjpeg` por clip en `<análisis>/visor/`). Sin tkinter. |
 | `ventana_montaje.py` | Página de montaje como marco dentro de la ventana (visor con Pillow, línea de tiempo, lista de clips, "Fuera del bruto") y diálogo de opciones avanzadas de exportación. |
 | `ventana_origen.py` | Pestaña "Origen del material" del montaje: una fila por procedencia (carpeta de importación y bin) con la propuesta del programa; lo elegido va a `origen.json` (y a `reglas_origen` si se recuerda) y el montaje se rehace. |
+| `aprendizaje.py` | Aprende el origen de las decisiones guardadas en "Origen del material" (Bayes ingenuo por frecuencias, sin internet) y propone para procedencias parecidas; solo propone. Fichero `config_aprendizaje_origen.json`. |
 | `mxf_util.py` | Acabado del bruto: TC de las cabeceras GOP igual al del fichero, fecha de creación, ficha técnica XDCAM HD422 y MD5. |
 | `actualizar.py` | Actualización del `.exe` solo al pulsar "Buscar actualización": consulta la última release en GitHub, descarga, comprueba y un `.bat` cambia la carpeta conservando `config_*.json`. |
-| `config_brutos.json`, `config_origen.json` | Se crean junto al programa con valores por defecto la primera vez. No están en git. |
+| `config_brutos.json`, `config_origen.json`, `config_aprendizaje_origen.json` | Se crean junto al programa con valores por defecto la primera vez. No están en git. |
 | `tests/crear_disco_prueba.py` | Genera un disco Avid simulado con casos límite (bins con pyavb, MXF OP-Atom con ffmpeg, V y A compartiendo UMID como hace Avid). |
 | `tests/probar_montaje.py` | Prueba del montaje sin ventana: escribe un `montaje.json` (cortar, reordenar, renombrar, quitar) y comprueba los brutos exportados con `--usar-analisis`. |
 | `tests/test_montaje.py` | Lógica del montaje y fotogramas del visor. |

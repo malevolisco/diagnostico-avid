@@ -4,8 +4,11 @@ Los clips del disco agrupados por procedencia (la carpeta de la que se importaro
 programa y por qué. Se elige para cada grupo Entra / Fuera: agencia / Fuera: importado, o se deja como propone el
 programa. Al guardar se escribe origen.json en la carpeta de brutos y, con "Recordar para otros discos", una regla en
 config_brutos.json → reglas_origen. Diseño en docs/diseno_cualquier_disco.md, apartado 4.
+Además, cada decisión guardada se apunta para aprender (aprendizaje.py) y la columna "Aprendido" propone lo que se
+decidió en procedencias parecidas de otros discos; solo se aplica si se pulsa "Aceptar lo aprendido".
 """
 
+import aprendizaje as ap
 import exportar_brutos as eb
 
 
@@ -19,9 +22,10 @@ def texto_eleccion(clase):
 
 
 class PantallaOrigen:
-    def __init__(self, contenedor, clips, cfg, carpeta_brutos, al_guardar=None, recordar=None, pestanas=None):
+    def __init__(self, contenedor, clips, cfg, carpeta_brutos, al_guardar=None, recordar=None, pestanas=None, aprendizaje=None):
         """al_guardar(): tras escribir origen.json (para rehacer el montaje). recordar(reglas): guarda las reglas para
-        otros discos (diagnostico_avid.recordar_reglas_origen). pestanas(cabecera): las pestañas de la página."""
+        otros discos (diagnostico_avid.recordar_reglas_origen). pestanas(cabecera): las pestañas de la página.
+        aprendizaje: ruta del fichero de lo aprendido (None = no se aprende ni se propone)."""
         import tkinter as tk
         from tkinter import ttk
         import tema
@@ -30,6 +34,9 @@ class PantallaOrigen:
         self.al_guardar, self.recordar_reglas = al_guardar, recordar
         self.grupos = eb.grupos_de_origen(clips, cfg)
         self.eleccion = {(g["carpeta"], g["bin"]): g["elegido"] for g in self.grupos}
+        self.ruta_aprendizaje = aprendizaje
+        aprendido = ap.cargar(aprendizaje) if aprendizaje else []
+        self.sugerencias = [ap.sugerir(aprendido, g) for g in self.grupos]
         self.cambios, self.bloqueada = False, False
 
         f = self.marco = ttk.Frame(contenedor, style="Fondo.TFrame")
@@ -59,9 +66,9 @@ class PantallaOrigen:
 
         tabla = ttk.Frame(f, style="Fondo.TFrame", padding=(12, 8, 12, 4))
         tabla.pack(fill="both", expand=True)
-        cols = ("carpeta", "bin", "clips", "dur", "ejemplos", "propuesta", "porque", "eleccion")
-        titulos = ("IMPORTADO DE", "BIN", "CLIPS", "DURACIÓN", "EJEMPLOS", "PROPUESTA", "POR QUÉ", "ELEGIDO")
-        anchos = (270, 150, 50, 90, 170, 150, 260, 110)
+        cols = ("carpeta", "bin", "clips", "dur", "ejemplos", "propuesta", "porque", "aprendido", "eleccion")
+        titulos = ("IMPORTADO DE", "BIN", "CLIPS", "DURACIÓN", "EJEMPLOS", "PROPUESTA", "POR QUÉ", "APRENDIDO", "ELEGIDO")
+        anchos = (210, 130, 50, 90, 150, 140, 200, 160, 100)
         self.tv = ttk.Treeview(tabla, columns=cols, show="headings", selectmode="extended")
         for c, t, w in zip(cols, titulos, anchos):
             self.tv.heading(c, text=t)
@@ -81,6 +88,9 @@ class PantallaOrigen:
             b = ttk.Button(acc, text=texto, style="Accion.TButton", command=lambda k=clase: self.elegir(k))
             b.pack(side="left", padx=(0, 6))
             self.botones.append(b)
+        b = ttk.Button(acc, text="Aceptar lo aprendido", style="Accion.TButton", command=self.aceptar_aprendido)
+        b.pack(side="left", padx=(12, 0))
+        self.botones.append(b)
         self.pintar()
 
     def clave(self, iid):
@@ -96,7 +106,7 @@ class PantallaOrigen:
             self.tv.insert("", "end", iid=str(i), tags=tags, values=(
                 g["carpeta"] or "(capturado o sin ruta)", g["bin"] or "—", len(g["clips"]), fmt_dur(g["segundos"]),
                 ", ".join(g["ejemplos"]) + ("…" if len(g["clips"]) > 3 else ""), g["propuesta"], g["motivo"],
-                texto_eleccion(elegido)))
+                ap.texto_sugerencia(self.sugerencias[i], eb.CLASES_ORIGEN), texto_eleccion(elegido)))
         self.tv.selection_set([i for i in sel if self.tv.exists(i)])
 
     def elegir(self, clase):
@@ -114,6 +124,22 @@ class PantallaOrigen:
         self.lbl_guardado.configure(text="Cambios sin guardar", style="Tarjeta.Acento.TLabel")
         self.pintar()
 
+    def aceptar_aprendido(self):
+        """Las filas marcadas toman lo que propone lo aprendido (las que no tienen propuesta se quedan como estaban)."""
+        from tkinter import messagebox
+        if self.bloqueada:
+            return
+        sel = [iid for iid in self.tv.selection() if self.sugerencias[int(iid)]]
+        if not sel:
+            messagebox.showinfo("Aceptar lo aprendido", "Marca filas que tengan algo en la columna \"Aprendido\" (Ctrl para varias).",
+                                parent=self.marco)
+            return
+        for iid in sel:
+            self.eleccion[self.clave(iid)] = self.sugerencias[int(iid)]["clase"]
+        self.cambios = True
+        self.lbl_guardado.configure(text="Cambios sin guardar", style="Tarjeta.Acento.TLabel")
+        self.pintar()
+
     def decisiones(self):
         return [{"carpeta": c, "bin": b, "clase": k} for (c, b), k in sorted(self.eleccion.items()) if k]
 
@@ -121,6 +147,14 @@ class PantallaOrigen:
         if self.bloqueada:
             return
         eb.guardar_decisiones_origen(self.carpeta_brutos, self.decisiones())
+        if self.ruta_aprendizaje:  # lo decidido se aprende (solo palabras y formas de nombre; nunca vídeo)
+            cambios = [(g, self.eleccion.get((g["carpeta"], g["bin"]))) for g in self.grupos
+                       if self.eleccion.get((g["carpeta"], g["bin"])) != g["elegido"]]
+            if cambios:
+                try:
+                    ap.registrar(self.ruta_aprendizaje, cambios)
+                except OSError as e:  # p. ej. la carpeta compartida no está: se guarda igual el origen de este disco
+                    eb.LOG.warning("No se ha podido guardar lo aprendido en %s: %s", self.ruta_aprendizaje, e)
         if self.recordar.get() and self.recordar_reglas:
             cambiadas = [(g["carpeta"], g["bin"]) for g in self.grupos if self.eleccion.get((g["carpeta"], g["bin"])) != g["elegido"]]
             reglas = [eb.regla_de_origen(c, b, self.eleccion.get((c, b))) for c, b in cambiadas if c or b]

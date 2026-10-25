@@ -119,6 +119,14 @@ Pestaña "Origen del material" (arriba a la izquierda, junto a "Brutos")
   brutos con lo elegido. Con "Recordar para otros discos" marcado, además
   se acuerda para siempre (por ejemplo, que la carpeta "Compras" es de
   agencia): se guarda en config_brutos.json, junto al programa.
+- El programa aprende de lo que decides (sin internet). La columna
+  "Aprendido" propone lo que elegiste en procedencias parecidas de otros
+  discos, por ejemplo "Agencia 90 % · 5 decisiones". Solo propone: para
+  aplicarlo, marca las filas y pulsa "Aceptar lo aprendido", y luego
+  "Guardar". Necesita al menos 3 decisiones guardadas para empezar.
+  Lo aprendido (solo palabras de carpetas y bins y la forma de los
+  nombres, nunca vídeo) va en config_aprendizaje_origen.json, junto al
+  programa; se puede borrar para empezar de cero.
 
 Página 3 · Exportar
 - A la izquierda, los ajustes con los valores recomendados ya puestos:

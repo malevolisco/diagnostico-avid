@@ -116,6 +116,35 @@ class AcabadoProfesional(unittest.TestCase):
     def test_color_bt709_en_la_cabecera(self):
         self.assertEqual(mxf_util.color_mpeg2(self.mxf), (1, 1, 1))
 
+    def test_paquetes_de_la_cabecera_sin_ffprobe(self):
+        # lo mismo que da ffprobe (material_package_umid y file_package_umid de cada pista), leyendo solo la cabecera
+        datos = json.loads(subprocess.run([FFPROBE, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(self.mxf)],
+                                          capture_output=True, text=True, check=True).stdout)
+        limpio = lambda t: (t or "").upper().replace("0X", "")
+        esperado = {limpio(datos["format"]["tags"]["material_package_umid"])}
+        esperado |= {limpio((s.get("tags") or {}).get("file_package_umid")) for s in datos["streams"]} - {""}
+        p = mxf_util.paquetes(self.mxf)
+        self.assertTrue(esperado <= p["umids"], (esperado, p))
+        otro = self.tmp / "no_es_mxf.mxf"
+        otro.write_bytes(b"\x00" * 4096)
+        self.assertIsNone(mxf_util.paquetes(otro))  # no se sabe: hay que analizarlo entero
+        self.assertIsNone(mxf_util.paquetes(self.tmp / "no_existe.mxf"))
+
+    def test_solo_los_mxf_del_proyecto(self):
+        import diagnostico_avid as da
+        umid = next(iter(u for u in mxf_util.paquetes(self.mxf)["umids"]))
+        ajeno = self.tmp / "ajeno.mxf"
+        ajeno.write_bytes(b"\x00" * 4096)  # ilegible: entra por si acaso
+        sobra = self.tmp / "sobra.mxf"
+        shutil.copy(self.mxf, sobra)
+        ficheros = [{"ruta": n, "ext": ".mxf"} for n in ("bruto.mxf", "ajeno.mxf")]
+        bins = [{"ok": True, "clips": [{"nombre": "X", "mob_id": {"le": umid, "be": None}}]}]
+        elegidos, total = da.mxf_de_proyectos(ficheros, self.tmp, bins, lambda m: None)
+        self.assertEqual(([f["ruta"] for f in elegidos], total), (["ajeno.mxf", "bruto.mxf"], 2))
+        bins = [{"ok": True, "clips": [{"nombre": "OTRO", "mob_id": {"le": "00" * 32}}]}]
+        elegidos, _ = da.mxf_de_proyectos([{"ruta": "sobra.mxf", "ext": ".mxf"}], self.tmp, bins, lambda m: None)
+        self.assertEqual(elegidos, [])  # ni su UMID ni su nombre: es de otro proyecto
+
     def test_md5(self):
         h = mxf_util.escribir_md5(self.mxf)
         self.assertEqual(h, hashlib.md5(self.mxf.read_bytes()).hexdigest())

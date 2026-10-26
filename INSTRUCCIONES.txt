@@ -64,8 +64,12 @@ Página 1 · Disco
    lista de proyectos del disco y marcas los que quieres ahora. Los que ya tienen brutos en esa carpeta salen con
    "✓ ya tiene brutos"; el botón "Solo los que faltan" marca el resto.
    Otro día, misma carpeta de brutos y eliges los siguientes: los ya hechos
-   no se tocan. El análisis lee siempre el disco entero (hace falta para
-   saber qué vídeo es de cada proyecto).
+   no se tocan. Si eliges proyectos, se analizan solo esos (sus bins y su
+   vídeo), mucho más rápido que el disco entero; el informe lo dice arriba.
+   Para pasar luego a otro proyecto hay que volver a pulsar "Analizar
+   disco": Montaje y Exportar avisan si el análisis no lo tiene.
+   SIN_PROYECTO (clips que no están en ningún bin) obliga a mirar el disco
+   entero.
 4. Pulsa "Analizar disco" (el botón naranja). En el recuadro de abajo irá
    apareciendo lo que hace. De minutos a una hora según el número de
    ficheros. El programa impide que el ordenador se suspenda mientras

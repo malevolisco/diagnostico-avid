@@ -358,10 +358,10 @@ class App:
         p = self.estado["proyectos"]
         if p is None:
             self.bt_proy.configure(text="Proyectos: todos…")
-            self.lbl_proy.configure(text="Brutos de todos los proyectos del disco.")
+            self.lbl_proy.configure(text="Se analizan todos los proyectos del disco.")
         else:
             self.bt_proy.configure(text="Proyectos: %d de %d…" % (len(p), self.estado.get("total_proyectos", len(p))))
-            texto = ", ".join(p)
+            texto = "Solo " + ", ".join(p)
             self.lbl_proy.configure(text=texto[:90] + ("…" if len(texto) > 90 else ""))
 
     def analisis_actual(self):
@@ -389,9 +389,12 @@ class App:
         except Exception:
             r = {}
         horas = vm.fmt_h(r.get("segundos_media") or 0)
-        self.lbl_ultimo.configure(text="%s\n\n%s proyectos · %s clips · %s de material\n%s GB de media · %s bins (%s ilegibles)\nCarpeta: %s"
-                                  % (r.get("fecha", "?"), r.get("proyectos", "?"), r.get("clips_fisicos", "?"), horas, r.get("gb_media", "?"),
-                                     r.get("bins", "?"), r.get("bins_ilegibles", 0), carpeta.name))
+        parcial = r.get("parcial")
+        solo = ("Solo %d de %d proyectos: %s\n" % (len(parcial["proyectos"]), parcial["proyectos_disco"], ", ".join(parcial["proyectos"]))
+                if parcial else "")
+        self.lbl_ultimo.configure(text="%s\n\n%s%s proyectos · %s clips · %s de material\n%s GB de media · %s bins (%s ilegibles)\nCarpeta: %s"
+                                  % (r.get("fecha", "?"), solo[:200], r.get("proyectos", "?"), r.get("clips_fisicos", "?"), horas,
+                                     r.get("gb_media", "?"), r.get("bins", "?"), r.get("bins_ilegibles", 0), carpeta.name))
         self.bt_informe.state(["!disabled"])
         if self.brutos.get():
             self.lbl_siguiente.configure(text="Revisa los brutos en Montaje (opcional) y expórtalos en Exportar.")
@@ -439,8 +442,9 @@ class App:
         if not self.destino.get():
             return messagebox.showwarning("Falta el informe", "Elige dónde guardar el informe.", parent=self.raiz)
         seguido = self.seguido.get()
-        if seguido and self.estado["proyectos"] == []:
-            return messagebox.showwarning("Ningún proyecto", "No has elegido ningún proyecto para los brutos.", parent=self.raiz)
+        if self.estado["proyectos"] == []:
+            return messagebox.showwarning("Ningún proyecto", "No has elegido ningún proyecto. Pulsa \"Proyectos…\" y marca al menos uno.",
+                                          parent=self.raiz)
         if seguido and not self.brutos.get():
             return messagebox.showwarning("Falta la carpeta de brutos", "Has marcado \"Analizar y exportar seguido\": elige la carpeta de brutos.",
                                           parent=self.raiz)
@@ -456,7 +460,8 @@ class App:
         # las variables de tkinter se leen aquí: el hilo no puede tocarlas
         datos = dict(origen=self.origen.get(), destino_base=self.destino.get(), hacer_miniaturas=self.minis.get(),
                      brutos=self.brutos.get() if seguido else None, zip_miniaturas=self.zip_minis.get(),
-                     proyectos_brutos=self.estado["proyectos"] if seguido else None, carpetas_media=list(self.estado["media_extra"]))
+                     proyectos_brutos=self.estado["proyectos"] if seguido else None, carpetas_media=list(self.estado["media_extra"]),
+                     solo_proyectos=self.estado["proyectos"])
         threading.Thread(target=self.hilo_analisis, args=(datos,), daemon=True).start()
 
     def hilo_analisis(self, datos):
@@ -506,6 +511,18 @@ class App:
             self.pantalla_origen.cerrar()
         self.montaje, self.pantalla_origen, self.clave_montaje = None, None, None
 
+    def faltan_en_analisis(self, carpeta):
+        """Texto del aviso si el último análisis es solo de algunos proyectos y no tiene alguno de los elegidos, o None."""
+        try:
+            r = json.loads((Path(carpeta) / "resumen.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        faltan = self.da.fuera_del_analisis(r, self.estado["proyectos"])
+        if not faltan:
+            return None
+        return ("El último análisis de este disco es solo de %s. Para %s, ve a 1 · Disco y pulsa \"Analizar disco\" "
+                "(o elige en \"Proyectos…\" los que ya están analizados)." % (", ".join(r["parcial"]["proyectos"]), ", ".join(faltan)))
+
     def preparar_montaje(self):
         from tkinter import messagebox
         da = self.da
@@ -524,6 +541,10 @@ class App:
         if not self.brutos.get():
             self.aviso_en("montaje", "Falta la carpeta de brutos", "El montaje se guarda en la carpeta de brutos (montaje.json). "
                           "Elígela en 1 · Disco.", ("← Ir a 1 · Disco", lambda: self.ir("disco")))
+            return
+        if self.faltan_en_analisis(carpeta):
+            self.aviso_en("montaje", "El análisis no tiene esos proyectos", self.faltan_en_analisis(carpeta),
+                          ("← Ir a 1 · Disco", lambda: self.ir("disco")))
             return
         if da.exportar_brutos.cargar_config(da.carpeta_base() / "config_brutos.json").get("agrupar", "proyecto_mes") != "proyecto_mes":
             self.aviso_en("montaje", "Montaje no disponible", "El montaje solo se aplica con agrupar = proyecto_mes (config_brutos.json).")
@@ -700,6 +721,8 @@ class App:
             falta = ("Falta la carpeta de brutos", "Elige en 1 · Disco dónde guardar los brutos (un disco con espacio).")
         elif self.estado["proyectos"] == []:
             falta = ("Ningún proyecto elegido", "En 1 · Disco, pulsa \"Proyectos…\" y marca al menos uno.")
+        elif self.faltan_en_analisis(carpeta):
+            falta = ("El análisis no tiene esos proyectos", self.faltan_en_analisis(carpeta))
         if falta:
             for w in self.contenido_exportar:
                 w.pack_forget()

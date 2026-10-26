@@ -475,7 +475,10 @@ class App:
             self.cola.put(("detenido", None))
         except Exception as e:
             da.LOG.error("Fallo: %s\n%s", e, traceback.format_exc())
-            self.cola.put(("error", "%s\n\nDetalle en diagnostico.log (si llegó a crearse)." % e))
+            log = getattr(e, "log", None)
+            self.cola.put(("error", "El análisis se ha parado en: %s.\n\nError: %s\n\nNo se ha tocado nada del disco. Para arreglarlo "
+                                    "hace falta este fichero (solo texto, sin vídeo):\n%s"
+                                    % (getattr(e, "fase", "el inicio"), e, log if log else "diagnostico.log, en la carpeta del informe")))
 
     def detener(self):
         from tkinter import messagebox

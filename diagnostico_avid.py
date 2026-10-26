@@ -582,9 +582,13 @@ def fijar_fechas_grabacion(clips, mxf=()):
     fuentes, solo_fecha, columnas, imposibles = Counter(), Counter(), Counter(), Counter()
     desfasados = 0
     for c in clips:
-        columnas.update(list(c.get("columnas") or {}))  # cuántos clips tienen cada columna (el nombre, no lo que pone)
-        columnas.update("MXF: " + k for k in (c.get("comentarios") or {}))
-        f, fuente = buscar_fecha_grabacion(c)
+        try:
+            columnas.update(str(k) for k in (c.get("columnas") or {}))  # cuántos clips tienen cada columna (no lo que pone)
+            columnas.update("MXF: %s" % k for k in (c.get("comentarios") or {}))
+            f, fuente = buscar_fecha_grabacion(c)
+        except Exception as e:  # una columna rara de un clip no para el análisis: ese clip se ordena por el volcado
+            LOG.warning("Fecha de grabación de %s: %r", c.get("nombre"), e)
+            continue
         if f:
             volcado = exportar_brutos.fecha_media(c, mxf_por_ruta) if exportar_brutos and mxf_por_ruta else None
             motivo = exportar_brutos.fecha_imposible(f, volcado, ahora) if exportar_brutos else None
@@ -772,7 +776,12 @@ def analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=None, enlazado=Fa
                 "en_cuarentena": "quarantined files" in partes, "en_creating": "creating" in partes,
                 "en_media": es_ruta_media(partes), "error": err, "enlazado": enlazado}
         if datos:
-            base.update(resumir_mxf(datos))
+            try:
+                base.update(resumir_mxf(datos))
+            except Exception as e:  # un dato inesperado de un fichero no para el análisis: ese MXF sale como ilegible
+                LOG.warning("Datos inesperados de ffprobe en %s: %r", f["ruta"], e)
+                base["error"] = "datos inesperados de ffprobe: %s" % e
+                no_legible(f["ruta"], "MXF", base["error"])
         return base
 
     with ThreadPoolExecutor(max_workers=NUM_HILOS) as ex:
@@ -1576,6 +1585,13 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
     LOG.addHandler(fh)
     LOG.setLevel(logging.INFO)
     evitar_suspension(True)
+    fase = ["el inicio"]
+    progreso_ventana = progreso
+
+    def progreso(m):  # recuerda en qué paso va (1/6…6/6) para decirlo si algo falla
+        if re.match(r"\d/6 ", str(m)):
+            fase[0] = str(m).rstrip(".")
+        progreso_ventana(m)
     try:
         LOG.info("Diagnóstico v%s (%s). Origen=%s Destino=%s Python=%s pyavb=%s", VERSION, BUILD, origen, destino, sys.version.split()[0], PYAVB_OK)
 
@@ -1711,8 +1727,9 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
     except Detenido:
         LOG.warning("Análisis detenido por el usuario antes de terminar: no hay informe.")
         raise
-    except Exception:
-        LOG.exception("Fallo durante la ejecución")
+    except Exception as e:
+        LOG.exception("Fallo durante la ejecución (en: %s)", fase[0])
+        e.fase, e.log = fase[0], destino / "diagnostico.log"  # para que la ventana diga dónde y qué fichero mandar
         raise
     finally:  # aunque falle: sin esto el log se duplicaría en la siguiente ejecución desde la ventana
         evitar_suspension(False)

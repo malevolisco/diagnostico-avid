@@ -83,6 +83,8 @@ CONFIG_DEFECTO = {
     "_camara_propia_regex": "Ficheros de cámara propia importados desde una carpeta del PC (no desde la tarjeta): son material aunque el bin no guarde una ruta de tarjeta. Se mira el nombre del fichero que guarda el bin. Por defecto: dron DJI, Sony (C0001), Canon (MVI_), GoPro, Panasonic (P1000123), Nikon (DSC_), Zoom (MAH), ARRI/Blackmagic (A001C002). Los del móvil (IMG_) siguen siendo importados",
     "bins_agencia_regex": r"agencia|reuters|\bafp\b|\befe\b|\bap\b|eurovisi|\bebu\b|xinhua|\bcctv\b|\bcgtn\b",
     "_bins_agencia_regex": "Bins cuyo nombre indica material de agencia (p. ej. '20260916 agencias.avb'): lo que hay en ellos y no es de cámara cuenta como agencia",
+    "nombres_agencia_regex": r"(?<![a-z0-9])(reuters|rtr[a-z0-9]*|afp|efe|aptn|associated[ _-]?press|europa[ _-]?press|eurovisi[oó]n|evn|ebu|xinhua|cctv|cgtn)(?![a-z])",
+    "_nombres_agencia_regex": "Indicativos de agencia en el nombre del clip (en el bin o en el MXF) o del fichero importado: Reuters (RTRMADV...), AFP, EFE... Si sale, el clip es de agencia aunque sus metadatos digan cámara (lo elegido a mano en 'Origen del material' sigue mandando). Vacío = no se mira",
     "reglas_origen": [],
     "_reglas_origen": "Decisiones de la pantalla 'Origen del material' marcadas 'Recordar para otros discos', p. ej. [{\"carpeta\": \"Compras\", \"clase\": \"agencia\"}]. carpeta: trozo de la ruta de la que se importó; bin: trozo del nombre del bin; clase: propio | agencia | importado",
     "aprendizaje_origen": "",
@@ -564,11 +566,32 @@ def decision_de_origen(c, cfg):
     return None
 
 
+def nombre_de_agencia(c, cfg):
+    """El indicativo de agencia que lleva el nombre del clip (el del MXF o los del bin) o del fichero importado
+    ('RTRWNEV', 'Reuters', 'EFE'...), o None (nombres_agencia_regex)."""
+    rx = cfg.get("nombres_agencia_regex", CONFIG_DEFECTO["nombres_agencia_regex"])
+    if not rx:
+        return None
+    for texto in [c.get("nombre"), *(c.get("nombres_bin") or ()), _base_fichero(c.get("fichero_origen"))]:
+        try:
+            m = re.search(rx, str(texto or ""), re.IGNORECASE)
+        except re.error as e:
+            LOG.error("nombres_agencia_regex no válida (%s); no se aplica", e)
+            return None
+        if m:
+            return m.group(0)
+    return None
+
+
 def senales_de_origen(c, cfg):
-    """[(fuerza, clase, motivo)]: lo que dice cada pista. 3 = el fichero o la tarjeta; 2 = nombres y carpetas."""
+    """[(fuerza, clase, motivo)]: lo que dice cada pista. 4 = el indicativo de agencia en el nombre (manda sobre los
+    metadatos: Reuters graba con cámaras Sony); 3 = el fichero o la tarjeta; 2 = nombres y carpetas."""
     s = []
     origen = str(c.get("origen") or "")
     fichero = c.get("fichero_origen")
+    agencia = nombre_de_agencia(c, cfg)
+    if agencia:
+        s.append((4, "agencia", "nombre de agencia (%s)" % agencia))
     if origen == "Agencia (bin de agencias)":
         s.append((2, "agencia", "bin de agencias"))
     elif origen.startswith(tuple(cfg.get("origenes_agencia") or ())):

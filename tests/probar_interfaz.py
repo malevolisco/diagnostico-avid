@@ -200,6 +200,13 @@ def montar():
     pm.al_elegir_clip()
     captura("3_montaje.png")
     cabe("montaje", tambien_alto=True)
+    # Línea de tiempo: cada clip mide al menos min_clip px (en un bruto de 2 h con cientos de clips, uno de pocos
+    # segundos medía menos de un píxel) y al pinchar en el centro de cada uno se elige ese
+    pm = app.montaje
+    sitios, _ = pm.geometria()
+    comprobar(sitios and min(x1 - x0 for x0, x1, _, _ in sitios) >= pm.min_clip, "clips más estrechos que %d px: %s" % (pm.min_clip, sitios))
+    comprobar([pm.clip_en_x((x0 + x1) / 2, sitios)[0] for x0, x1, _, _ in sitios] == list(range(len(sitios))),
+              "al pinchar en un clip de la línea de tiempo se elige otro")
     antes = [c["nombre"] for c, _, _ in pm.tramos()]
     pm.tv.selection_set("0")
     pm.accion("bajar")

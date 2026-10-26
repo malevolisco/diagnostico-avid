@@ -105,9 +105,13 @@ Usa el último análisis del disco: no lo repite.
   visor no las necesita.)
   A la derecha, la ficha del clip (fecha de grabación, TC, formato, audio);
   en una pantalla pequeña, en su lugar, la lista de clips.
-- Debajo, la línea de tiempo: cada bloque es un clip. Pincha o arrastra
-  para moverte (Ctrl+clic marca varios); "Avance" lo pasa rápido; "+" y
-  "−" hacen zoom. Las flechas del teclado mueven un segundo.
+- Debajo, la línea de tiempo: cada bloque es un clip, y hasta el más corto
+  tiene un ancho que se puede pinchar. Al pasar el ratón, abajo sale su
+  nombre y duración. La rueda del ratón mueve la línea de lado y
+  Ctrl + rueda hace zoom. Al elegir un clip en la lista, la línea va a él.
+  Pincha o arrastra para moverte (Ctrl+clic marca varios); "Avance" lo
+  pasa rápido; "+" y "−" también hacen zoom. Las flechas del teclado
+  mueven un segundo.
 - Con uno o varios clips marcados (en la línea de tiempo o en la lista):
   "Quitar" (va a la papelera de la izquierda; "Recuperar los marcados" lo
   devuelve), "Subir"/"Bajar" (cambia el orden), "← Bruto anterior"/"Bruto

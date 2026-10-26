@@ -196,6 +196,9 @@ class PantallaMontaje:
         lt = ttk.Frame(centro, style="Fondo.TFrame", padding=(8, 4, 8, 0) if compacto else (12, 6, 12, 0))
         lt.pack(fill="x")
         self.alto_linea = 56 if compacto else 90
+        # Cada clip mide al menos esto en la línea de tiempo: en un bruto de 2 h con cientos de clips, uno de 5 s medía
+        # menos de un píxel y no se podía pinchar (Adrián, 26/10/2026)
+        self.min_clip = 30 if compacto else 40
         self.linea = tk.Canvas(lt, height=self.alto_linea, bg=tema.CAMPO, highlightthickness=1, highlightbackground=tema.BORDE)
         self.linea.pack(fill="x")
         self.sb_linea = ttk.Scrollbar(lt, orient="horizontal", command=self.linea.xview)
@@ -203,11 +206,15 @@ class PantallaMontaje:
         self.linea.configure(xscrollcommand=self.sb_linea.set)
         leyenda = ttk.Frame(lt, style="Fondo.TFrame")
         leyenda.pack(fill="x", pady=(4, 0))
-        for color, texto in ((tema.CLIP, "en orden cronológico"), (tema.ACENTO, "movido a mano")):
+        for color, texto in ((tema.CLIP, "cronológico" if compacto else "en orden cronológico"),
+                             (tema.ACENTO, "movido" if compacto else "movido a mano")):
             tk.Frame(leyenda, bg=color, width=10, height=10).pack(side="left", padx=(0, 4))
             ttk.Label(leyenda, text=texto, style="Suave.TLabel").pack(side="left", padx=(0, 14))
-        if not compacto:
-            ttk.Label(leyenda, text="Clic para ir · Ctrl+clic marca varios · flechas: 1 segundo", style="Suave.TLabel").pack(side="left")
+        # La ayuda, o el clip que hay bajo el ratón (en los cortos no cabe el nombre). Ancho fijo: si no, un nombre largo
+        # ensancharía la página
+        self.ayuda_linea = "Rueda: mover · Ctrl+rueda: zoom · Ctrl+clic: varios"
+        self.lbl_encima = ttk.Label(leyenda, text=self.ayuda_linea, style="Suave.TLabel", width=38)
+        self.lbl_encima.pack(side="left")
         self.lbl_foto = ttk.Label(leyenda, text="", style="Suave.TLabel")
         self.lbl_foto.pack(side="right")
 
@@ -235,6 +242,15 @@ class PantallaMontaje:
         self.linea.bind("<Control-Button-1>", lambda e: self.al_pulsar_linea(e, sumar=True))
         self.linea.bind("<B1-Motion>", self.al_arrastrar_linea)
         self.linea.bind("<Configure>", lambda e: self.pintar_linea())
+        self.linea.bind("<Motion>", self.al_pasar_linea)
+        self.linea.bind("<Leave>", lambda e: self.lbl_encima.configure(text=self.ayuda_linea))
+        # rueda: la línea de lado; Ctrl + rueda: zoom (en Linux, botones 4 y 5)
+        self.linea.bind("<MouseWheel>", lambda e: self.rueda_linea(-1 if e.delta > 0 else 1))
+        self.linea.bind("<Control-MouseWheel>", lambda e: self.rueda_linea(-1 if e.delta > 0 else 1, zoom=True))
+        self.linea.bind("<Button-4>", lambda e: self.rueda_linea(-1))
+        self.linea.bind("<Button-5>", lambda e: self.rueda_linea(1))
+        self.linea.bind("<Control-Button-4>", lambda e: self.rueda_linea(-1, zoom=True))
+        self.linea.bind("<Control-Button-5>", lambda e: self.rueda_linea(1, zoom=True))
         top = f.winfo_toplevel()
         self.atajos = [("<Control-z>", lambda e: self.deshacer()), ("<Control-s>", lambda e: self.guardar() if self.activa() else None),
                        ("<Left>", lambda e: self.mover_cursor(-1)), ("<Right>", lambda e: self.mover_cursor(1))]
@@ -346,29 +362,83 @@ class PantallaMontaje:
         ancho = max(200, self.linea.winfo_width() - 4)
         return ancho * self.zoom / total, total
 
+    def geometria(self):
+        """Dónde va cada clip en la línea de tiempo: ([(x0, x1, t0, dur)], ancho total). Proporcional al tiempo, pero cada
+        clip mide al menos min_clip píxeles, para que se pueda pinchar aunque dure 2 s en un bruto de 2 h."""
+        pps, _ = self.escala()
+        x, sitios = 2.0, []
+        for _, t, d in self.tramos():
+            w = max(self.min_clip, d * pps)
+            sitios.append((x, x + w, t, d))
+            x += w
+        return sitios, x
+
+    def x_de_t(self, t, sitios=None):
+        sitios = sitios if sitios is not None else self.geometria()[0]
+        for x0, x1, t0, d in sitios:
+            if t < t0 + d or (x0, x1, t0, d) == sitios[-1]:
+                return x0 + ((min(max(t - t0, 0), d) / d) * (x1 - x0) if d else 0)
+        return 2.0
+
+    def clip_en_x(self, x, sitios=None):
+        """(índice del clip en esa x, segundo del bruto) o (None, 0)."""
+        sitios = sitios if sitios is not None else self.geometria()[0]
+        if not sitios:
+            return None, 0.0
+        for i, (x0, x1, t0, d) in enumerate(sitios):
+            if x < x1 or i == len(sitios) - 1:
+                return i, t0 + (min(max(x - x0, 0), x1 - x0) / (x1 - x0)) * d if d else t0
+        return None, 0.0
+
     def pintar_linea(self):
         tema, cv = self.tema, self.linea
         cv.delete("all")
-        pps, total = self.escala()
+        sitios, ancho = self.geometria()
         movidos = self.m.movidos(self.p) if self.p else set()
         sel = set(self.seleccion())
-        paso = max(1, int(total / 6))
-        for s in range(0, int(total) + 1, paso):  # regla de timecodes
-            x = 2 + s * pps
-            cv.create_line(x, 0, x, 8, fill=tema.SUAVE)
-            cv.create_text(x + 3, 2, text=fmt_tc(s), anchor="nw", fill=tema.SUAVE, font=(tema.MONO, 8))
-        for c, t, d in self.tramos():
-            x0, x1 = 2 + t * pps, 2 + (t + d) * pps
+        ultimo = -1000
+        for (x0, x1, t0, d), (c, _, _) in zip(sitios, self.tramos()):
+            if x0 - ultimo >= 90:  # regla: el timecode del principio de un clip, sin que se pisen
+                cv.create_line(x0, 0, x0, 8, fill=tema.SUAVE)
+                cv.create_text(x0 + 3, 2, text=fmt_tc(t0), anchor="nw", fill=tema.SUAVE, font=(tema.MONO, 8))
+                ultimo = x0
             color = tema.SUAVE if not c.get("fichero_video") else tema.ACENTO if c.get("clave") in movidos else tema.CLIP
             marcado = c.get("clave") in sel
-            cv.create_rectangle(x0, 22, max(x1, x0 + 2), self.alto_linea - 6, fill=color, outline="#ffffff" if marcado else tema.CAMPO, width=2 if marcado else 1)
+            cv.create_rectangle(x0, 22, x1, self.alto_linea - 6, fill=color, outline="#ffffff" if marcado else tema.CAMPO, width=2 if marcado else 1)
             if x1 - x0 > 50:
                 cv.create_text(x0 + 5, 30, text=c["nombre"], anchor="nw", fill=tema.SOBRE_ACENTO if color == tema.ACENTO else "#ffffff",
                                font=(tema.LETRA, 8), width=x1 - x0 - 8)
-        x = 2 + self.t * pps
+        x = self.x_de_t(self.t, sitios) if sitios else 2
         cv.create_line(x, 16, x, self.alto_linea, fill=tema.CABEZAL, width=2)
         cv.create_polygon(x - 6, 14, x + 6, 14, x, 22, fill=tema.CABEZAL, outline="")
-        cv.configure(scrollregion=(0, 0, 4 + total * pps, self.alto_linea))
+        cv.configure(scrollregion=(0, 0, ancho + 4, self.alto_linea))
+
+    def ver_cursor(self):
+        """Si el cabezal se ha salido de la parte visible de la línea de tiempo, la mueve para que se vea."""
+        sitios, ancho = self.geometria()
+        if not sitios:
+            return
+        x, visible = self.x_de_t(self.t, sitios), self.linea.winfo_width()
+        izq = self.linea.canvasx(0)
+        if x < izq + 10 or x > izq + visible - 10:
+            self.linea.xview_moveto(max(0.0, (x - visible / 2) / (ancho + 4)))
+
+    def al_pasar_linea(self, e):
+        """Debajo, el nombre y la duración del clip que hay bajo el ratón (en los clips cortos no cabe el nombre)."""
+        i, _ = self.clip_en_x(self.linea.canvasx(e.x))
+        tramos = self.tramos()
+        if i is None or i >= len(tramos):
+            self.lbl_encima.configure(text=self.ayuda_linea)
+            return
+        c = tramos[i][0]
+        self.lbl_encima.configure(text="%d. %s · %s" % (i + 1, c["nombre"], fmt_h(duracion_visible(c))))
+
+    def rueda_linea(self, sentido, zoom=False):
+        if zoom:
+            self.ampliar(0.5 if sentido > 0 else 2)
+        else:
+            self.linea.xview_scroll(sentido * 3, "units")
+        return "break"  # que no mueva también la página
 
     def donde_cursor(self):
         tramos = self.tramos()
@@ -487,7 +557,7 @@ class PantallaMontaje:
         cs = [c for c, _, _ in self.tramos() if c.get("fichero_video")]
         hechos = sum(1 for c in cs if c.get("clave") in self.listos)
         if PIL_OK and self.ffmpeg:
-            self.lbl_foto.configure(text="Fotogramas: %d de %d clips%s" % (hechos, len(cs), "" if hechos == len(cs) else " (se puede ir mirando)"))
+            self.lbl_foto.configure(text=("Fotogramas %d/%d" if self.compacto else "Fotogramas: %d de %d clips") % (hechos, len(cs)))
 
     def vaciar_cola(self):
         if not self.vivo:
@@ -529,11 +599,10 @@ class PantallaMontaje:
             self.t = self.tramos()[int(sel[0])][1]
             self.pintar_visor()
         self.pintar_linea()
+        self.ver_cursor()
 
     def al_pulsar_linea(self, e, sumar=False):
-        pps, total = self.escala()
-        self.t = max(0.0, min(total, (self.linea.canvasx(e.x) - 2) / pps))
-        n, _, _ = self.donde_cursor()
+        n, self.t = self.clip_en_x(self.linea.canvasx(e.x))
         if n is not None:
             if not sumar:
                 self.tv.selection_set(str(n))
@@ -547,8 +616,7 @@ class PantallaMontaje:
         return "break"
 
     def al_arrastrar_linea(self, e):
-        pps, total = self.escala()
-        self.t = max(0.0, min(total, (self.linea.canvasx(e.x) - 2) / pps))
+        _, self.t = self.clip_en_x(self.linea.canvasx(e.x))
         self.pintar_linea()
         self.pintar_visor()
 
@@ -558,14 +626,15 @@ class PantallaMontaje:
         total = sum(d for _, _, d in self.tramos())
         self.t = max(0.0, min(total, self.t + segundos))
         self.pintar_linea()
+        self.ver_cursor()
         self.pintar_visor()
 
     def ampliar(self, factor):
         self.zoom = max(1.0, min(256.0, self.zoom * factor))
         self.pintar_linea()
-        pps, total = self.escala()
-        if total:
-            self.linea.xview_moveto(max(0.0, (self.t * pps - self.linea.winfo_width() / 2) / (total * pps + 4)))
+        sitios, ancho = self.geometria()
+        if sitios:  # el cabezal, en el centro
+            self.linea.xview_moveto(max(0.0, (self.x_de_t(self.t, sitios) - self.linea.winfo_width() / 2) / (ancho + 4)))
 
     def reproducir(self):
         self.reproduciendo = not self.reproduciendo
@@ -583,6 +652,7 @@ class PantallaMontaje:
             self.t = total
             self.reproducir()
         self.pintar_linea()
+        self.ver_cursor()
         self.pintar_visor()
         if self.reproduciendo:
             self.marco.after(200, self.paso)

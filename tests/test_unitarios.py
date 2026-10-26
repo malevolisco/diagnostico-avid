@@ -1330,6 +1330,41 @@ class AnalisisParcial(unittest.TestCase):
         self.assertEqual(da.fuera_del_analisis(r, None), ["el resto de proyectos del disco"])
 
 
+class DatosRarosDeUnDiscoReal(unittest.TestCase):
+    """Un dato inesperado de un fichero o un clip no debe parar el análisis de todo el disco (26/10/2026)."""
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_un_mxf_con_datos_raros_sale_como_ilegible(self):
+        import diagnostico_avid as da
+        original = da.ffprobe_json
+        da.ffprobe_json = lambda ffprobe, ruta: ({"format": {"duration": "N/A"}, "streams": []}, None)
+        try:
+            r = da.analizar_mxf([{"ruta": "raro.mxf", "nombre": "raro.mxf", "ext": ".mxf", "bytes": 1, "modificado": ""}],
+                                self.tmp, "ffprobe", lambda m: None)
+        finally:
+            da.ffprobe_json = original
+        self.assertEqual(len(r), 1)
+        self.assertIn("datos inesperados", r[0]["error"])
+
+    def test_el_error_dice_en_que_paso_y_que_fichero_mandar(self):
+        import diagnostico_avid as da
+        (self.tmp / "disco").mkdir()
+        original = da.detectar_proyectos
+        da.detectar_proyectos = lambda ficheros: 1 / 0
+        try:
+            with self.assertRaises(ZeroDivisionError) as cm:
+                da.ejecutar(self.tmp / "disco", self.tmp / "informe", progreso=lambda m: None, abrir=False)
+        finally:
+            da.detectar_proyectos = original
+        self.assertTrue(cm.exception.fase.startswith("2/6 Detectando proyectos"), cm.exception.fase)
+        self.assertTrue(cm.exception.log.exists())
+        self.assertIn("ZeroDivisionError", cm.exception.log.read_text(encoding="utf-8"))
+
+
 class MediaEnlazada(unittest.TestCase):
     """Media enlazada (AMA) o importada sin MXF de Avid: el fichero original se busca en el disco esté donde esté."""
 

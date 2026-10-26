@@ -198,10 +198,12 @@ def main():
     (P / "NTSC.avp").write_bytes(b"avp")
     # Mismo día, pero el bin dice que vienen de dos tarjetas distintas (carpetas CARD01 y CARD02). Columnas de
     # usuario con la hora de grabación: NTSC 2 se grabó antes que NTSC 1 (los dos se volcaron en el mismo segundo).
+    # NTSC 2 lleva además "Camroll", que los clips de antes no tienen: en un disco real (26/10/2026) una columna nueva
+    # en un clip que no es el primero rompía el análisis en el paso 4/6.
     bin_con(P / "NTSC Bin.avb", [("NTSC 1", n1, 60, r"E:\TARJETAS\NTSC\CARD01\CONTENTS\VIDEO\0001AB.MXF",
                                   {"Shoot Date": "15/09/2021", "Shoot Time": "18:30:00"}),
                                  ("NTSC 2", n2, 60, r"E:\TARJETAS\NTSC\CARD02\CONTENTS\VIDEO\0002AB.MXF",
-                                  {"Shoot Date": "15/09/2021", "Shoot Time": "09:15:00"})])
+                                  {"Shoot Date": "15/09/2021", "Shoot Time": "09:15:00", "Camroll": "A002"})])
 
     # Identificadores que no coinciden con ningún MXF: cruce aproximado por nombre y duración.
     # "APROX A" es único (se empareja); los dos "APROX B" son iguales (ambiguos: quedan sin proyecto).

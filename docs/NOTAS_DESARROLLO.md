@@ -10,6 +10,7 @@ Estas notas recogen lo que no está en el código: cómo probar, lo aprendido de
 - Si se comete un error, se reconoce y se corrige.
 - No deducir el origen del material (agencia, cámara) por el nombre de un MXF. Solo por lo que diga el bin (`config_origen.json`) y marcando lo demás "Sin determinar".
 - Material de RTVE: nunca subir vídeo ni miniaturas a ningún servicio. Para diagnosticar bastan JSON y log.
+- Un dato raro de un fichero o de un clip no puede parar el análisis de todo el disco: se aparta ese fichero o clip con aviso en el log y se sigue. Lección del 26/10/2026: una columna de usuario que solo tenían algunos clips ("Camroll") paraba el paso 4/6. Cada fallo de un disco real se reproduce primero en `tests/crear_disco_prueba.py` (que debe fallar con la versión vieja) antes de darlo por arreglado.
 - Autoría: los commits van a nombre de Adrián (`git config user.name "Adrián Merinero Sánchez"`, `user.email malevolisco@gmail.com`), sin firmas automáticas ni líneas de coautoría en commits, PR ni comentarios. Si aparece una firma automática en la descripción de una PR, quitarla.
 
 ## Estructura

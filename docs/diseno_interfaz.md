@@ -75,7 +75,7 @@ Sustituye al panel de opciones, que hoy es una ventana aparte.
 
 - La barra de páginas siempre se ve. Mientras analiza o exporta se puede mirar las otras páginas, pero no lanzar nada más ni cambiar el montaje.
 - Cerrar la ventana mientras trabaja pregunta antes, como ahora. Detener sigue igual.
-- Ventana de 1280×800 al abrir (mínimo 1100×720), con todo dentro.
+- Ventana de 1280×800 al abrir (mínimo 1100×720), con todo dentro. **Cambiado el 26/10/2026**: en un portátil no cabía y las pestañas de abajo quedaban fuera de la pantalla. Ahora la ventana se ajusta a la pantalla (maximizada y en modo compacto si es pequeña), las pestañas van arriba en la cabecera y cada página se desplaza si no cabe (ver `LEEME_tecnico.md`).
 - Atajos: Ctrl+Z deshacer y flechas ±1 s en Montaje; Ctrl+S guardar el montaje.
 
 ## Cambios en la lógica (pocos)

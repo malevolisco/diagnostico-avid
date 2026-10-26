@@ -22,10 +22,12 @@ def texto_eleccion(clase):
 
 
 class PantallaOrigen:
-    def __init__(self, contenedor, clips, cfg, carpeta_brutos, al_guardar=None, recordar=None, pestanas=None, aprendizaje=None):
+    def __init__(self, contenedor, clips, cfg, carpeta_brutos, al_guardar=None, recordar=None, pestanas=None, aprendizaje=None,
+                 compacto=False):
         """al_guardar(): tras escribir origen.json (para rehacer el montaje). recordar(reglas): guarda las reglas para
         otros discos (diagnostico_avid.recordar_reglas_origen). pestanas(cabecera): las pestañas de la página.
-        aprendizaje: ruta del fichero de lo aprendido (None = no se aprende ni se propone)."""
+        aprendizaje: ruta del fichero de lo aprendido (None = no se aprende ni se propone).
+        compacto: pantalla pequeña (portátil): columnas más estrechas."""
         import tkinter as tk
         from tkinter import ttk
         import tema
@@ -42,14 +44,14 @@ class PantallaOrigen:
         f = self.marco = ttk.Frame(contenedor, style="Fondo.TFrame")
         f.pack(fill="both", expand=True)
 
-        cab = ttk.Frame(f, style="Cabecera.TFrame", padding=(16, 8))
+        cab = ttk.Frame(f, style="Cabecera.TFrame", padding=(10, 6) if compacto else (16, 8))
         cab.pack(fill="x")
         if pestanas:
             pestanas(cab)
         dudosos = sum(g["dudosos"] for g in self.grupos)
         ttk.Label(cab, text="%d procedencias · %d clips dudosos" % (len(self.grupos), dudosos),
                   style="Tarjeta.Suave.TLabel").pack(side="left")
-        self.bt_guardar = ttk.Button(cab, text="Guardar", style="Principal.TButton", command=self.guardar)
+        self.bt_guardar = ttk.Button(cab, text="Guardar", style="Elegido.TButton" if compacto else "Principal.TButton", command=self.guardar)
         self.bt_guardar.pack(side="right")
         self.lbl_guardado = ttk.Label(cab, text="", style="Tarjeta.Suave.TLabel")
         self.lbl_guardado.pack(side="right", padx=10)
@@ -59,7 +61,7 @@ class PantallaOrigen:
 
         ayuda = ttk.Frame(f, style="Fondo.TFrame", padding=(16, 8, 16, 0))
         ayuda.pack(fill="x")
-        ttk.Label(ayuda, wraplength=1100, style="Suave.TLabel", text=(
+        ttk.Label(ayuda, wraplength=760 if compacto else 1100, style="Suave.TLabel", text=(
             "De dónde viene cada clip, agrupado por la carpeta de la que se importó y el bin. Arriba, lo dudoso: entra en el "
             "bruto marcado \"para revisar\" hasta que se decida. Marca una o varias filas (Ctrl para varias) y elige abajo. "
             "Los efectos de Avid no salen aquí: nunca entran.")).pack(anchor="w")
@@ -68,8 +70,8 @@ class PantallaOrigen:
         tabla.pack(fill="both", expand=True)
         cols = ("carpeta", "bin", "clips", "dur", "ejemplos", "propuesta", "porque", "aprendido", "eleccion")
         titulos = ("IMPORTADO DE", "BIN", "CLIPS", "DURACIÓN", "EJEMPLOS", "PROPUESTA", "POR QUÉ", "APRENDIDO", "ELEGIDO")
-        anchos = (210, 130, 50, 90, 150, 140, 200, 160, 100)
-        self.tv = ttk.Treeview(tabla, columns=cols, show="headings", selectmode="extended")
+        anchos = (130, 90, 40, 70, 100, 100, 120, 120, 80) if compacto else (210, 130, 50, 90, 150, 140, 200, 160, 100)
+        self.tv = ttk.Treeview(tabla, columns=cols, show="headings", selectmode="extended", height=6 if compacto else 10)
         for c, t, w in zip(cols, titulos, anchos):
             self.tv.heading(c, text=t)
             self.tv.column(c, width=w, anchor="w", stretch=c in ("carpeta", "ejemplos", "porque"))
@@ -85,10 +87,10 @@ class PantallaOrigen:
         ttk.Label(acc, text="Para las filas marcadas:", style="Panel.TLabel").pack(side="left", padx=(0, 10))
         self.botones = []
         for clase, texto in eb.ELECCIONES_ORIGEN:
-            b = ttk.Button(acc, text=texto, style="Accion.TButton", command=lambda k=clase: self.elegir(k))
+            b = ttk.Button(acc, text=texto, style="Compacta.TButton" if compacto else "Accion.TButton", command=lambda k=clase: self.elegir(k))
             b.pack(side="left", padx=(0, 6))
             self.botones.append(b)
-        b = ttk.Button(acc, text="Aceptar lo aprendido", style="Accion.TButton", command=self.aceptar_aprendido)
+        b = ttk.Button(acc, text="Aceptar lo aprendido", style="Compacta.TButton" if compacto else "Accion.TButton", command=self.aceptar_aprendido)
         b.pack(side="left", padx=(12, 0))
         self.botones.append(b)
         self.pintar()

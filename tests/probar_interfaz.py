@@ -5,6 +5,8 @@ Prueba de la ventana (interfaz.py) de principio a fin sobre el disco de prueba, 
 
   python tests/probar_interfaz.py DISCO CARPETA_INFORME CARPETA_BRUTOS CARPETA_CAPTURAS
 
+Pestañas de las páginas arriba; en cada página se comprueba que todo cabe sin desplazar de lado (y Montaje y Exportar
+tampoco de arriba abajo), con la pantalla que haya: en una pequeña la ventana va en modo compacto.
 1 · Disco: al elegir el disco se leen solos sus proyectos ("7 proyectos · …"), y "Proyectos…" reutiliza esa lectura;
    Montaje sin análisis avisa en vez de fallar; analizar; la tarjeta "Último análisis" se rellena.
 2 · Montaje: "Fuera del bruto" con agencia, efecto e importado. Pestaña "Origen del material": el bin "compras" sale
@@ -61,6 +63,16 @@ def captura(nombre):
         img.save(CAPTURAS / nombre)
     except Exception as e:  # la captura es para mirarla; no hace fallar la prueba
         r["errores"].append("captura %s: %s" % (nombre, e))
+
+
+def cabe(pagina, tambien_alto=False):
+    """Todo a la vista sin desplazar de lado (y de arriba abajo, si se pide): en una pantalla pequeña la página se compacta."""
+    d = app.contenedores[pagina]
+    app.raiz.update()
+    d.ajustar()
+    comprobar(not d.barra_h.winfo_ismapped(), "%s no cabe de ancho: pide %d px y hay %d" % (pagina, d.interior.winfo_reqwidth(), d.lienzo.winfo_width()))
+    if tambien_alto:
+        comprobar(not d.barra_v.winfo_ismapped(), "%s no cabe de alto: pide %d px y hay %d" % (pagina, d.interior.winfo_reqheight(), d.lienzo.winfo_height()))
 
 
 def todos(w):
@@ -130,6 +142,7 @@ def disco_leido():
 def montaje():
     comprobar("proyectos" in app.lbl_ultimo.cget("text"), "la tarjeta Último análisis no se ha rellenado: %r" % app.lbl_ultimo.cget("text"))
     captura("2_disco_analizado.png")
+    cabe("disco")
     app.ir("montaje")
     pm = app.montaje
     comprobar(pm is not None, "no se ha abierto el montaje")
@@ -186,6 +199,7 @@ def montar():
     pm.tv.selection_set("0")
     pm.al_elegir_clip()
     captura("3_montaje.png")
+    cabe("montaje", tambien_alto=True)
     antes = [c["nombre"] for c, _, _ in pm.tramos()]
     pm.tv.selection_set("0")
     pm.accion("bajar")
@@ -210,6 +224,7 @@ def montar():
     app.raiz.update()
     comprobar("disabled" not in app.bt_exportar.state(), "con todo bien, Exportar debe estar activo: %s" % app.lbl_motivo.cget("text"))
     captura("5_exportar.png")
+    cabe("exportar", tambien_alto=True)
     app.exportar()
     comprobar(app.montaje is not None and app.montaje.bloqueada, "mientras exporta, el montaje no se debe poder cambiar")
     app.raiz.after(3000, lambda: captura("6_exportando.png"))

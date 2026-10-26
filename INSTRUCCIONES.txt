@@ -40,8 +40,10 @@ Pasos
    pulsa "Buscar actualización" (arriba a la derecha): la descarga, se cierra y se vuelve a abrir
    ya actualizado (un par de minutos; no lo cierres mientras). Se conserva
    la configuración.
-   La ventana tiene tres páginas, que se eligen en la barra de abajo:
+   La ventana tiene tres páginas, que se eligen en las pestañas de arriba:
    1 · Disco, 2 · Montaje y 3 · Exportar. Se va de izquierda a derecha.
+   En una pantalla pequeña (portátil) se abre maximizada y más compacta;
+   si algo no cupiera, la página se desplaza con la rueda del ratón.
 
 Página 1 · Disco
 2. En "Carpetas":

@@ -4,8 +4,9 @@ TEMA OSCURO DE LA VENTANA (estilo DaVinci Resolve)
 ==================================================
 
 Colores, letras y estilos ttk de la interfaz, y unos pocos componentes que se repiten:
-botón principal naranja, botones de elección (4 pistas | 8 pistas), tarjeta con título y
-la barra de páginas de abajo. Diseño en docs/diseno_interfaz.md.
+botón principal naranja, botones de elección (4 pistas | 8 pistas), tarjeta con título,
+la barra de páginas (arriba, en la cabecera) y el marco que se desplaza cuando la página
+no cabe en una pantalla pequeña. Diseño en docs/diseno_interfaz.md.
 
 tkinter no hace esquinas redondeadas, sombras ni degradados: el tema se queda en
 superficies planas, bordes finos y un único color de acento.
@@ -94,7 +95,12 @@ def aplicar(raiz):
                 font=letras["negrita"], padding=(18, 6))
     e.map("Elegido.TButton", background=[("disabled", BOTON), ("active", ACENTO_ENCIMA)], foreground=[("disabled", "#6b6f75")],
           bordercolor=[("disabled", BORDE_CLARO)], lightcolor=[("disabled", BOTON)], darkcolor=[("disabled", BOTON)])
-    e.configure("Accion.TButton", padding=(9, 4))
+    e.configure("Accion.TButton", padding=(9, 4), width=-6)  # cada uno lo que mide su texto (el tema pide 11 letras)
+    # botones de acción en una pantalla pequeña: sin el ancho mínimo del tema (11 letras), cada uno lo que mide su texto
+    e.configure("Compacta.TButton", padding=(6, 3), font=letras["pequena"], width=-4)
+    e.configure("Fantasma.Compacta.TButton", background=FONDO, foreground=TEXTO, bordercolor=BORDE_CLARO, padding=(6, 3),
+                font=letras["pequena"], width=-4)
+    e.map("Fantasma.Compacta.TButton", background=[("disabled", FONDO), ("active", BOTON)], foreground=[("disabled", "#6b6f75")])
     e.configure("Opcion.TButton", background=CAMPO, foreground=TEXTO, bordercolor=BORDE_CLARO, padding=(18, 6))
     e.map("Opcion.TButton", background=[("active", BOTON)])
     e.configure("Pagina.TButton", background=TARJETA, foreground=SUAVE, bordercolor=TARJETA, lightcolor=TARJETA, darkcolor=TARJETA,
@@ -188,23 +194,21 @@ ICONOS = {  # trazos para la barra de páginas (líneas sobre un lienzo de 24x24
 
 
 class BarraPaginas(tk.Frame):
-    """Barra de páginas de abajo, como la de Resolve: icono y nombre; la activa con raya naranja arriba."""
+    """Pestañas de las páginas (1 · Disco, 2 · Montaje, 3 · Exportar) en la cabecera: icono y nombre en una fila, la
+    activa con raya naranja debajo. Arriba siempre se ven: abajo se salían de una pantalla de portátil (26/10/2026)."""
 
     def __init__(self, padre, paginas, al_cambiar):
         super().__init__(padre, bg=TARJETA, highlightthickness=0)
         self.al_cambiar, self.items = al_cambiar, {}
-        tk.Frame(self, bg=BORDE, height=1).pack(fill="x", side="top")
-        fila = tk.Frame(self, bg=TARJETA)
-        fila.pack(pady=4)
         for clave, nombre, icono in paginas:
-            caja = tk.Frame(fila, bg=TARJETA, cursor="hand2")
-            caja.pack(side="left", padx=2)
+            caja = tk.Frame(self, bg=TARJETA, cursor="hand2")
+            caja.pack(side="left", padx=1)
             raya = tk.Frame(caja, bg=TARJETA, height=3)
-            raya.pack(fill="x")
+            raya.pack(fill="x", side="bottom")
             dibujo = tk.Canvas(caja, width=24, height=24, bg=TARJETA, highlightthickness=0)
-            dibujo.pack(pady=(6, 2), padx=50)
+            dibujo.pack(side="left", padx=(14, 6), pady=6)
             etiqueta = tk.Label(caja, text=nombre, bg=TARJETA, fg=SUAVE, font=(LETRA, 10))
-            etiqueta.pack(pady=(0, 6))
+            etiqueta.pack(side="left", padx=(0, 16), pady=6)
             for w in (caja, dibujo, etiqueta):
                 w.bind("<Button-1>", lambda e, c=clave: self.al_cambiar(c))
             self.items[clave] = (caja, raya, dibujo, etiqueta, icono)
@@ -228,3 +232,90 @@ class BarraPaginas(tk.Frame):
                     dibujo.create_oval(*xy, outline=color, width=1.6)
                 else:
                     dibujo.create_line(*xy, fill=color, width=1.6)
+
+
+def pantalla_pequena(raiz):
+    """¿Pantalla de portátil? Con Windows ampliando al 125-150 %, un 1366x768 o un 1920x1080 se quedan en ~1100x600 o
+    1280x720 útiles: la ventana va en modo compacto (visor y listas más pequeños, columnas más estrechas)."""
+    return raiz.winfo_screenwidth() < 1300 or raiz.winfo_screenheight() < 800
+
+
+class Desplazable(ttk.Frame):
+    """Marco para una página entera: si su contenido cabe, lo ocupa todo como siempre (lo que se estira, se estira); si
+    no cabe (pantalla pequeña), salen barras de desplazamiento y la rueda del ratón lo mueve. Así nunca queda nada
+    fuera de la vista. El contenido va en .interior."""
+
+    def __init__(self, padre, estilo="Fondo.TFrame"):
+        super().__init__(padre, style=estilo)
+        self.lienzo = tk.Canvas(self, bg=FONDO, highlightthickness=0, borderwidth=0)
+        self.barra_v = ttk.Scrollbar(self, orient="vertical", command=self.lienzo.yview)
+        self.barra_h = ttk.Scrollbar(self, orient="horizontal", command=self.lienzo.xview)
+        self.lienzo.configure(yscrollcommand=self.barra_v.set, xscrollcommand=self.barra_h.set)
+        self.lienzo.grid(row=0, column=0, sticky="nsew")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.interior = ttk.Frame(self.lienzo, style=estilo)
+        self.ventana = self.lienzo.create_window(0, 0, window=self.interior, anchor="nw")
+        self.medidas = None
+        self.lienzo.bind("<Configure>", lambda e: self.ajustar())
+        self.vigilar()
+
+    def ajustar(self):
+        an, al = self.lienzo.winfo_width(), self.lienzo.winfo_height()
+        pa, pal = self.interior.winfo_reqwidth(), self.interior.winfo_reqheight()
+        medidas = (an, al, pa, pal)
+        if medidas == self.medidas or an <= 1:
+            return
+        self.medidas = medidas
+        w, h = max(an, pa), max(al, pal)
+        self.lienzo.itemconfigure(self.ventana, width=w, height=h)
+        self.lienzo.configure(scrollregion=(0, 0, w, h))
+        for barra, sobra, sitio in ((self.barra_h, pa > an, dict(row=1, column=0, sticky="ew")),
+                                    (self.barra_v, pal > al, dict(row=0, column=1, sticky="ns"))):
+            if sobra and not barra.winfo_ismapped():
+                barra.grid(**sitio)
+            elif not sobra and barra.winfo_ismapped():
+                barra.grid_remove()
+        if pal <= al:
+            self.lienzo.yview_moveto(0)
+        if pa <= an:
+            self.lienzo.xview_moveto(0)
+
+    def vigilar(self):
+        """El tamaño que pide el contenido cambia sin avisar (se abre "Opciones avanzadas", llega el montaje): se mira
+        cada poco y se ajusta."""
+        try:
+            self.ajustar()
+            self.after(300, self.vigilar)
+        except tk.TclError:  # la ventana se ha cerrado
+            pass
+
+    def desplazable(self):
+        return self.barra_v.winfo_ismapped()
+
+
+def rueda_para_paginas(raiz, pagina_actual):
+    """La rueda del ratón mueve la página (Desplazable) que se ve, salvo encima de algo que ya se desplaza solo (listas,
+    tablas, el registro). pagina_actual(): el Desplazable de la página que se ve, o None."""
+    propios = ("Listbox", "Treeview", "Text", "TCombobox", "Scrollbar", "TScrollbar")
+
+    def mover(evento, pasos):
+        d = pagina_actual()
+        if d is None or not d.desplazable():
+            return
+        w = evento.widget
+        try:
+            while w is not None:
+                if w.winfo_class() in propios:
+                    return
+                if w is d:
+                    break
+                w = w.master
+        except (AttributeError, tk.TclError):
+            return
+        if w is d:
+            d.lienzo.yview_scroll(pasos, "units")
+
+    raiz.bind_all("<MouseWheel>", lambda e: mover(e, -1 if e.delta > 0 else 1), add="+")
+    raiz.bind_all("<Button-4>", lambda e: mover(e, -1), add="+")  # Linux
+    raiz.bind_all("<Button-5>", lambda e: mover(e, 1), add="+")

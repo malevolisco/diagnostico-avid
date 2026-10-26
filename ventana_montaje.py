@@ -76,7 +76,11 @@ class PantallaMontaje:
         ancho_lista = 20 if compacto else 34
         accion = "Compacta.TButton" if compacto else "Accion.TButton"
         fantasma = "Fantasma.Compacta.TButton" if compacto else "Fantasma.TButton"
-        self.listos, self.pedidos, self.jpegs, self.fotos = {}, set(), {}, {}
+        self.listos, self.jpegs, self.fotos = {}, {}, {}  # listos: clave -> .mjpeg con un fotograma por segundo
+        # Visor: primero el clip que se mira (mj.siguiente_preparacion). portadas: clave -> una imagen que sale al momento;
+        # en_curso / fallidos: (tipo, clave); mirados: claves cuyo visor de otra vez ya se ha buscado en la carpeta
+        self.portadas, self.en_curso, self.fallidos, self.mirados = {}, set(), set(), set()
+        self.hilos = max(1, hilos)
         self.claves_tv = []
         self.cola = queue.Queue()
         self.pool = ThreadPoolExecutor(max(1, hilos)) if ffmpeg else None
@@ -403,7 +407,14 @@ class PantallaMontaje:
         for k, w in self.ficha.items():
             w.configure(text=valores[k], style="Panel.Acento.TLabel" if k == "montaje" and movido else "Panel.TLabel")
         ruta = self.listos.get(c.get("clave"))
+        self.pedir_fotogramas()  # si se ha cambiado de clip, lo suyo pasa delante
         if not ruta or not PIL_OK:
+            portada = self.portadas.get(c.get("clave")) if PIL_OK else None
+            if portada:  # mientras se preparan todos sus fotogramas, una imagen del clip
+                self.dibujar(("portada", c.get("clave")), lambda: Path(portada).read_bytes())
+                self.visor.create_text(self.vw / 2, self.vh - 12, fill=tema.TEXTO, text="Preparando el resto del clip…",
+                                       font=(tema.LETRA, 8))
+                return
             self.visor.create_text(self.vw / 2, self.vh / 2, fill=tema.SUAVE, text="Preparando fotogramas…" if self.ffmpeg and PIL_OK else "Sin imagen")
             return
         jpgs = self.jpegs.get(c.get("clave"))
@@ -415,10 +426,13 @@ class PantallaMontaje:
             self.visor.create_text(self.vw / 2, self.vh / 2, fill=tema.SUAVE, text="Sin fotogramas")
             return
         i = min(int(dentro), len(jpgs) - 1)
-        clave = (c.get("clave"), i)
+        self.dibujar((c.get("clave"), i), lambda: jpgs[i])
+
+    def dibujar(self, clave, jpeg):
+        """Pone en el visor la imagen clave (jpeg(): sus bytes), escalada al visor; las últimas 64 se guardan hechas."""
         foto = self.fotos.get(clave)
         if foto is None:
-            imagen = Image.open(io.BytesIO(jpgs[i]))
+            imagen = Image.open(io.BytesIO(jpeg()))
             if imagen.size != (self.vw, self.vh):  # visor más pequeño (pantalla de portátil)
                 imagen = imagen.resize((self.vw, self.vh))
             foto = self.fotos[clave] = ImageTk.PhotoImage(imagen, master=self.marco)
@@ -434,24 +448,39 @@ class PantallaMontaje:
         self.t = min(self.t, total)
         self.pintar_linea()
         self.pintar_visor()
-        self.pedir_fotogramas()
 
     # --- fotogramas ----------------------------------------------------------------------------------------------
 
     def pedir_fotogramas(self):
-        if not self.pool:
+        """Lanza lo siguiente que hay que preparar para el visor, por orden (mj.siguiente_preparacion): primero el clip
+        que se mira y los siguientes. Las portadas (una imagen, al momento) van por su cuenta, de una en una, para que
+        un clip nuevo enseñe algo enseguida aunque los demás hilos estén con clips largos. Se llama al pintar el visor
+        (si se cambia de clip, lo suyo pasa delante) y cada vez que acaba un trabajo."""
+        if not self.pool or not self.vivo:
             return
-        for c, _, _ in self.tramos():
+        cs = [c for c, _, _ in self.tramos() if c.get("fichero_video")]
+        for c in cs:  # lo hecho otra vez (el visor se guarda en la carpeta del análisis) no se repite
             k = c.get("clave")
-            if not c.get("fichero_video") or k in self.pedidos:
+            if k in self.mirados:
                 continue
-            self.pedidos.add(k)
-            ruta = mj.fichero_visor(self.carpeta_visor, k)
-            if ruta.exists() and ruta.stat().st_size:
-                self.listos[k] = ruta
-                continue
-            fut = self.pool.submit(mj.sacar_fotogramas, self.ffmpeg, self.origen / c["fichero_video"], self.carpeta_visor, k)
-            fut.add_done_callback(lambda f, k=k: self.cola.put((k, f.result() if not f.cancelled() and not f.exception() else None)))
+            self.mirados.add(k)
+            for hechos, fichero in ((self.listos, mj.fichero_visor), (self.portadas, mj.fichero_portada)):
+                ruta = fichero(self.carpeta_visor, k)
+                if ruta.exists() and ruta.stat().st_size:
+                    hechos[k] = ruta
+        claves = [c.get("clave") for c in cs]
+        por_clave = {c.get("clave"): c for c in cs}
+        _, actual, _ = self.donde_cursor()
+        i = claves.index(actual.get("clave")) if actual and actual.get("clave") in claves else 0
+        for tipo, maximo in (("portada", 1), ("tira", self.hilos)):
+            while sum(1 for t, _ in self.en_curso if t == tipo) < maximo:
+                t = mj.siguiente_preparacion(claves, i, self.listos, self.portadas, self.en_curso, self.fallidos, tipos=(tipo,))
+                if t is None:
+                    break
+                self.en_curso.add(t)
+                funcion = mj.sacar_portada if tipo == "portada" else mj.sacar_fotogramas
+                fut = self.pool.submit(funcion, self.ffmpeg, self.origen / por_clave[t[1]]["fichero_video"], self.carpeta_visor, t[1])
+                fut.add_done_callback(lambda f, t=t: self.cola.put((t, f.result() if not f.cancelled() and not f.exception() else None)))
         self.estado_fotogramas()
 
     def estado_fotogramas(self):
@@ -466,15 +495,17 @@ class PantallaMontaje:
         hubo = False
         try:
             while True:
-                k, ruta = self.cola.get_nowait()
+                (tipo, k), ruta = self.cola.get_nowait()
+                self.en_curso.discard((tipo, k))
                 if ruta:
-                    self.listos[k] = ruta
+                    (self.listos if tipo == "tira" else self.portadas)[k] = ruta
+                else:
+                    self.fallidos.add((tipo, k))
                 hubo = True
         except queue.Empty:
             pass
         if hubo:
-            self.estado_fotogramas()
-            self.pintar_visor()
+            self.pintar_visor()  # y, con el hueco libre, lo siguiente (pedir_fotogramas)
         self.marco.after(200, self.vaciar_cola)
 
     # --- eventos -----------------------------------------------------------------------------------------------

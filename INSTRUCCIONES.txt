@@ -99,7 +99,12 @@ Usa el último análisis del disco: no lo repite.
 - El visor enseña el fotograma del punto donde estás, con el timecode en
   naranja. La primera vez que abres un bruto tarda un poco en preparar los
   fotogramas (1 por segundo, sin sonido); se puede ir mirando mientras.
-  A la derecha, la ficha del clip (fecha de grabación, TC, formato, audio).
+  Prepara primero el clip que estás mirando: al momento sale una imagen
+  suya y enseguida el resto. Si te vas a otro clip, ese pasa delante.
+  (Las "miniaturas" de Opciones avanzadas son solo para el informe: el
+  visor no las necesita.)
+  A la derecha, la ficha del clip (fecha de grabación, TC, formato, audio);
+  en una pantalla pequeña, en su lugar, la lista de clips.
 - Debajo, la línea de tiempo: cada bloque es un clip. Pincha o arrastra
   para moverte (Ctrl+clic marca varios); "Avance" lo pasa rápido; "+" y
   "−" hacen zoom. Las flechas del teclado mueven un segundo.

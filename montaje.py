@@ -329,23 +329,24 @@ def fichero_visor(carpeta_visor, clave):
     return Path(carpeta_visor) / (hashlib.sha256(str(clave).encode("utf-8")).hexdigest()[:16] + ".mjpeg")
 
 
-def sacar_fotogramas(ffmpeg, ruta_video, carpeta_visor, clave, timeout=1800):
-    """Un fotograma por segundo a 480x270 (con bandas si el aspecto no es 16:9), todos seguidos en un .mjpeg por clip.
-    Si ya está hecho, no se repite. Devuelve la ruta o None si ffmpeg falla."""
-    salida = fichero_visor(carpeta_visor, clave)
+VF_VISOR = "scale=480:270:force_original_aspect_ratio=decrease,pad=480:270:(ow-iw)/2:(oh-ih)/2:black,setsar=1"
+
+
+def fichero_portada(carpeta_visor, clave):
+    return fichero_visor(carpeta_visor, clave).with_suffix(".jpg")
+
+
+def _ffmpeg_a_fichero(cmd, salida, ruta_video, timeout):
+    """Ejecuta ffmpeg (cmd sin el fichero de salida) escribiendo en un temporal propio y lo deja en salida. Si ya está
+    hecho, no se repite. Devuelve la ruta o None si ffmpeg falla."""
     if salida.exists() and salida.stat().st_size > 0:
         return salida
     salida.parent.mkdir(parents=True, exist_ok=True)
     # Temporal propio: al rehacer el montaje (p. ej. tras elegir el origen) el de antes puede seguir sacando los mismos
     # fotogramas; con un temporal compartido, el que acaba primero se lo llevaba y el otro daba el clip por fallido.
     tmp = salida.with_name("%s.%s.tmp" % (salida.stem, uuid.uuid4().hex[:8]))
-    # -skip_frame nokey: en MPEG-2/H.264 solo se decodifican las imágenes clave (3-4 veces más rápido; para 1 por
-    # segundo sobra). En DV, DNxHD o ProRes todas lo son. Medido: ~1 s por minuto de DV, ~10 KB por fotograma.
-    cmd = [ffmpeg, "-v", "error", "-y", "-skip_frame", "nokey", "-i", eb.ruta_larga(ruta_video), "-map", "0:v:0", "-an",
-           "-vf", "fps=1,scale=480:270:force_original_aspect_ratio=decrease,pad=480:270:(ow-iw)/2:(oh-ih)/2:black,setsar=1",
-           "-q:v", "10", "-f", "mjpeg", str(tmp)]
     try:
-        r = subprocess.run(cmd, capture_output=True, timeout=timeout, **eb.flags_subproceso())
+        r = subprocess.run(cmd + [str(tmp)], capture_output=True, timeout=timeout, **eb.flags_subproceso())
     except Exception as e:
         LOG.warning("Visor: no se pudieron sacar los fotogramas de %s (%s)", ruta_video, e)
         tmp.unlink(missing_ok=True)
@@ -369,6 +370,50 @@ def sacar_fotogramas(ffmpeg, ruta_video, carpeta_visor, clave, timeout=1800):
         LOG.warning("Visor: no se pudo guardar %s (%s)", salida, e)
         return None
     return salida
+
+
+def sacar_fotogramas(ffmpeg, ruta_video, carpeta_visor, clave, timeout=1800):
+    """Un fotograma por segundo a 480x270 (con bandas si el aspecto no es 16:9), todos seguidos en un .mjpeg por clip.
+    Si ya está hecho, no se repite. Devuelve la ruta o None si ffmpeg falla."""
+    # -skip_frame nokey: en MPEG-2/H.264 solo se decodifican las imágenes clave (3-4 veces más rápido; para 1 por
+    # segundo sobra). En DV, DNxHD o ProRes todas lo son. Medido: ~1 s por minuto de DV, ~10 KB por fotograma.
+    cmd = [ffmpeg, "-v", "error", "-y", "-skip_frame", "nokey", "-i", eb.ruta_larga(ruta_video), "-map", "0:v:0", "-an",
+           "-vf", "fps=1," + VF_VISOR, "-q:v", "10", "-f", "mjpeg"]
+    ruta = _ffmpeg_a_fichero(cmd, fichero_visor(carpeta_visor, clave), ruta_video, timeout)
+    if ruta is None and Path(ruta_video).exists():
+        # Un clip corto con una sola imagen clave (H.264 de un móvil o una descarga): con "nokey" el filtro de 1 por segundo
+        # no saca ninguna. Se repite decodificándolo entero (más lento, pero solo en estos).
+        ruta = _ffmpeg_a_fichero([x for x in cmd if x not in ("-skip_frame", "nokey")], fichero_visor(carpeta_visor, clave),
+                                 ruta_video, timeout)
+    return ruta
+
+
+def sacar_portada(ffmpeg, ruta_video, carpeta_visor, clave, timeout=120):
+    """Una sola imagen del clip (la primera imagen clave), a 480x270: sale en un momento aunque el clip dure una hora, y
+    el visor la enseña mientras se preparan los demás fotogramas. Devuelve la ruta o None."""
+    cmd = [ffmpeg, "-v", "error", "-y", "-skip_frame", "nokey", "-i", eb.ruta_larga(ruta_video), "-map", "0:v:0", "-an",
+           "-frames:v", "1", "-vf", VF_VISOR, "-q:v", "6", "-f", "image2", "-c:v", "mjpeg"]
+    return _ffmpeg_a_fichero(cmd, fichero_portada(carpeta_visor, clave), ruta_video, timeout)
+
+
+def siguiente_preparacion(claves, actual, hechos, portadas, en_curso, fallidos, tipos=("portada", "tira")):
+    """Qué preparar ahora para el visor. Primero el clip que se mira: su portada (una imagen, al momento) y luego todos
+    sus fotogramas; después los clips siguientes y por último los de antes. Antes se preparaban todos en orden desde el
+    primero: si se miraba el clip 20 había que esperar a los 19 anteriores (Adrián, 26/10/2026).
+    claves: las del bruto en orden; actual: índice del clip que se mira; tipos: qué se busca. Devuelve ("portada" | "tira",
+    clave) o None."""
+    if not claves:
+        return None
+    actual = min(max(actual or 0, 0), len(claves) - 1)
+    for k in claves[actual:] + claves[:actual][::-1]:
+        if k in hechos:
+            continue
+        for tipo in tipos:
+            if tipo == "portada" and k in portadas:
+                continue
+            if (tipo, k) not in en_curso and (tipo, k) not in fallidos:
+                return tipo, k
+    return None
 
 
 def indice_jpeg(datos):

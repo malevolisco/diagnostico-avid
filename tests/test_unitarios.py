@@ -800,6 +800,15 @@ class CortesYGrabacion(unittest.TestCase):
         r = da.fijar_fechas_grabacion(clips)
         self.assertEqual((r["clips"], clips[0]["fecha_grabacion"]), (1, "2019-09-16 14:02:10"))
 
+    @unittest.skipIf(da is None, "sin pyavb")
+    def test_columnas_distintas_en_cada_clip(self):
+        # Disco real (26/10/2026): un clip con "Camroll" y otro con "Shoot Date" rompían el análisis en el paso 4/6
+        # ("can only concatenate str (not 'int') to str"): se sumaba lo que ponía la columna en vez de contarla.
+        clips = [{"columnas": {"Camroll": "A001"}}, {"columnas": {"Shoot Date": "15/09/2021", "Camroll": "A002"}},
+                 {"columnas": {"Tape": "7"}, "comentarios": {"Record Date": "2021-09-15"}}]
+        r = da.fijar_fechas_grabacion(clips)
+        self.assertEqual(r["columnas_vistas"], {"Camroll": 2, "Shoot Date": 1, "Tape": 1, "MXF: Record Date": 1})
+
     def test_fechas_de_grabacion_imposibles(self):
         D, f = eb.dt.datetime, eb.fecha_imposible
         ahora, volcado = D(2026, 10, 23, 12), D(2021, 9, 15, 10)

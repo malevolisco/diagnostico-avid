@@ -141,6 +141,49 @@ def fecha_creacion(ruta):
     return None
 
 
+PAQUETE_MATERIAL = bytes.fromhex("060e2b34025301010d01010101013600")
+PAQUETE_FUENTE = bytes.fromhex("060e2b34025301010d01010101013700")
+TROZO_FUENTE = bytes.fromhex("060e2b34025301010d01010101011100")  # SourceClip: apunta a un paquete de fichero (0x1101)
+PARTICION = bytes.fromhex("060e2b34020501010d01020101")  # + 02 cabecera, 03 cuerpo, 04 pie
+
+
+def _es(clave, ref):
+    """Misma clave SMPTE sin mirar el byte de versión del registro (el 8.º), que cambia según quién escribió el MXF."""
+    return clave[:7] == ref[:7] and clave[8:len(ref)] == ref[8:]
+
+
+def paquetes(ruta, limite=256 * 1024 * 1024):
+    """Lo que identifica un MXF sin ffprobe, leyendo solo su cabecera: los UMID (hex en mayúsculas, como los da ffprobe)
+    de sus paquetes de material y de fichero (y de los que apuntan sus pistas, que es lo que da ffprobe como
+    file_package_umid en los MXF de varias pistas de Avid), y los nombres de los de material. {"umids": set, "nombres": set}, o None si
+    no se puede leer o no es la cabecera esperada (entonces hay que analizarlo entero con ffprobe)."""
+    umids, nombres = set(), set()
+    try:
+        with open(ruta, "rb") as f:
+            for i, (pos, clave, n) in enumerate(_klv(f)):
+                if i == 0 and not _es(clave, PARTICION):
+                    return None  # no empieza por una partición de cabecera: no es un MXF normal
+                if pos > limite or clave[:12] == CLAVE_ESENCIA or (_es(clave, PARTICION) and clave[13] in (3, 4)):
+                    break  # ya ha terminado la cabecera
+                es_material = _es(clave, PAQUETE_MATERIAL)
+                if not (es_material or _es(clave, PAQUETE_FUENTE) or _es(clave, TROZO_FUENTE)) or n > 1024 * 1024:
+                    continue
+                f.seek(pos)
+                v = f.read(n)
+                j = 0
+                while j + 4 <= len(v):
+                    tag, largo = struct.unpack(">HH", v[j:j + 4])
+                    dato = v[j + 4:j + 4 + largo]
+                    if tag in (0x4401, 0x1101) and largo == 32 and any(dato):
+                        umids.add(dato.hex().upper())
+                    elif tag == 0x4402 and es_material and dato:
+                        nombres.add(dato.decode("utf-16-be", "replace").rstrip("\x00"))
+                    j += 4 + largo
+    except (OSError, struct.error, ValueError):
+        return None
+    return {"umids": umids, "nombres": nombres} if umids else None
+
+
 def md5_fichero(ruta, parar=None):
     """MD5 por bloques. parar: función que se llama en cada bloque (lanza Detenido si se ha pulsado Detener)."""
     h = hashlib.md5()

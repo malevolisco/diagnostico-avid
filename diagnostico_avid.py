@@ -790,6 +790,56 @@ def analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=None, enlazado=Fa
     return resultados
 
 
+def nombre_normal(t):
+    return " ".join(str(t or "").lower().split())
+
+
+def mxf_de_proyectos(ficheros, origen, bins, progreso):
+    """Análisis de solo algunos proyectos: los MXF del inventario que pueden ser de sus bins, mirando solo la cabecera de
+    cada uno (mxf_util.paquetes, sin ffprobe, mucho más rápido). Entran los que llevan el UMID de algún clip o fuente de esos
+    bins, los que se llaman como alguno (para el cruce aproximado por nombre y duración) y, por si acaso, los que no se
+    pueden leer así. Devuelve (los que hay que analizar, número de MXF del disco)."""
+    import mxf_util
+    ids, nombres = set(), set()
+    for b in bins:
+        for clip in b["clips"] if b.get("ok") else []:
+            for mob in [clip.get("mob_id") or {}] + [fu.get("mob_id") or {} for fu in clip.get("fuentes", [])]:
+                ids.update(material(mob[k]).upper() for k in ("le", "be") if mob.get(k))
+            if clip.get("nombre"):
+                nombres.add(nombre_normal(clip["nombre"]))
+    todos = [f for f in ficheros if f["ext"] == ".mxf"]
+
+    def es_suyo(f):
+        p = mxf_util.paquetes(ruta_larga(Path(origen) / f["ruta"]))
+        return p is None or any(material(u) in ids for u in p["umids"]) or any(nombre_normal(n) in nombres for n in p["nombres"])
+
+    elegidos, hechos = [], 0
+    with ThreadPoolExecutor(max_workers=NUM_HILOS) as ex:
+        futuros = {ex.submit(es_suyo, f): f for f in todos}
+        for fut in as_completed(futuros):
+            if PARAR.is_set():
+                ex.shutdown(wait=False, cancel_futures=True)
+                raise Detenido()
+            if fut.result():
+                elegidos.append(futuros[fut])
+            hechos += 1
+            if hechos % 200 == 0 or hechos == len(todos):
+                progreso("MXF del disco: %d/%d mirados, %d de estos proyectos" % (hechos, len(todos), len(elegidos)))
+    elegidos.sort(key=lambda f: f["ruta"])
+    LOG.info("Análisis parcial: %d de %d MXF son de los proyectos elegidos (por la cabecera)", len(elegidos), len(todos))
+    return elegidos, len(todos)
+
+
+def fuera_del_analisis(resumen, elegidos):
+    """Proyectos elegidos que no están en un análisis hecho solo de algunos ([] si está todo). elegidos None = todos."""
+    parcial = (resumen or {}).get("parcial")
+    if not parcial:
+        return []
+    if elegidos is None:
+        return ["el resto de proyectos del disco"]
+    return [p for p in elegidos if p not in parcial["proyectos"]]
+
+
 # ---------------------------------------------------------------------------
 # Paso 4: agrupar MXF por clip y cruzar con bins
 # ---------------------------------------------------------------------------
@@ -1010,8 +1060,7 @@ def cruzar(proyectos, bins, clips, mxf=(), enlaces=None):
             pr["origenes"][clip.get("origen") or "Sin determinar"] += 1
 
     # Cruce aproximado por nombre y duración (ver docstring). Solo con clips físicos que no estén ya en ningún proyecto.
-    def normal(t):
-        return " ".join(str(t or "").lower().split())
+    normal = nombre_normal
     for proyecto, pr in sorted(por_proyecto.items()):
         if pr["exactos"] or not pr["offline_items"] or not clips:
             continue
@@ -1497,10 +1546,12 @@ def guardar_json(destino, nombre, datos):
 
 
 def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_miniaturas=0, abrir=True, brutos=None,
-             zip_miniaturas=True, proyectos_brutos=None, carpetas_media=()):
-    """proyectos_brutos: nombres de los proyectos de los que hacer brutos (None = todos; "SIN_PROYECTO" = clips sin bin).
-    El análisis se hace del disco entero (hace falta para saber qué media es de cada proyecto); las miniaturas,
-    solo de los clips de los proyectos elegidos."""
+             zip_miniaturas=True, proyectos_brutos=None, carpetas_media=(), solo_proyectos=None):
+    """proyectos_brutos: nombres de los proyectos de los que hacer brutos (None = todos; "SIN_PROYECTO" = clips sin bin);
+    las miniaturas, solo de sus clips.
+    solo_proyectos: analizar solo estos proyectos (None = el disco entero): se leen solo sus bins y, de los MXF, solo los
+    suyos (se reconocen por la cabecera, sin ffprobe). Con SIN_PROYECTO, o sin pyavb, se analiza el disco entero: para
+    saber qué clips no están en ningún bin hay que mirarlos todos."""
     origen = Path(origen)
     if not origen.exists():
         raise FileNotFoundError("No existe la carpeta de origen: %s" % origen)
@@ -1529,6 +1580,14 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
         LOG.info("ffmpeg=%s ffprobe=%s", ffmpeg, ffprobe)
         progreso("Inicio. Destino: %s" % destino)
 
+        solo = set(solo_proyectos) if solo_proyectos is not None else None
+        if solo and "SIN_PROYECTO" in solo:
+            progreso("Has elegido SIN_PROYECTO (clips que no están en ningún bin): para encontrarlos se analiza el disco entero.")
+            solo = None
+        elif solo and not PYAVB_OK:
+            progreso("Sin pyavb no se pueden leer los bins: se analiza el disco entero.")
+            solo = None
+
         progreso("1/6 Inventariando el disco...")
         NO_LEGIBLES.clear()
         ficheros = inventariar(origen, progreso)
@@ -1542,13 +1601,21 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
 
         progreso("2/6 Detectando proyectos y leyendo bins...")
         proyectos = detectar_proyectos(ficheros)
+        if solo:
+            del_disco = len(proyectos)
+            proyectos = [p for p in proyectos if p["nombre"] in solo]
+            if not proyectos:
+                raise ValueError("No hay en el disco ningún proyecto con esos nombres: %s" % "; ".join(sorted(solo)))
+            progreso("2/6 Solo %d de %d proyectos: %s" % (len(proyectos), del_disco, "; ".join(p["nombre"] for p in proyectos)))
         bins = leer_bins(proyectos, origen, progreso)
         comprobar_origen(origen, analizando=True)
         guardar_json(destino, "proyectos.json", proyectos)
         guardar_json(destino, "bins.json", bins)
 
         progreso("3/6 Analizando ficheros MXF...")
-        mxf = analizar_mxf(ficheros, origen, ffprobe, progreso) if ffmpeg_ok else []
+        objetivo, mxf_disco = (mxf_de_proyectos(ficheros, origen, bins, progreso) if solo and ffmpeg_ok
+                               else (None, sum(1 for f in ficheros if f["ext"] == ".mxf")))
+        mxf = analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=objetivo) if ffmpeg_ok else []
         enlazados, enlaces, faltan = buscar_enlazados(bins, ficheros, mxf) if ffmpeg_ok else ([], {}, [])
         if enlazados:
             progreso("3/6 Media enlazada (AMA) o importada sin MXF de Avid: %d ficheros en el disco..." % len(enlazados))
@@ -1561,6 +1628,9 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
         cruce = cruzar(proyectos, bins, clips, mxf, enlaces)
         cruce["enlazados"] = {"encontrados": len(enlaces), "faltan": len(faltan), "ejemplos_faltan": faltan[:50],
                               "de_mac": sum(1 for x in faltan if es_ruta_de_mac(x)), "carpetas_media": [str(x) for x in carpetas_media or ()]}
+        if solo:  # los MXF que entraron solo por el nombre y no son de estos proyectos son de otros: fuera
+            clips = [c for c in clips if c["proyectos"] or c.get("proyectos_render")]
+            cruce["huerfanos"] = []
 
         if hacer_miniaturas and ffmpeg_ok:
             progreso("5/6 Generando miniaturas...")
@@ -1592,6 +1662,14 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
 
         progreso("6/6 Escribiendo resumen e informe...")
         resumen = construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmpeg_ok)
+        if solo:
+            resumen["parcial"] = {"proyectos": [p["nombre"] for p in proyectos], "proyectos_disco": del_disco,
+                                  "mxf_analizados": len(objetivo or []), "mxf_disco": mxf_disco, "gb_media_disco": resumen["gb_media"]}
+            resumen["gb_media"] = gb(sum(c["bytes"] for c in clips))  # la media de estos proyectos, no la del disco
+            resumen["avisos"].insert(0, {"nivel": "info", "texto": "Análisis solo de %d de %d proyectos (%s): %d de los %d MXF del disco. "
+                                         "Los demás proyectos y los clips que no están en ningún bin no salen en este informe."
+                                         % (len(proyectos), del_disco, "; ".join(resumen["parcial"]["proyectos"]),
+                                            len(objetivo or []), mxf_disco)})
         if resultados_brutos is not None:
             resumen["brutos"] = resultados_brutos
             resumen["brutos_carpeta"] = str(brutos)
@@ -1686,6 +1764,10 @@ def exportar_desde_analisis(carpeta, brutos, progreso=print, proyectos_brutos=No
             raise RuntimeError("Para exportar brutos hace falta ffmpeg (carpeta bin o PATH).")
         progreso("Exportando brutos con el análisis del %s (sin repetirlo)%s" % (resumen.get("fecha", "?"), "" if proyectos_brutos is None else
                                                                                  ": %d proyectos elegidos" % len(proyectos_brutos)))
+        faltan = fuera_del_analisis(resumen, proyectos_brutos)
+        if faltan:
+            raise ValueError("El análisis %s es solo de %s; no tiene %s. Analiza el disco con esos proyectos."
+                             % (carpeta.name, "; ".join(resumen["parcial"]["proyectos"]), "; ".join(faltan)))
         if cfg is None:
             cfg = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json")
         LOG.info("Opciones de exportación: %s", json.dumps(exportar_brutos.opciones_bruto(cfg), ensure_ascii=False))
@@ -1791,12 +1873,13 @@ def dialogo_proyectos(raiz, lista, marcados, hechos=()):
              for p in lista]
     filas.append(("SIN_PROYECTO", "SIN_PROYECTO   (clips que no están en ningún bin)%s" % ("   ✓ ya tiene brutos" if "SIN_PROYECTO" in hechos else "")))
     v = tk.Toplevel(raiz)
-    v.title("Elegir proyectos para los brutos")
+    v.title("Elegir proyectos")
     v.geometry("720x540")
     v.configure(bg=tema.FONDO)
     v.transient(raiz)
-    ttk.Label(v, text="%d proyectos en el disco. Marca los que quieres hacer ahora (clic para marcar o desmarcar);\n"
-                      "los demás se pueden hacer otro día con la misma carpeta de brutos." % len(lista), padding=12).pack(anchor="w")
+    ttk.Label(v, text="%d proyectos en el disco. Marca los que quieres hacer ahora (clic para marcar o desmarcar): se analizan\n"
+                      "y exportan solo esos. Los demás se pueden hacer otro día con la misma carpeta de brutos." % len(lista),
+              padding=12).pack(anchor="w")
     caja = ttk.Frame(v, padding=(12, 0))
     caja.pack(fill="both", expand=True)
     lb = tema.lista(caja, selectmode="multiple", selectbackground=tema.ACENTO, selectforeground=tema.SOBRE_ACENTO)
@@ -1846,7 +1929,8 @@ def main():
     ap.add_argument("--no-abrir", action="store_true", help="No abrir el informe en el navegador al terminar")
     ap.add_argument("--brutos", help="Carpeta donde exportar un MXF por proyecto (fase 2)")
     ap.add_argument("--zip-sin-miniaturas", action="store_true", help="El zip para enviar no lleva las miniaturas (el informe local sí)")
-    ap.add_argument("--proyectos", help='Brutos solo de estos proyectos, separados por ";" (SIN_PROYECTO = clips sin bin). Por defecto, todos')
+    ap.add_argument("--proyectos", help='Analizar y hacer brutos solo de estos proyectos, separados por ";" (SIN_PROYECTO = clips sin bin; '
+                                        'con él se analiza el disco entero). Por defecto, todos')
     ap.add_argument("--media-extra", help='Otras carpetas con media del disco (media repartida en varios discos), separadas por ";". Solo se leen')
     ap.add_argument("--listar-proyectos", action="store_true", help="Lista los proyectos de --origen (lectura rápida) y sale")
     ap.add_argument("--usar-analisis", metavar="CARPETA", help="Exporta los brutos (--brutos) con un análisis ya hecho (carpeta Diagnostico_...), sin repetirlo")
@@ -1881,10 +1965,10 @@ def main():
     if args.sin_gui or (args.origen and args.destino):
         if not (args.origen and args.destino):
             ap.error("--sin-gui requiere --origen y --destino")
+        elegidos = [x.strip() for x in args.proyectos.split(";") if x.strip()] if args.proyectos else None
         ejecutar(args.origen, args.destino, hacer_miniaturas=not args.sin_miniaturas,
                  max_miniaturas=args.max_miniaturas, abrir=not args.no_abrir, brutos=args.brutos,
-                 zip_miniaturas=not args.zip_sin_miniaturas,
-                 proyectos_brutos=[x.strip() for x in args.proyectos.split(";") if x.strip()] if args.proyectos else None,
+                 zip_miniaturas=not args.zip_sin_miniaturas, proyectos_brutos=elegidos, solo_proyectos=elegidos,
                  carpetas_media=[x.strip() for x in args.media_extra.split(";") if x.strip()] if args.media_extra else ())
         return
     try:

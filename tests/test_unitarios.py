@@ -1311,6 +1311,16 @@ class PantallaDeOrigen(unittest.TestCase):
             da.carpeta_base = original
 
 
+class AnalisisParcial(unittest.TestCase):
+    def test_proyectos_fuera_del_analisis(self):
+        import diagnostico_avid as da
+        self.assertEqual(da.fuera_del_analisis({}, None), [])  # análisis del disco entero: está todo
+        r = {"parcial": {"proyectos": ["ABORTO"], "proyectos_disco": 7}}
+        self.assertEqual(da.fuera_del_analisis(r, ["ABORTO"]), [])
+        self.assertEqual(da.fuera_del_analisis(r, ["ABORTO", "NTSC"]), ["NTSC"])
+        self.assertEqual(da.fuera_del_analisis(r, None), ["el resto de proyectos del disco"])
+
+
 class MediaEnlazada(unittest.TestCase):
     """Media enlazada (AMA) o importada sin MXF de Avid: el fichero original se busca en el disco esté donde esté."""
 

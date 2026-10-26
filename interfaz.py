@@ -647,7 +647,7 @@ class App:
         g = 5 if self.compacto else 12  # separación entre bloques (menos en una pantalla pequeña)
         ttk.Label(izq, text="AJUSTES DE EXPORTACIÓN", style="Panel.Seccion.TLabel").pack(anchor="w", pady=(0, g))
         ttk.Label(izq, text="Formato", style="Panel.TLabel", font=self.letras["negrita"]).pack(anchor="w")
-        self.aj["formato"] = ttk.Combobox(izq, state="readonly", width=32 if self.compacto else 40, values=["XDCAM HD422 50 Mb/s · 1080i25 · 16:9 (recomendado)",
+        self.aj["formato"] = ttk.Combobox(izq, state="readonly", width=32 if self.compacto else 40, values=["XDCAM HD422 50 Mb/s · 1080i50 · 16:9 (recomendado)",
                                                                                  "Formato mayoritario de cada bruto (avanzado)"])
         self.aj["formato"].pack(anchor="w", pady=(4, g))
         ttk.Label(izq, text="TC de inicio", style="Panel.TLabel", font=self.letras["negrita"]).pack(anchor="w")

@@ -56,7 +56,7 @@ CONFIG_DEFECTO = {
     "modo": "auto",
     "_modo": "auto = copia directa si todos los clips ya están en el formato de salida, si no convierte | copia | convertir",
     "formato_salida": "xdcam_hd50",
-    "_formato_salida": "xdcam_hd50 = siempre XDCAM HD422 50 Mb/s, 1920x1080, 25i, 16:9 (lo pide el Archivo; el SD 4:3 va con bandas negras a los lados y el NTSC pasa a 25) | auto = formato mayoritario de cada bruto (ver convertir)",
+    "_formato_salida": "xdcam_hd50 = siempre XDCAM HD422 50 Mb/s, 1920x1080, 1080i50 (25 imágenes/s, 50 campos/s), 16:9 (lo pide el Archivo; el SD 4:3 va con bandas negras a los lados y el NTSC pasa a 25) | auto = formato mayoritario de cada bruto (ver convertir)",
     "pistas_audio": "max",
     "_pistas_audio": "max = tantas como el clip que más tenga (tope 8) | un número fijo | 0 = sin audio",
     "timecode_inicio": "00:00:00:00",
@@ -171,7 +171,8 @@ def ruta_larga(ruta, siempre=False):
 
 
 CODECS_COPIABLES = {"dnxhd", "mpeg2video", "dvvideo", "prores", "h264"}
-# XDCAM HD422 50 Mb/s 1080i25: MPEG-2 4:2:2 long GOP, entrelazado (primero el campo superior), 16:9.
+# XDCAM HD422 50 Mb/s 1080i50 (también se escribe 1080i/25: 25 imágenes entrelazadas = 50 campos por segundo): MPEG-2 4:2:2
+# long GOP, entrelazado (primero el campo superior), 16:9.
 XDCAM_HD50 = {"codec": "mpeg2video", "ancho": 1920, "alto": 1080, "fps": "25/1", "pix_fmt": "yuv422p"}
 MAX_PISTAS = 8
 
@@ -1206,7 +1207,7 @@ def plan_proyecto(clips, mxf_por_ruta, cfg, modo_forzado=None):
     uniforme = len(firmas) == 1
     codec = next(iter(firmas))[0] if firmas else None
     xdcam = cfg.get("formato_salida", "xdcam_hd50") == "xdcam_hd50"
-    if xdcam:  # solo se copia lo que ya está en XDCAM HD 50 1080i25
+    if xdcam:  # solo se copia lo que ya está en XDCAM HD 50 1080i50
         x = XDCAM_HD50
         copiable = uniforme and next(iter(firmas)) == (x["codec"], x["ancho"], x["alto"], x["fps"], x["pix_fmt"])
     else:
@@ -1328,10 +1329,10 @@ def entrada_de_color(pista_video):
 
 
 def filtros_xdcam(entrelazado, nativo=False, color=None, entrada=""):
-    """A 1920x1080 25i 16:9 desde cualquier origen: desentrelaza a campos (59,94 o 50 imágenes/s), pasa a 50,
+    """A 1920x1080 1080i50 16:9 (25 imágenes entrelazadas, 50 campos) desde cualquier origen: desentrelaza a campos (59,94 o 50 imágenes/s), pasa a 50,
     encaja sin deformar según la relación de aspecto de pantalla (el SD 4:3 queda 1440x1080 con bandas negras),
     convierte el color de SD (BT.601) a HD (BT.709) y vuelve a entrelazar, primero el campo superior.
-    nativo: el origen ya es 1080i25 con el campo superior primero (es_1080i25): solo se recodifica, sin tocar los
+    nativo: el origen ya es 1080i50 con el campo superior primero (es_1080i25): solo se recodifica, sin tocar los
     campos (más rápido y sin la pérdida de separar y volver a juntar).
     color: 'HLG', 'PQ' o 'BT.2020' (color_de) para pasarlo a BT.709 con filtro_color; None si ya es BT.709 o SD. El giro de
     los vídeos de móvil (rotación en los metadatos) lo aplica ffmpeg solo al leerlos: el vertical sale derecho y con bandas."""

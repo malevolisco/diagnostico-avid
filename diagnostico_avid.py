@@ -1621,7 +1621,7 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
                         esc(b["estado"] + (" · de una ejecución anterior" if b.get("reanudado") else ""))))
         h.append("</table><p class='muted'>Por defecto, un bruto por proyecto y mes (PROYECTO MES DE AÑO), con los clips en orden cronológico "
                  "(fecha de grabación o, si no consta, del fichero de media) y de hasta 2 horas, o como se dejó en la pantalla de montaje; "
-                 "las piezas renderizadas van aparte. Todo sale en XDCAM HD422 50 1080i25 16:9. "
+                 "las piezas renderizadas van aparte. Todo sale en XDCAM HD422 50 1080i50 16:9. "
                  "No se incluyen los ficheros importados (agencias, internet, móvil) ni los renders de efectos (fundidos, rótulos, "
                  "picture-in-picture). Junto a cada bruto: shotlist Excel con el timecode de cada clip, hoja de contactos HTML, ficha técnica "
                  "(Formato: comprobado sobre el fichero exportado) y MD5.</p>")

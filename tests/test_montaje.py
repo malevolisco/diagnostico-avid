@@ -280,6 +280,43 @@ class Visor(unittest.TestCase):
             self.assertIsNone(montaje.sacar_fotogramas("ffmpeg", video, self.tmp / "visor2", "K"))  # y nadie lo hizo: fallo
         self.assertEqual(list((self.tmp / "visor2").glob("*")), [])
 
+    def test_h264_corto_con_una_sola_imagen_clave(self):
+        """Un H.264 de 2 s con una sola imagen clave: decodificando solo las clave, el visor se quedaba sin fotogramas."""
+        import subprocess
+        video = self.tmp / "movil.mov"
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=1280x720:r=25:d=2", "-c:v", "libx264",
+                        "-g", "250", "-pix_fmt", "yuv420p", str(video)], check=True)
+        ruta = montaje.sacar_fotogramas("ffmpeg", video, self.tmp / "visor", "M")
+        self.assertIsNotNone(ruta)
+        self.assertEqual(len(montaje.fotogramas(ruta)), 2)
+
+    def test_portada_al_momento(self):
+        import subprocess
+        video = self.tmp / "clip.mxf"
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=720x576:r=25:d=30", "-c:v", "mpeg2video",
+                        "-f", "mxf", str(video)], check=True)
+        ruta = montaje.sacar_portada("ffmpeg", video, self.tmp / "visor", "K:1/a")
+        self.assertEqual(ruta, montaje.fichero_portada(self.tmp / "visor", "K:1/a"))
+        datos = ruta.read_bytes()
+        self.assertTrue(datos.startswith(b"\xff\xd8") and len(montaje.indice_jpeg(datos)) == 1)  # una sola imagen
+        self.assertEqual(montaje.sacar_portada("no-existe-ffmpeg", video, self.tmp / "visor", "K:1/a"), ruta)  # ya hecha
+        self.assertIsNone(montaje.sacar_portada("ffmpeg", self.tmp / "no_existe.mxf", self.tmp / "visor", "OTRO"))
+
+    def test_primero_el_clip_que_se_mira(self):
+        sig = montaje.siguiente_preparacion
+        claves = ["a", "b", "c", "d", "e"]
+        # se mira el 4.º (d): su portada, sus fotogramas, luego los siguientes (e) y después los de antes (c, b, a)
+        self.assertEqual(sig(claves, 3, {}, {}, set(), set()), ("portada", "d"))
+        self.assertEqual(sig(claves, 3, {}, {}, {("portada", "d")}, set()), ("tira", "d"))
+        self.assertEqual(sig(claves, 3, {}, {"d": 1}, {("tira", "d")}, set()), ("portada", "e"))
+        self.assertEqual(sig(claves, 3, {"d": 1, "e": 1}, {}, set(), set()), ("portada", "c"))
+        self.assertEqual(sig(claves, 3, {}, {}, set(), set(), tipos=("tira",)), ("tira", "d"))
+        # lo que falló no se reintenta sin fin; con todo hecho, nada
+        self.assertEqual(sig(["a"], 0, {}, {}, set(), {("portada", "a"), ("tira", "a")}), None)
+        self.assertEqual(sig(claves, 0, dict.fromkeys(claves, 1), {}, set(), set()), None)
+        self.assertIsNone(sig([], 0, {}, {}, set(), set()))
+        self.assertEqual(sig(claves, 99, {}, {}, set(), set()), ("portada", "e"))  # índice fuera: el último
+
     def test_fallo_de_ffmpeg(self):
         self.assertIsNone(montaje.sacar_fotogramas("ffmpeg", self.tmp / "no_existe.mxf", self.tmp / "visor", "K"))
         self.assertEqual(list((self.tmp / "visor").glob("*")), [])

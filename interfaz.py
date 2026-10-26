@@ -282,7 +282,7 @@ class App:
         self.bt_avanzadas = ttk.Button(fila, text="Opciones avanzadas ▸", style="Fantasma.TButton", command=self.plegar)
         self.bt_avanzadas.pack(side="right")
         self.avanzadas = ttk.Frame(izq, style="Panel.TFrame", padding=(14, 10))
-        for texto, var in (("Generar miniaturas de cada clip (más lento, pero el informe queda completo)", self.minis),
+        for texto, var in (("Miniaturas de cada clip para el informe (más lento; el visor del montaje no las necesita)", self.minis),
                            ("Incluir las miniaturas en el zip para enviar (desmarcado: el zip solo lleva texto)", self.zip_minis),
                            ("Analizar y exportar seguido: exporta los brutos sin pasar por Montaje ni Exportar", self.seguido)):
             ttk.Checkbutton(self.avanzadas, text=texto, variable=var, style="Panel.TCheckbutton").pack(anchor="w", pady=1)

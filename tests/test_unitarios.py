@@ -1244,6 +1244,31 @@ class OrigenPorSenales(unittest.TestCase):
         self.assertEqual(cl(self.clip()), "propio")
         self.assertEqual(cl(self.clip(render=True)), "efecto")
 
+    def test_agencia_por_el_nombre(self):
+        # Disco real (26/10/2026): un Reuters con espacios en vez de guiones no cumplía la regla de config_origen.json,
+        # quedaba "dudoso" y entraba en el bruto. El indicativo en el nombre del fichero o del clip basta.
+        cl = lambda c: eb.clasificar(c, self.cfg)
+        for c in [self.clip(r"D:\varios\2019 09 29T150951Z_1_LWD0016J7GF9J_RTRWNEV_D_7121 YEMEN.mp4", origen="Fichero importado"),
+                  self.clip(r"C:\x\Reuters_xi.mp4"), self.clip(nombre="REUTERS SISMO"), self.clip(nombres_bin=["sismo afp"]),
+                  self.clip(r"C:\x\EFE-incendio.mp4"), self.clip(nombre="APTN 0916"), self.clip(nombre="CCTV 新闻 0916"),
+                  self.clip(nombre="EUROVISION EVN 12"), self.clip(nombre="xinhua_beijing")]:
+            clase, motivo, seguro = cl(c)
+            self.assertEqual((clase, seguro), ("agencia", True), c)
+            self.assertIn("nombre de agencia", motivo)
+            self.assertEqual(eb.motivo_descarte(c, self.cfg), "agencia")
+        # Manda sobre los metadatos de cámara (Reuters graba con Sony: el MP4 trae su XAVC) y la carpeta de tarjeta
+        c = self.clip(r"C:\x\RTRMADV_SPAIN.mp4", marca="Sony (XAVC)", marca_tipo="camara")
+        self.assertEqual(cl(c)[0], "agencia")
+        # Lo elegido a mano sigue mandando
+        cfg = dict(self.cfg, decisiones_origen=[{"carpeta": r"\x", "bin": "material.avb", "clase": "propio"}])
+        self.assertEqual(eb.clasificar(c, cfg)[0], "propio")
+        # Palabras que contienen las siglas no cuentan
+        for n in ["defensa", "Efectos", "Capturas", "Afganistán", "TRTR", "plano AP", "aptitud", "cctvx"]:
+            self.assertNotEqual(cl(self.clip(nombre=n))[0], "agencia", n)
+        self.assertEqual(cl(self.clip(nombre="REUTERS", nombres_bin=None)), cl(self.clip(nombre="REUTERS")))
+        # Se puede apagar
+        self.assertEqual(eb.clasificar(self.clip(nombre="REUTERS"), dict(self.cfg, nombres_agencia_regex=""))[0], "propio")
+
     def test_anotar_y_leer_decisiones(self):
         cs = [self.clip(r"D:\varios\a.mp4"), self.clip()]
         eb.anotar_origen(cs, self.cfg)

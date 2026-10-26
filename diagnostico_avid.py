@@ -1116,6 +1116,8 @@ def cruzar(proyectos, bins, clips, mxf=(), enlaces=None):
         pr["online"] += 1
         if nbin and nbin not in fisico.setdefault("bins", []):  # para el origen: el nombre del bin es una pista
             fisico["bins"].append(nbin)
+        if clip.get("nombre") and clip["nombre"] not in fisico.setdefault("nombres_bin", []):  # y el nombre en el bin
+            fisico["nombres_bin"].append(clip["nombre"])
         pr["claves"].add(fisico["clave"])
         if clip.get("fichero_origen") and not fisico.get("fichero_origen"):
             fisico["fichero_origen"] = clip["fichero_origen"]

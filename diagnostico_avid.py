@@ -42,6 +42,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import uuid
 import webbrowser
 import zipfile
@@ -760,10 +761,104 @@ def resumir_mxf(datos):
     }
 
 
-def analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=None, enlazado=False):
-    """ffprobe de los MXF del inventario, o de los ficheros de objetivo (la media enlazada: enlazado=True)."""
+# Sube este número si cambia lo que guarda resumir_mxf (o trabajo, en analizar_mxf): así no se usa una caché vieja que
+# no tenga los datos nuevos. tests/test_unitarios.py (CacheDelAnalisis) avisa si cambian sus claves y no se ha subido.
+VERSION_CACHE = 1
+
+
+class CacheMXF:
+    """Lo ya leído con ffprobe de un disco, para no repetirlo: si el análisis se para (Detener, un fallo, el disco que se
+    desconecta) o se repite, los MXF que no han cambiado (misma ruta, tamaño y fecha) no se vuelven a abrir.
+    Va en <carpeta del informe>/cache_analisis/<disco>.json (fuera del zip). Solo datos técnicos (duración, formato,
+    UMID, metadatos), nunca imágenes. Se guarda cada minuto, al terminar el paso 3 y al detener."""
+
+    def __init__(self, ruta):
+        self.ruta, self.datos, self.nuevos, self.ultimo, self.usados = Path(ruta), {}, 0, time.time(), 0
+        try:
+            d = json.loads(self.ruta.read_text(encoding="utf-8"))
+            if d.get("version") == VERSION_CACHE:
+                self.datos = dict(d.get("ficheros") or {})
+        except (OSError, ValueError, AttributeError, TypeError):
+            pass
+
+    @staticmethod
+    def clave(f):
+        return "%s|%s|%s" % (f["ruta"], f["bytes"], f["modificado"])
+
+    def leer(self, f):
+        r = self.datos.get(self.clave(f))
+        if r is not None:
+            self.usados += 1
+        return r
+
+    def poner(self, f, r):
+        if r.get("error"):
+            return  # lo que falló se vuelve a intentar la próxima vez
+        self.datos[self.clave(f)] = {k: v for k, v in r.items() if k != "enlazado"}
+        self.nuevos += 1
+        if time.time() - self.ultimo > 60:
+            self.guardar()
+
+    def quedarse(self, ficheros):
+        """Olvida lo que ya no está en el disco (o ha cambiado), para que la caché no crezca sin fin."""
+        vivas = {self.clave(f) for f in ficheros}
+        antes = len(self.datos)
+        self.datos = {k: v for k, v in self.datos.items() if k in vivas}
+        self.nuevos += antes - len(self.datos)
+
+    def guardar(self):
+        self.ultimo = time.time()
+        if not self.nuevos:
+            return
+        try:
+            self.ruta.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.ruta.with_name("%s.%s.tmp" % (self.ruta.name, uuid.uuid4().hex[:8]))
+            tmp.write_text(json.dumps({"version": VERSION_CACHE, "ficheros": self.datos}, ensure_ascii=False,
+                                      separators=(",", ":")), encoding="utf-8")
+            try:
+                os.replace(tmp, self.ruta)
+            except OSError:  # Windows: un antivirus o el indexador lo tiene abierto; se escribe directamente
+                self.ruta.write_text(tmp.read_text(encoding="utf-8"), encoding="utf-8")
+                tmp.unlink(missing_ok=True)
+            self.nuevos = 0
+        except OSError as e:  # sin caché el análisis sigue igual, solo que la próxima vez no se ahorra nada
+            LOG.warning("No se ha podido guardar la caché del análisis en %s: %s", self.ruta, e)
+
+
+def nombre_cache(origen, etiqueta):
+    """Nombre del fichero de caché de un disco. Con un disco entero en Windows, su nombre y número de serie de volumen: así
+    sirve aunque el disco vuelva con otra letra (las rutas de dentro ya son relativas). Si no, el nombre de la carpeta."""
+    try:
+        raiz = Path(os.path.abspath(str(origen)))
+        if os.name == "nt" and str(raiz) == raiz.anchor:
+            import ctypes
+            nombre, serie = ctypes.create_unicode_buffer(261), ctypes.c_uint32()
+            if ctypes.windll.kernel32.GetVolumeInformationW(ctypes.c_wchar_p(raiz.anchor), nombre, 261, ctypes.byref(serie),
+                                                            None, None, None, 0):
+                return "%s_%08X" % (nombre_seguro(nombre.value or "disco", 30), serie.value)
+    except Exception as e:  # sin el número de serie vale el nombre: como mucho, no se aprovecha la caché
+        LOG.info("Nombre del volumen de %s: %s", origen, e)
+    return etiqueta
+
+
+def analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=None, enlazado=False, cache=None):
+    """ffprobe de los MXF del inventario, o de los ficheros de objetivo (la media enlazada: enlazado=True).
+    cache (CacheMXF): los que ya se leyeron otra vez y no han cambiado no se vuelven a abrir."""
     objetivo = [f for f in ficheros if f["ext"] == ".mxf"] if objetivo is None else objetivo
     resultados = []
+    if cache is not None:
+        pendientes = []
+        for f in objetivo:
+            r = cache.leer(f)
+            if r is None:
+                pendientes.append(f)
+            else:
+                resultados.append(dict(r, enlazado=enlazado))
+        if resultados:
+            progreso("%s: %d de %d ya leídos en un análisis anterior; faltan %d" % (
+                "Media enlazada" if enlazado else "MXF", len(resultados), len(objetivo), len(pendientes)))
+        LOG.info("Cache de analisis (%s): %d de %d ya leidos; se leen %d", cache.ruta.name, len(resultados), len(objetivo), len(pendientes))
+        objetivo = pendientes
     total = len(objetivo)
     hechos = 0
 
@@ -784,16 +879,23 @@ def analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=None, enlazado=Fa
                 no_legible(f["ruta"], "MXF", base["error"])
         return base
 
-    with ThreadPoolExecutor(max_workers=NUM_HILOS) as ex:
-        futuros = [ex.submit(trabajo, f) for f in objetivo]
-        for fut in as_completed(futuros):
-            if PARAR.is_set():
-                ex.shutdown(wait=False, cancel_futures=True)
-                raise Detenido()
-            resultados.append(fut.result())
-            hechos += 1
-            if hechos % 25 == 0 or hechos == total:
-                progreso("%s: %d/%d analizados" % ("Media enlazada" if enlazado else "MXF", hechos, total))
+    try:
+        with ThreadPoolExecutor(max_workers=NUM_HILOS) as ex:
+            futuros = {ex.submit(trabajo, f): f for f in objetivo}
+            for fut in as_completed(futuros):
+                if PARAR.is_set():
+                    ex.shutdown(wait=False, cancel_futures=True)
+                    raise Detenido()
+                r = fut.result()
+                resultados.append(r)
+                if cache is not None:
+                    cache.poner(futuros[fut], r)
+                hechos += 1
+                if hechos % 25 == 0 or hechos == total:
+                    progreso("%s: %d/%d analizados" % ("Media enlazada" if enlazado else "MXF", hechos, total))
+    finally:  # también si se detiene o falla: lo leído hasta ahí no se pierde
+        if cache is not None:
+            cache.guardar()
     resultados.sort(key=lambda r: r["ruta"])
     LOG.info("MXF analizados: %d (%d con error)", len(resultados), sum(1 for r in resultados if r["error"]))
     return resultados
@@ -1114,7 +1216,7 @@ def cruzar(proyectos, bins, clips, mxf=(), enlaces=None):
     resumen_proy = []
     for p in proyectos:
         pr = por_proyecto.get(p["nombre"]) or nuevo_pr()
-        cs = [por_clave[k] for k in pr["claves"]]
+        cs = [por_clave[k] for k in sorted(pr["claves"])]  # en orden: el informe sale igual cada vez
         codecs = Counter((c["codec_video"], c["resolucion"], c["fps"]) for c in cs if c["codec_video"])
         resumen_proy.append({
             "proyecto": p["nombre"],
@@ -1559,12 +1661,13 @@ def guardar_json(destino, nombre, datos):
 
 
 def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_miniaturas=0, abrir=True, brutos=None,
-             zip_miniaturas=True, proyectos_brutos=None, carpetas_media=(), solo_proyectos=None):
+             zip_miniaturas=True, proyectos_brutos=None, carpetas_media=(), solo_proyectos=None, usar_cache=True):
     """proyectos_brutos: nombres de los proyectos de los que hacer brutos (None = todos; "SIN_PROYECTO" = clips sin bin);
     las miniaturas, solo de sus clips.
     solo_proyectos: analizar solo estos proyectos (None = el disco entero): se leen solo sus bins y, de los MXF, solo los
     suyos (se reconocen por la cabecera, sin ffprobe). Con SIN_PROYECTO, o sin pyavb, se analiza el disco entero: para
-    saber qué clips no están en ningún bin hay que mirarlos todos."""
+    saber qué clips no están en ningún bin hay que mirarlos todos.
+    usar_cache: lo ya leído con ffprobe en un análisis anterior del mismo disco no se repite (CacheMXF)."""
     origen = Path(origen)
     if not origen.exists():
         raise FileNotFoundError("No existe la carpeta de origen: %s" % origen)
@@ -1618,6 +1721,9 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
             progreso("1/6 Inventariando la carpeta de media %s..." % extra)
             ficheros += inventariar(extra, progreso, absoluta=True)
         escribir_inventario_csv(ficheros, destino)
+        cache = CacheMXF(Path(destino_base) / "cache_analisis" / ("%s.json" % nombre_cache(origen, etiqueta))) if usar_cache else None
+        if cache is not None:
+            cache.quedarse(ficheros)
 
         progreso("2/6 Detectando proyectos y leyendo bins...")
         proyectos = detectar_proyectos(ficheros)
@@ -1635,11 +1741,12 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
         progreso("3/6 Analizando ficheros MXF...")
         objetivo, mxf_disco = (mxf_de_proyectos(ficheros, origen, bins, progreso) if solo and ffmpeg_ok
                                else (None, sum(1 for f in ficheros if f["ext"] == ".mxf")))
-        mxf = analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=objetivo) if ffmpeg_ok else []
+        mxf = analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=objetivo, cache=cache) if ffmpeg_ok else []
         enlazados, enlaces, faltan = buscar_enlazados(bins, ficheros, mxf) if ffmpeg_ok else ([], {}, [])
         if enlazados:
             progreso("3/6 Media enlazada (AMA) o importada sin MXF de Avid: %d ficheros en el disco..." % len(enlazados))
-            mxf = sorted(mxf + analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=enlazados, enlazado=True), key=lambda r: r["ruta"])
+            mxf = sorted(mxf + analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=enlazados, enlazado=True, cache=cache),
+                         key=lambda r: r["ruta"])
         comprobar_origen(origen, analizando=True)  # si no, los MXF sin leer parecerían dañados
         guardar_json(destino, "mxf.json", mxf)
 
@@ -1953,6 +2060,7 @@ def main():
     ap.add_argument("--proyectos", help='Analizar y hacer brutos solo de estos proyectos, separados por ";" (SIN_PROYECTO = clips sin bin; '
                                         'con él se analiza el disco entero). Por defecto, todos')
     ap.add_argument("--media-extra", help='Otras carpetas con media del disco (media repartida en varios discos), separadas por ";". Solo se leen')
+    ap.add_argument("--sin-cache", action="store_true", help="Volver a leer todos los MXF aunque ya se leyeran en un análisis anterior")
     ap.add_argument("--listar-proyectos", action="store_true", help="Lista los proyectos de --origen (lectura rápida) y sale")
     ap.add_argument("--usar-analisis", metavar="CARPETA", help="Exporta los brutos (--brutos) con un análisis ya hecho (carpeta Diagnostico_...), sin repetirlo")
     ap.add_argument("--sin-actualizar", action="store_true", help="Sin efecto (se mantiene por compatibilidad): ya no se busca versión nueva al abrir")
@@ -1990,6 +2098,7 @@ def main():
         ejecutar(args.origen, args.destino, hacer_miniaturas=not args.sin_miniaturas,
                  max_miniaturas=args.max_miniaturas, abrir=not args.no_abrir, brutos=args.brutos,
                  zip_miniaturas=not args.zip_sin_miniaturas, proyectos_brutos=elegidos, solo_proyectos=elegidos,
+                 usar_cache=not args.sin_cache,
                  carpetas_media=[x.strip() for x in args.media_extra.split(";") if x.strip()] if args.media_extra else ())
         return
     try:

@@ -74,6 +74,11 @@ Página 1 · Disco
    apareciendo lo que hace. De minutos a una hora según el número de
    ficheros. El programa impide que el ordenador se suspenda mientras
    trabaja, pero si es un portátil déjalo enchufado.
+   Si se para a medias (Detener, un error, el disco que se desconecta) o
+   vuelves a analizar el mismo disco, no empieza de cero: recuerda los
+   vídeos que ya había leído y solo lee los nuevos o los cambiados. Lo
+   guarda en la carpeta "cache_analisis", dentro de la carpeta del informe
+   (solo datos técnicos, nunca imágenes). Se puede borrar sin problema.
 5. Al terminar se abre el informe en el navegador y aparece un mensaje con dos
    rutas. En la carpeta del informe habrá:
    - una carpeta  Diagnostico_<disco>_<fecha>  con el informe (informe.html)

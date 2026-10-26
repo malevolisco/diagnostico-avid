@@ -80,6 +80,18 @@ jobs:
           python -c "import json; r = json.load(open('brutos_sel/brutos_resultado.json', encoding='utf-8')); n = sorted(b['proyecto'] for b in r); print(n); assert n == ['ABORTO SEPTIEMBRE DE 2021', 'NTSC SEPTIEMBRE DE 2021'], n"
           python -c "import json, glob; r = json.load(open(glob.glob('salida4/Diagnostico_*/resumen.json')[0], encoding='utf-8'))['parcial']; print(r); assert r['proyectos'] == ['ABORTO', 'NTSC'] and r['mxf_analizados'] < r['mxf_disco'], r"
 
+      - name: Repetir un análisis no vuelve a leer los MXF (caché)
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 61  # otro minuto: otra carpeta Diagnostico_ y otro log
+          $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList '--origen disco_prueba --destino salida4 --sin-gui --no-abrir --sin-miniaturas --proyectos "NTSC;ABORTO"' -PassThru -Wait -NoNewWindow
+          $log = Get-ChildItem salida4/Diagnostico_*/diagnostico.log | Sort-Object LastWriteTime | Select-Object -Last 1
+          if ($p.ExitCode -ne 0) { Get-Content $log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
+          $linea = Select-String -Path $log -Pattern "Cache de analisis .*: ([1-9]\d*) de \d+ ya leidos; se leen 0"
+          if (-not $linea) { Get-Content $log; throw "La segunda vez ha vuelto a leer MXF: no ha usado la caché" }
+          $linea.Line
+          Get-ChildItem salida4/cache_analisis
+
       - name: Exportar con un análisis ya hecho y un montaje hecho a mano (cortar, reordenar, renombrar, quitar)
         shell: pwsh
         run: |

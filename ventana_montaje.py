@@ -57,8 +57,9 @@ class PantallaMontaje:
     "cambios sin guardar" (para que la ventana pregunte antes de salir de la página)."""
 
     def __init__(self, contenedor, m, origen, carpeta_visor, carpeta_brutos, ffmpeg, hilos=2, proyectos=None, al_cambiar=None,
-                 pestanas=None):
-        """pestanas(cabecera): pone las pestañas de la página (Brutos | Origen del material) a la izquierda de la cabecera."""
+                 pestanas=None, compacto=False):
+        """pestanas(cabecera): pone las pestañas de la página (Brutos | Origen del material) a la izquierda de la cabecera.
+        compacto: pantalla pequeña (portátil): visor, listas y columnas más pequeños para que todo quepa."""
         import tkinter as tk
         from tkinter import ttk
         import tema
@@ -70,6 +71,11 @@ class PantallaMontaje:
         self.bloqueada = False
         self.p, self.k, self.t = None, 0, 0.0  # proyecto, bruto, segundo del cabezal dentro del bruto
         self.zoom, self.reproduciendo, self.vivo = 1.0, False, True
+        self.compacto = compacto
+        self.vw, self.vh = (304, 171) if compacto else (VISOR_W, VISOR_H)  # el visor (los fotogramas se escalan)
+        ancho_lista = 20 if compacto else 34
+        accion = "Compacta.TButton" if compacto else "Accion.TButton"
+        fantasma = "Fantasma.Compacta.TButton" if compacto else "Fantasma.TButton"
         self.listos, self.pedidos, self.jpegs, self.fotos = {}, set(), {}, {}
         self.claves_tv = []
         self.cola = queue.Queue()
@@ -78,67 +84,74 @@ class PantallaMontaje:
         f = self.marco = ttk.Frame(contenedor, style="Fondo.TFrame")
         f.pack(fill="both", expand=True)
 
-        cab = ttk.Frame(f, style="Cabecera.TFrame", padding=(16, 8))
+        cab = ttk.Frame(f, style="Cabecera.TFrame", padding=(10, 6) if compacto else (16, 8))
         cab.pack(fill="x")
         if pestanas:
             pestanas(cab)
-        ttk.Label(cab, text="Proyecto", style="Tarjeta.Suave.TLabel").pack(side="left")
-        self.cb_p = ttk.Combobox(cab, state="readonly", width=40 if pestanas else 56)
+        if not compacto:
+            ttk.Label(cab, text="Proyecto", style="Tarjeta.Suave.TLabel").pack(side="left")
+        self.cb_p = ttk.Combobox(cab, state="readonly", width=(22 if compacto else 26) if pestanas else 56)
         self.cb_p.pack(side="left", padx=8)
-        self.lbl_p = ttk.Label(cab, text="", style="Tarjeta.Suave.TLabel")
+        self.lbl_p = ttk.Label(cab, text="", style="Tarjeta.Suave.TLabel", wraplength=150 if compacto else 200)
         self.lbl_p.pack(side="left", padx=6)
-        self.bt_guardar = ttk.Button(cab, text="Guardar", style="Principal.TButton", command=self.guardar)
+        self.bt_guardar = ttk.Button(cab, text="Guardar", style="Elegido.TButton" if compacto else "Principal.TButton", command=self.guardar)
         self.bt_guardar.pack(side="right")
-        self.lbl_guardado = ttk.Label(cab, text="", style="Tarjeta.Suave.TLabel")
+        self.lbl_guardado = ttk.Label(cab, text="", style="Tarjeta.Suave.TLabel", wraplength=220 if compacto else 0)
         self.lbl_guardado.pack(side="right", padx=10)
 
         cuerpo = ttk.Frame(f, style="Fondo.TFrame")
         cuerpo.pack(fill="both", expand=True)
 
-        izq = ttk.Frame(cuerpo, style="Panel.TFrame", padding=(12, 10))
+        izq = ttk.Frame(cuerpo, style="Panel.TFrame", padding=(8, 6) if compacto else (12, 10))
         izq.pack(side="left", fill="y")
         ttk.Label(izq, text="BRUTOS", style="Panel.Seccion.TLabel").pack(anchor="w")
-        self.lb_b = tema.lista(izq, width=34, height=8)
+        self.lb_b = tema.lista(izq, width=ancho_lista, height=4 if compacto else 8)
         self.lb_b.pack(fill="both", expand=True, pady=(4, 4))
         fila = ttk.Frame(izq, style="Panel.TFrame")
         fila.pack(fill="x")
-        ttk.Button(fila, text="Renombrar…", style="Accion.TButton", command=self.renombrar).pack(side="left")
-        ttk.Button(fila, text="Orden automático", style="Fantasma.TButton", command=self.automatico).pack(side="right")
+        ttk.Button(fila, text="Renombrar…", style=accion, command=self.renombrar).pack(side="left")
+        ttk.Button(fila, text="Orden automático", style=fantasma, command=self.automatico).pack(side="right")
         self.lbl_q = ttk.Label(izq, text="PAPELERA", style="Panel.Seccion.TLabel")
         self.lbl_q.pack(anchor="w", pady=(12, 0))
-        self.lb_q = tema.lista(izq, width=34, height=3, selectmode="extended")
+        self.lb_q = tema.lista(izq, width=ancho_lista, height=2 if compacto else 3, selectmode="extended")
         self.lb_q.pack(fill="x", pady=(4, 4))
-        ttk.Button(izq, text="Recuperar los marcados", style="Accion.TButton", command=self.recuperar).pack(anchor="w")
+        ttk.Button(izq, text="Recuperar los marcados", style=accion, command=self.recuperar).pack(anchor="w")
         self.marco_n = ttk.Frame(izq, style="Panel.TFrame")
         ttk.Label(self.marco_n, text="CLIPS NUEVOS SIN COLOCAR", style="Panel.Aviso.TLabel").pack(anchor="w")
-        self.lb_n = tema.lista(self.marco_n, width=34, height=3, selectmode="extended")
+        self.lb_n = tema.lista(self.marco_n, width=ancho_lista, height=2 if compacto else 3, selectmode="extended")
         self.lb_n.pack(fill="x", pady=(4, 4))
-        ttk.Button(self.marco_n, text="Colocar por fecha", style="Accion.TButton", command=self.colocar).pack(anchor="w")
+        ttk.Button(self.marco_n, text="Colocar por fecha", style=accion, command=self.colocar).pack(anchor="w")
         self.lbl_f = ttk.Label(izq, text="FUERA DEL BRUTO", style="Panel.Seccion.TLabel")
         self.lbl_f.pack(anchor="w", pady=(12, 0))
-        self.lb_f = tema.lista(izq, width=34, height=4)
+        self.lb_f = tema.lista(izq, width=ancho_lista, height=3 if compacto else 4)
         self.lb_f.pack(fill="x", pady=(4, 0))
         ttk.Label(izq, text="Efectos de Avid, agencias e importados: no entran en ningún bruto.", style="Panel.Suave.TLabel",
-                  wraplength=290).pack(anchor="w", pady=(4, 0))
+                  wraplength=200 if compacto else 290).pack(anchor="w", pady=(4, 0))
 
         centro = ttk.Frame(cuerpo, style="Fondo.TFrame")
         centro.pack(side="left", fill="both", expand=True)
+        # En una pantalla pequeña la lista de clips va a la derecha del visor y la ficha del clip no se pone (la lista ya
+        # dice nombre, fecha, duración y origen): así el visor, la línea de tiempo y la lista caben sin desplazar.
         arriba = ttk.Frame(centro, style="Fondo.TFrame")
-        arriba.pack(fill="x")
+        arriba.pack(fill="both" if compacto else "x", expand=compacto)
         ficha = ttk.Frame(arriba, style="Panel.TFrame", padding=(14, 12))
-        ficha.pack(side="right", fill="y")
-        visor_caja = ttk.Frame(arriba, style="Fondo.TFrame", padding=(16, 10, 16, 6))
-        visor_caja.pack(side="left", fill="both", expand=True)
-        self.visor = tk.Canvas(visor_caja, width=VISOR_W, height=VISOR_H, bg="#0b0b0c", highlightthickness=1, highlightbackground=tema.BORDE)
+        if not compacto:
+            ficha.pack(side="right", fill="y")
+        visor_caja = ttk.Frame(arriba, style="Fondo.TFrame", padding=(8, 6, 8, 4) if compacto else (16, 10, 16, 6))
+        visor_caja.pack(side="left", fill="y" if compacto else "both", expand=not compacto)
+        self.visor = tk.Canvas(visor_caja, width=self.vw, height=self.vh, bg="#0b0b0c", highlightthickness=1, highlightbackground=tema.BORDE)
         self.visor.pack()
         ctrl = ttk.Frame(visor_caja, style="Fondo.TFrame")
-        ctrl.pack(pady=(8, 0))
+        ctrl.pack(pady=(4, 0) if compacto else (8, 0))
         ttk.Button(ctrl, text="◀◀", width=4, command=lambda: self.mover_cursor(-10)).pack(side="left")
         self.bt_play = ttk.Button(ctrl, text="▶  Avance", style="Elegido.TButton", command=self.reproducir)
         self.bt_play.pack(side="left", padx=4)
         ttk.Button(ctrl, text="▶▶", width=4, command=lambda: self.mover_cursor(10)).pack(side="left")
+        if compacto:  # el timecode, debajo: en una fila no cabe con un visor pequeño
+            ctrl = ttk.Frame(visor_caja, style="Fondo.TFrame")
+            ctrl.pack(pady=(2, 0))
         self.lbl_tc = ttk.Label(ctrl, text="00:00:00:00", style="TC.TLabel")
-        self.lbl_tc.pack(side="left", padx=(16, 8))
+        self.lbl_tc.pack(side="left", padx=(0 if compacto else 16, 8))
         self.lbl_total = ttk.Label(ctrl, text="", style="Suave.TLabel")
         self.lbl_total.pack(side="left")
         self.cb_vel = ttk.Combobox(ctrl, state="readonly", width=5, values=["x1", "x10", "x60"])
@@ -146,33 +159,40 @@ class PantallaMontaje:
         self.cb_vel.pack(side="left", padx=(12, 0))
 
         ttk.Label(ficha, text="CLIP", style="Panel.Seccion.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
-        self.lbl_nombre = ttk.Label(ficha, text="", style="Panel.Grande.TLabel", wraplength=270)
+        self.lbl_nombre = ttk.Label(ficha, text="", style="Panel.Grande.TLabel", wraplength=200 if compacto else 270)
         self.lbl_nombre.grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 8))
         self.ficha = {}
         for i, (clave, texto) in enumerate((("fecha", "Grabado"), ("tc", "TC original"), ("dur", "Duración"), ("formato", "Formato"),
                                             ("audio", "Audio"), ("origen", "Origen"), ("montaje", "Montaje")), 2):
             ttk.Label(ficha, text=texto, style="Panel.Suave.TLabel").grid(row=i, column=0, sticky="nw", pady=2)
-            self.ficha[clave] = ttk.Label(ficha, text="", style="Panel.TLabel", wraplength=170)
+            self.ficha[clave] = ttk.Label(ficha, text="", style="Panel.TLabel", wraplength=130 if compacto else 170)
             self.ficha[clave].grid(row=i, column=1, sticky="w", padx=(10, 0), pady=2)
-        self.lbl_bruto = ttk.Label(ficha, text="", style="Panel.Suave.TLabel", wraplength=270)
-        self.lbl_bruto.grid(row=20, column=0, columnspan=2, sticky="w", pady=(12, 0))
+        self.pref_bruto = "" if compacto else "Panel."  # el fondo de donde va el rótulo del bruto
+        self.lbl_bruto = ttk.Label(visor_caja if compacto else ficha, text="", style=self.pref_bruto + "Suave.TLabel",
+                                   wraplength=self.vw + 20 if compacto else 270)
+        if compacto:
+            self.lbl_bruto.pack(anchor="w", pady=(4, 0))
+        else:
+            self.lbl_bruto.grid(row=20, column=0, columnspan=2, sticky="w", pady=(12, 0))
 
-        acc = ttk.Frame(centro, style="Panel.TFrame", padding=(12, 6))
+        acc = ttk.Frame(centro, style="Panel.TFrame", padding=(8, 4) if compacto else (12, 6))
         acc.pack(fill="x")
         self.botones = []
         for texto, orden in (("Quitar", self.quitar), ("Subir", lambda: self.accion("subir")), ("Bajar", lambda: self.accion("bajar")),
-                             ("← Bruto anterior", lambda: self.accion("mover", -1)), ("Bruto siguiente →", lambda: self.accion("mover", 1)),
+                             ("← Bruto anterior" if not compacto else "← Bruto", lambda: self.accion("mover", -1)),
+                             ("Bruto siguiente →" if not compacto else "Bruto →", lambda: self.accion("mover", 1)),
                              ("Cortar aquí", self.cortar), ("Deshacer", self.deshacer)):
-            b = ttk.Button(acc, text=texto, style="Accion.TButton", command=orden)
+            b = ttk.Button(acc, text=texto, style=accion, command=orden)
             b.pack(side="left", padx=(0, 4))
             self.botones.append(b)
-        ttk.Button(acc, text="+", width=3, style="Fantasma.TButton", command=lambda: self.ampliar(2)).pack(side="right")
-        ttk.Button(acc, text="−", width=3, style="Fantasma.TButton", command=lambda: self.ampliar(0.5)).pack(side="right", padx=4)
+        ttk.Button(acc, text="+", width=3, style=fantasma, command=lambda: self.ampliar(2)).pack(side="right")
+        ttk.Button(acc, text="−", width=3, style=fantasma, command=lambda: self.ampliar(0.5)).pack(side="right", padx=4)
         ttk.Label(acc, text="Zoom", style="Panel.Suave.TLabel").pack(side="right", padx=4)
 
-        lt = ttk.Frame(centro, style="Fondo.TFrame", padding=(12, 6, 12, 0))
+        lt = ttk.Frame(centro, style="Fondo.TFrame", padding=(8, 4, 8, 0) if compacto else (12, 6, 12, 0))
         lt.pack(fill="x")
-        self.linea = tk.Canvas(lt, height=90, bg=tema.CAMPO, highlightthickness=1, highlightbackground=tema.BORDE)
+        self.alto_linea = 56 if compacto else 90
+        self.linea = tk.Canvas(lt, height=self.alto_linea, bg=tema.CAMPO, highlightthickness=1, highlightbackground=tema.BORDE)
         self.linea.pack(fill="x")
         self.sb_linea = ttk.Scrollbar(lt, orient="horizontal", command=self.linea.xview)
         self.sb_linea.pack(fill="x")
@@ -182,17 +202,21 @@ class PantallaMontaje:
         for color, texto in ((tema.CLIP, "en orden cronológico"), (tema.ACENTO, "movido a mano")):
             tk.Frame(leyenda, bg=color, width=10, height=10).pack(side="left", padx=(0, 4))
             ttk.Label(leyenda, text=texto, style="Suave.TLabel").pack(side="left", padx=(0, 14))
-        ttk.Label(leyenda, text="Clic para ir · Ctrl+clic marca varios · flechas: 1 segundo", style="Suave.TLabel").pack(side="left")
+        if not compacto:
+            ttk.Label(leyenda, text="Clic para ir · Ctrl+clic marca varios · flechas: 1 segundo", style="Suave.TLabel").pack(side="left")
         self.lbl_foto = ttk.Label(leyenda, text="", style="Suave.TLabel")
         self.lbl_foto.pack(side="right")
 
-        tabla = ttk.Frame(centro, style="Fondo.TFrame", padding=(12, 4, 12, 8))
-        tabla.pack(fill="both", expand=True)
+        tabla = ttk.Frame(arriba if compacto else centro, style="Fondo.TFrame", padding=(4, 6, 8, 4) if compacto else (12, 4, 12, 8))
+        tabla.pack(side="right" if compacto else "top", fill="both", expand=True)
         cols = ("n", "clip", "fecha", "dur", "origen", "montaje")
-        self.tv = ttk.Treeview(tabla, columns=cols, show="headings", selectmode="extended", height=5)
-        for c, t, w in zip(cols, ("Nº", "CLIP", "FECHA Y HORA", "DURACIÓN", "ORIGEN", "MONTAJE"), (44, 240, 150, 90, 170, 120)):
+        self.tv = ttk.Treeview(tabla, columns=cols, show="headings", selectmode="extended", height=6 if compacto else 4)
+        anchos = (28, 96, 126, 68, 80, 80) if compacto else (44, 240, 150, 90, 170, 120)
+        for c, t, w in zip(cols, ("Nº", "CLIP", "FECHA Y HORA", "DURACIÓN", "ORIGEN", "MONTAJE"), anchos):
             self.tv.heading(c, text=t)
             self.tv.column(c, width=w, anchor="w", stretch=c == "clip")
+        if compacto:  # "movido a mano" ya se ve en el color de la fila
+            self.tv["displaycolumns"] = ("n", "clip", "fecha", "dur", "origen")
         self.tv.tag_configure("movido", foreground=tema.ACENTO)
         self.tv.tag_configure("audio", foreground=tema.SUAVE)
         sb = ttk.Scrollbar(tabla, orient="vertical", command=self.tv.yview)
@@ -333,14 +357,14 @@ class PantallaMontaje:
             x0, x1 = 2 + t * pps, 2 + (t + d) * pps
             color = tema.SUAVE if not c.get("fichero_video") else tema.ACENTO if c.get("clave") in movidos else tema.CLIP
             marcado = c.get("clave") in sel
-            cv.create_rectangle(x0, 22, max(x1, x0 + 2), 84, fill=color, outline="#ffffff" if marcado else tema.CAMPO, width=2 if marcado else 1)
+            cv.create_rectangle(x0, 22, max(x1, x0 + 2), self.alto_linea - 6, fill=color, outline="#ffffff" if marcado else tema.CAMPO, width=2 if marcado else 1)
             if x1 - x0 > 50:
                 cv.create_text(x0 + 5, 30, text=c["nombre"], anchor="nw", fill=tema.SOBRE_ACENTO if color == tema.ACENTO else "#ffffff",
                                font=(tema.LETRA, 8), width=x1 - x0 - 8)
         x = 2 + self.t * pps
-        cv.create_line(x, 16, x, 90, fill=tema.CABEZAL, width=2)
+        cv.create_line(x, 16, x, self.alto_linea, fill=tema.CABEZAL, width=2)
         cv.create_polygon(x - 6, 14, x + 6, 14, x, 22, fill=tema.CABEZAL, outline="")
-        cv.configure(scrollregion=(0, 0, 4 + total * pps, 90))
+        cv.configure(scrollregion=(0, 0, 4 + total * pps, self.alto_linea))
 
     def donde_cursor(self):
         tramos = self.tramos()
@@ -359,14 +383,14 @@ class PantallaMontaje:
         self.lbl_total.configure(text="de %s" % fmt_tc(total))
         if b:
             self.lbl_bruto.configure(text="Bruto %d: %s · %s%s" % (self.k + 1, b["nombre"], fmt_h(b["segundos"]), " · PASA DE 2 H" if b["largo"] else ""),
-                                     style="Panel.Aviso.TLabel" if b["largo"] else "Panel.Suave.TLabel")
+                                     style=self.pref_bruto + ("Aviso.TLabel" if b["largo"] else "Suave.TLabel"))
         else:
             self.lbl_bruto.configure(text="")
         if c is None:
             self.lbl_nombre.configure(text="")
             for w in self.ficha.values():
                 w.configure(text="")
-            self.visor.create_text(VISOR_W / 2, VISOR_H / 2, fill=tema.SUAVE, text="Sin clips en este bruto")
+            self.visor.create_text(self.vw / 2, self.vh / 2, fill=tema.SUAVE, text="Sin clips en este bruto")
             return
         f = self.m.fecha(c)
         movido = c.get("clave") in self.m.movidos(self.p)
@@ -380,7 +404,7 @@ class PantallaMontaje:
             w.configure(text=valores[k], style="Panel.Acento.TLabel" if k == "montaje" and movido else "Panel.TLabel")
         ruta = self.listos.get(c.get("clave"))
         if not ruta or not PIL_OK:
-            self.visor.create_text(VISOR_W / 2, VISOR_H / 2, fill=tema.SUAVE, text="Preparando fotogramas…" if self.ffmpeg and PIL_OK else "Sin imagen")
+            self.visor.create_text(self.vw / 2, self.vh / 2, fill=tema.SUAVE, text="Preparando fotogramas…" if self.ffmpeg and PIL_OK else "Sin imagen")
             return
         jpgs = self.jpegs.get(c.get("clave"))
         if jpgs is None:
@@ -388,13 +412,16 @@ class PantallaMontaje:
             if len(self.jpegs) > 30:
                 self.jpegs.pop(next(iter(self.jpegs)))
         if not jpgs:
-            self.visor.create_text(VISOR_W / 2, VISOR_H / 2, fill=tema.SUAVE, text="Sin fotogramas")
+            self.visor.create_text(self.vw / 2, self.vh / 2, fill=tema.SUAVE, text="Sin fotogramas")
             return
         i = min(int(dentro), len(jpgs) - 1)
         clave = (c.get("clave"), i)
         foto = self.fotos.get(clave)
         if foto is None:
-            foto = self.fotos[clave] = ImageTk.PhotoImage(Image.open(io.BytesIO(jpgs[i])), master=self.marco)
+            imagen = Image.open(io.BytesIO(jpgs[i]))
+            if imagen.size != (self.vw, self.vh):  # visor más pequeño (pantalla de portátil)
+                imagen = imagen.resize((self.vw, self.vh))
+            foto = self.fotos[clave] = ImageTk.PhotoImage(imagen, master=self.marco)
             if len(self.fotos) > 64:
                 self.fotos.pop(next(iter(self.fotos)))
         self.visor.create_image(0, 0, image=foto, anchor="nw")

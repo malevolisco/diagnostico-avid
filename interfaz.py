@@ -82,8 +82,17 @@ class App:
         self.da, self.tk, self.ttk = da, tk, ttk
         raiz = self.raiz = tk.Tk()
         raiz.title("DiagnosticoAvid — v%s (%s)" % (da.VERSION, da.BUILD))
-        raiz.geometry("1280x800")
-        raiz.minsize(1100, 720)
+        # La ventana cabe en la pantalla: en un portátil con Windows ampliando al 125-150 % (≈1100x600 útiles) se abre
+        # maximizada y en modo compacto; antes medía 1280x800 y las pestañas de abajo quedaban fuera (26/10/2026).
+        self.compacto = tema.pantalla_pequena(raiz)
+        an, al = raiz.winfo_screenwidth(), raiz.winfo_screenheight()
+        raiz.geometry("%dx%d+0+0" % (min(1280, an - 16), min(800, al - 90)))
+        raiz.minsize(min(900, an - 16), min(520, al - 90))
+        if self.compacto:
+            try:
+                raiz.state("zoomed")  # Windows; en Linux no existe y se queda del tamaño de la pantalla
+            except tk.TclError:
+                pass
         self.letras = tema.aplicar(raiz)
 
         self.origen = tk.StringVar()
@@ -107,10 +116,11 @@ class App:
 
         self.cabecera()
         self.cuerpo = ttk.Frame(raiz, style="Fondo.TFrame")
-        self.barra_paginas = tema.BarraPaginas(raiz, PAGINAS, self.ir)
-        self.barra_paginas.pack(side="bottom", fill="x")
         self.cuerpo.pack(fill="both", expand=True)
-        self.paginas = {c: ttk.Frame(self.cuerpo, style="Fondo.TFrame") for c, _, _ in PAGINAS}
+        # Cada página va en un Desplazable: si no cabe en la pantalla, se desplaza en vez de quedar cortada
+        self.contenedores = {c: tema.Desplazable(self.cuerpo) for c, _, _ in PAGINAS}
+        self.paginas = {c: d.interior for c, d in self.contenedores.items()}
+        tema.rueda_para_paginas(raiz, lambda: self.contenedores.get(self.pagina))
         self.pagina_disco()
         self.pagina_exportar()
         self.origen.trace_add("write", lambda *a: self.cambio_carpetas(proyectos=True))
@@ -126,10 +136,14 @@ class App:
 
     def cabecera(self):
         ttk, da = self.ttk, self.da
-        cab = ttk.Frame(self.raiz, style="Cabecera.TFrame", padding=(20, 10))
+        cab = ttk.Frame(self.raiz, style="Cabecera.TFrame", padding=(16, 0))
         cab.pack(side="top", fill="x")
-        ttk.Label(cab, text="DiagnosticoAvid", style="Tarjeta.Grande.TLabel").pack(side="left")
-        ttk.Label(cab, text="v%s · %s · solo lectura del disco de origen" % (da.VERSION, da.BUILD), style="Tarjeta.Suave.TLabel").pack(side="left", padx=14)
+        ttk.Label(cab, text="DiagnosticoAvid", style="Tarjeta.Grande.TLabel").pack(side="left", pady=8)
+        # Las páginas, arriba y siempre a la vista (antes, abajo: en un portátil se salían de la pantalla)
+        self.barra_paginas = tema.BarraPaginas(cab, PAGINAS, self.ir)
+        self.barra_paginas.pack(side="left", padx=(18, 0), fill="y")
+        if not self.compacto:
+            ttk.Label(cab, text="%s · solo lectura del disco de origen" % da.BUILD, style="Tarjeta.Suave.TLabel").pack(side="left", padx=14)
         # Sin actualización automática al abrir (decisión de Adrián para la revisión de Ingeniería, oct. 2026): solo se
         # busca una versión nueva si alguien pulsa este botón (aparece solo en el .exe de Windows).
         self.bt_act = ttk.Button(cab, text="Buscar actualización", style="Fantasma.TButton", command=self.buscar_actualizacion)
@@ -163,9 +177,9 @@ class App:
             else:
                 self.cerrar_montaje()
         if self.pagina:
-            self.paginas[self.pagina].pack_forget()
+            self.contenedores[self.pagina].pack_forget()
         self.pagina = clave
-        self.paginas[clave].pack(fill="both", expand=True)
+        self.contenedores[clave].pack(fill="both", expand=True)
         self.barra_paginas.marcar(clave)
         if clave == "montaje":
             self.preparar_montaje()
@@ -220,9 +234,9 @@ class App:
     def pagina_disco(self):
         ttk = self.ttk
         p = self.paginas["disco"]
-        der = ttk.Frame(p, style="Panel.TFrame", padding=(18, 18))
+        der = ttk.Frame(p, style="Panel.TFrame", padding=(12, 12) if self.compacto else (18, 18))
         der.pack(side="right", fill="y")
-        izq = ttk.Frame(p, style="Fondo.TFrame", padding=(22, 18))
+        izq = ttk.Frame(p, style="Fondo.TFrame", padding=(14, 10) if self.compacto else (22, 18))
         izq.pack(side="left", fill="both", expand=True)
 
         t = tema.Tarjeta(izq)
@@ -232,10 +246,11 @@ class App:
                 ("Disco de Avid", self.origen, "Disco de Avid", "solo se lee, no se modifica"),
                 ("Informe", self.destino, "Carpeta de salida", "otro disco o el escritorio"),
                 ("Carpeta de brutos", self.brutos, "Carpeta para los brutos", "un disco con espacio"))):
-            ttk.Label(t, text=texto, style="Tarjeta.TLabel", width=18).grid(row=fila + 1, column=0, sticky="w", pady=4)
-            ttk.Entry(t, textvariable=var).grid(row=fila + 1, column=1, sticky="ew", pady=4)
+            ttk.Label(t, text=texto, style="Tarjeta.TLabel", width=16 if self.compacto else 18).grid(row=fila + 1, column=0, sticky="w", pady=4)
+            ttk.Entry(t, textvariable=var, width=12 if self.compacto else 20).grid(row=fila + 1, column=1, sticky="ew", pady=4)
             ttk.Button(t, text="Elegir…", command=lambda v=var, tt=titulo: self.elegir_carpeta(v, tt)).grid(row=fila + 1, column=2, padx=(8, 0))
-            ttk.Label(t, text=ayuda, style="Tarjeta.Suave.TLabel").grid(row=fila + 1, column=3, sticky="w", padx=(10, 0))
+            if not self.compacto:  # en una pantalla pequeña no caben; lo mismo lo dice el título del diálogo
+                ttk.Label(t, text=ayuda, style="Tarjeta.Suave.TLabel").grid(row=fila + 1, column=3, sticky="w", padx=(10, 0))
         fila_extra = len(("Disco de Avid", "Informe", "Carpeta de brutos")) + 1
         ttk.Label(t, text="Más media", style="Tarjeta.TLabel", width=18).grid(row=fila_extra, column=0, sticky="w", pady=4)
         self.lbl_extra = ttk.Label(t, text="", style="Tarjeta.Suave.TLabel")
@@ -274,18 +289,19 @@ class App:
 
         self.barra = ttk.Progressbar(izq, mode="indeterminate")
         self.barra.pack(fill="x", pady=(16, 0))
-        self.registro = tema.texto(izq, height=12, state="disabled")
+        self.registro = tema.texto(izq, height=5 if self.compacto else 12, state="disabled")
         self.registro.pack(fill="both", expand=True, pady=(8, 0))
 
-        t = tema.Tarjeta(der, "Último análisis de este disco", width=330)
+        ancho = 210 if self.compacto else 300  # columna de la derecha, más estrecha en una pantalla pequeña
+        t = tema.Tarjeta(der, "Último análisis" if self.compacto else "Último análisis de este disco", width=ancho + 30)
         t.pack(fill="x")
-        self.lbl_ultimo = ttk.Label(t, text="", style="Tarjeta.TLabel", wraplength=300, justify="left")
+        self.lbl_ultimo = ttk.Label(t, text="", style="Tarjeta.TLabel", wraplength=ancho, justify="left")
         self.lbl_ultimo.pack(anchor="w")
         self.bt_informe = ttk.Button(t, text="Abrir el informe", command=self.abrir_informe)
         self.bt_informe.pack(anchor="w", pady=(10, 0))
         t = tema.Tarjeta(der, "Siguiente paso")
         t.pack(fill="x", pady=(14, 0))
-        self.lbl_siguiente = ttk.Label(t, text="", style="Tarjeta.TLabel", wraplength=300, justify="left")
+        self.lbl_siguiente = ttk.Label(t, text="", style="Tarjeta.TLabel", wraplength=ancho, justify="left")
         self.lbl_siguiente.pack(anchor="w")
         self.bt_siguiente = ttk.Button(t, text="Ir a Montaje →", style="Elegido.TButton", command=lambda: self.ir("montaje"))
         self.bt_siguiente.pack(anchor="w", pady=(10, 0))
@@ -293,7 +309,7 @@ class App:
 
     def pintar_media_extra(self):
         extra = self.estado["media_extra"]
-        self.lbl_extra.configure(text="; ".join(extra) if extra else "opcional: media en otros discos")
+        self.lbl_extra.configure(text="; ".join(extra) if extra else "opcional" if self.compacto else "opcional: media en otros discos")
         self.bt_quitar_extra.state(["!disabled"] if extra else ["disabled"])
 
     def anadir_media(self):
@@ -573,7 +589,8 @@ class App:
 
         def pestanas(cabecera):
             sel = tema.Seleccion(cabecera, [("brutos", "Brutos"),
-                                            ("origen", "Origen del material" + (" · %d para revisar" % dudosos if dudosos else ""))],
+                                            ("origen", ("Origen" if self.compacto else "Origen del material")
+                                             + (" · %d para revisar" % dudosos if dudosos else ""))],
                                  self.var_pestana, al_cambiar=self.ver_pestana_montaje, estilo="Cabecera")
             sel.pack(side="left", padx=(0, 16))
             self.sel_pestanas.append(sel)
@@ -581,9 +598,10 @@ class App:
         self.cajas_montaje = {k: self.ttk.Frame(p, style="Fondo.TFrame") for k in ("brutos", "origen")}
         self.montaje = vm.PantallaMontaje(self.cajas_montaje["brutos"], m, resumen["origen"], Path(carpeta) / "visor", self.brutos.get(),
                                           da.localizar_ffmpeg()[0], da.exportar_brutos.clips_a_la_vez(cfg), self.estado["proyectos"],
-                                          al_cambiar=self.montaje_cambiado, pestanas=pestanas)
+                                          al_cambiar=self.montaje_cambiado, pestanas=pestanas, compacto=self.compacto)
         self.pantalla_origen = vo.PantallaOrigen(self.cajas_montaje["origen"], clips, cfg, self.brutos.get(), al_guardar=self.origen_guardado,
-                                                 recordar=da.recordar_reglas_origen, pestanas=pestanas, aprendizaje=da.ruta_aprendizaje(cfg))
+                                                 recordar=da.recordar_reglas_origen, pestanas=pestanas, aprendizaje=da.ruta_aprendizaje(cfg),
+                                                 compacto=self.compacto)
         self.ver_pestana_montaje()
         self.clave_montaje = clave
         self.montaje.bloquear(self.estado["ocupado"] is not None)
@@ -623,52 +641,56 @@ class App:
     def pagina_exportar(self):
         tk, ttk = self.tk, self.ttk
         p = self.paginas["exportar"]
-        izq = ttk.Frame(p, style="Panel.TFrame", padding=(18, 16))
+        izq = ttk.Frame(p, style="Panel.TFrame", padding=(12, 10) if self.compacto else (18, 16))
         izq.pack(side="left", fill="y")
         self.aj = {}
-        ttk.Label(izq, text="AJUSTES DE EXPORTACIÓN", style="Panel.Seccion.TLabel").pack(anchor="w", pady=(0, 10))
+        g = 5 if self.compacto else 12  # separación entre bloques (menos en una pantalla pequeña)
+        ttk.Label(izq, text="AJUSTES DE EXPORTACIÓN", style="Panel.Seccion.TLabel").pack(anchor="w", pady=(0, g))
         ttk.Label(izq, text="Formato", style="Panel.TLabel", font=self.letras["negrita"]).pack(anchor="w")
-        self.aj["formato"] = ttk.Combobox(izq, state="readonly", width=40, values=["XDCAM HD422 50 Mb/s · 1080i25 · 16:9 (recomendado)",
+        self.aj["formato"] = ttk.Combobox(izq, state="readonly", width=32 if self.compacto else 40, values=["XDCAM HD422 50 Mb/s · 1080i25 · 16:9 (recomendado)",
                                                                                  "Formato mayoritario de cada bruto (avanzado)"])
-        self.aj["formato"].pack(anchor="w", pady=(4, 12))
+        self.aj["formato"].pack(anchor="w", pady=(4, g))
         ttk.Label(izq, text="TC de inicio", style="Panel.TLabel", font=self.letras["negrita"]).pack(anchor="w")
         self.aj["tc"] = tk.StringVar()
-        ttk.Entry(izq, textvariable=self.aj["tc"], width=14, font=(tema.MONO, 12)).pack(anchor="w", pady=(4, 12))
+        ttk.Entry(izq, textvariable=self.aj["tc"], width=14, font=(tema.MONO, 10 if self.compacto else 12)).pack(anchor="w", pady=(4, g))
         ttk.Label(izq, text="Audio", style="Panel.TLabel", font=self.letras["negrita"]).pack(anchor="w")
         self.aj["pistas"] = tk.IntVar(value=4)
         self.sel_pistas = tema.Seleccion(izq, [(4, "4 pistas"), (8, "8 pistas")], self.aj["pistas"], al_cambiar=self.pistas_elegidas)
         self.sel_pistas.pack(anchor="w", pady=(4, 2))
         self.lbl_pistas = ttk.Label(izq, text="", style="Panel.Suave.TLabel", wraplength=330)
-        self.lbl_pistas.pack(anchor="w", pady=(0, 6))
+        self.lbl_pistas.pack(anchor="w", pady=(0, 2 if self.compacto else 6))
         self.aj["niveles"] = tk.StringVar()
-        for valor, texto in (("sin_tocar", "Sin tocar (recomendado)"), ("ganancia", "Ganancia fija por pista (en Opciones avanzadas)"),
+        for valor, texto in (("sin_tocar", "Sin tocar (recomendado)"),
+                             ("ganancia", "Ganancia fija (Opciones avanzadas)" if self.compacto else "Ganancia fija por pista (en Opciones avanzadas)"),
                              ("r128", "Normalizar a −23 LUFS (altera el original)")):
             ttk.Radiobutton(izq, text=texto, value=valor, variable=self.aj["niveles"], style="Panel.TRadiobutton").pack(anchor="w")
-        ttk.Label(izq, text="Comprobaciones", style="Panel.TLabel", font=self.letras["negrita"]).pack(anchor="w", pady=(12, 2))
+        ttk.Label(izq, text="Comprobaciones", style="Panel.TLabel", font=self.letras["negrita"]).pack(anchor="w", pady=(g, 2))
         for clave, texto in (("ficha_tecnica", "Ficha técnica (conforme / no conforme)"), ("md5", "MD5 de cada bruto"),
                              ("medidor_audio", "Medidor de audio (avisa, no toca)")):
             self.aj[clave] = tk.BooleanVar()
             ttk.Checkbutton(izq, text=texto, variable=self.aj[clave], style="Panel.TCheckbutton").pack(anchor="w")
         self.bt_opciones = ttk.Button(izq, text="Opciones avanzadas…", style="Fantasma.TButton", command=self.opciones_avanzadas)
-        self.bt_opciones.pack(anchor="w", pady=(16, 0))
+        self.bt_opciones.pack(anchor="w", pady=(8 if self.compacto else 16, 0))
         for clave in ("tc", "niveles", "ficha_tecnica", "md5", "medidor_audio"):
             self.aj[clave].trace_add("write", lambda *a: self.leer_ajustes())
         self.aj["formato"].bind("<<ComboboxSelected>>", lambda e: self.leer_ajustes())
 
-        centro = ttk.Frame(p, style="Fondo.TFrame", padding=(20, 16))
+        centro = ttk.Frame(p, style="Fondo.TFrame", padding=(12, 10) if self.compacto else (20, 16))
         centro.pack(side="left", fill="both", expand=True)
         fila = ttk.Frame(centro, style="Fondo.TFrame")
         fila.pack(fill="x")
-        ttk.Label(fila, text="Cola de exportación", style="Titulo.TLabel").pack(side="left")
+        ttk.Label(fila, text="Cola de exportación", style="Grande.TLabel" if self.compacto else "Titulo.TLabel").pack(side="left")
         self.lbl_cola = ttk.Label(fila, text="", style="Suave.TLabel")
         self.lbl_cola.pack(side="left", padx=14)
-        ttk.Button(fila, text="Ninguno", style="Fantasma.TButton", command=lambda: self.marcar_todos(False)).pack(side="right")
-        ttk.Button(fila, text="Todos", style="Fantasma.TButton", command=lambda: self.marcar_todos(True)).pack(side="right", padx=6)
+        fantasma = "Fantasma.Compacta.TButton" if self.compacto else "Fantasma.TButton"
+        ttk.Button(fila, text="Ninguno", style=fantasma, command=lambda: self.marcar_todos(False)).pack(side="right")
+        ttk.Button(fila, text="Todos", style=fantasma, command=lambda: self.marcar_todos(True)).pack(side="right", padx=6)
         caja = ttk.Frame(centro, style="Fondo.TFrame")
         caja.pack(fill="both", expand=True, pady=(12, 0))
         cols = ("si", "bruto", "dur", "estado", "calidad")
-        self.tv = ttk.Treeview(caja, columns=cols, show="headings", selectmode="browse")
-        for c, t, w, st in zip(cols, ("", "BRUTO", "DURACIÓN", "ESTADO", "COMPROBACIÓN"), (40, 300, 90, 240, 130), (False, True, False, True, False)):
+        self.tv = ttk.Treeview(caja, columns=cols, show="headings", selectmode="browse", height=5 if self.compacto else 10)
+        anchos = (34, 220, 80, 170, 110) if self.compacto else (40, 300, 90, 240, 130)
+        for c, t, w, st in zip(cols, ("", "BRUTO", "DURACIÓN", "ESTADO", "COMPROBACIÓN"), anchos, (False, True, False, True, False)):
             self.tv.heading(c, text=t)
             self.tv.column(c, width=w, anchor="center" if c == "si" else "w", stretch=st)
         self.tv.tag_configure("fuera", foreground=tema.SUAVE)
@@ -695,7 +717,7 @@ class App:
         self.lbl_espacio.pack(anchor="w", pady=(6, 0))
         t = tema.Tarjeta(tarjetas, "Tiempo")
         t.pack(side="left", fill="both", expand=True, padx=(14, 0))
-        self.lbl_tiempo = ttk.Label(t, text="", style="Tarjeta.TLabel", wraplength=380, justify="left")
+        self.lbl_tiempo = ttk.Label(t, text="", style="Tarjeta.TLabel", wraplength=260 if self.compacto else 380, justify="left")
         self.lbl_tiempo.pack(anchor="w")
 
         pie = ttk.Frame(centro, style="Fondo.TFrame")
@@ -704,9 +726,10 @@ class App:
         self.bt_exportar.pack(side="right")
         self.bt_parar_exp = ttk.Button(pie, text="Detener", style="Fantasma.TButton", command=self.detener)
         self.bt_parar_exp.pack(side="right", padx=10)
-        self.lbl_motivo = ttk.Label(pie, text="", style="Aviso.TLabel", wraplength=560, justify="right")
+        self.lbl_motivo = ttk.Label(pie, text="", style="Aviso.TLabel", wraplength=280 if self.compacto else 560, justify="right")
         self.lbl_motivo.pack(side="right", padx=10)
-        ttk.Label(pie, text="Se puede detener y seguir otro día.", style="Suave.TLabel").pack(side="left")
+        if not self.compacto:
+            ttk.Label(pie, text="Se puede detener y seguir otro día.", style="Suave.TLabel").pack(side="left")
         self.contenido_exportar = [izq, centro]
 
     def preparar_exportar(self):

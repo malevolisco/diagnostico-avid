@@ -1365,6 +1365,81 @@ class DatosRarosDeUnDiscoReal(unittest.TestCase):
         self.assertIn("ZeroDivisionError", cm.exception.log.read_text(encoding="utf-8"))
 
 
+class CacheDelAnalisis(unittest.TestCase):
+    """Lo ya leído con ffprobe no se repite si el análisis se para o se vuelve a hacer (26/10/2026)."""
+    def setUp(self):
+        import diagnostico_avid as da
+        self.da = da
+        self.tmp = Path(tempfile.mkdtemp())
+        self.llamadas = []
+        self.original, self.hilos = da.ffprobe_json, da.NUM_HILOS
+        da.NUM_HILOS = 1  # en orden: el segundo fichero se lee después del primero
+        da.ffprobe_json = self.ffprobe_falso
+        self.ficheros = [{"ruta": n, "nombre": n, "ext": ".mxf", "bytes": 10, "modificado": "2021-09-15 10:00:00"}
+                         for n in ("a.mxf", "b.mxf")]
+        self.ruta = self.tmp / "cache_analisis" / "DISCO.json"
+
+    def tearDown(self):
+        self.da.ffprobe_json, self.da.NUM_HILOS = self.original, self.hilos
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def ffprobe_falso(self, ffprobe, ruta):
+        nombre = Path(str(ruta)).name
+        self.llamadas.append(nombre)
+        if nombre == "roto.mxf":
+            return None, "ffprobe devolvió error"
+        if nombre == "falla.mxf":
+            raise RuntimeError("se desconecta el disco")
+        return {"format": {"duration": "2.0", "tags": {"material_package_umid": "0x" + "AB" * 32}},
+                "streams": [{"codec_type": "video", "codec_name": "dnxhd", "width": 1920, "height": 1080}]}, None
+
+    def analizar(self, ficheros):
+        cache = self.da.CacheMXF(self.ruta)
+        return self.da.analizar_mxf(ficheros, self.tmp, "ffprobe", lambda m: None, cache=cache)
+
+    def test_no_repite_lo_ya_leido_y_si_lo_cambiado(self):
+        primero = self.analizar(self.ficheros)
+        self.assertEqual(self.llamadas, ["a.mxf", "b.mxf"])
+        segundo = self.analizar(self.ficheros)  # otra vez, leyendo la caché del disco
+        self.assertEqual(self.llamadas, ["a.mxf", "b.mxf"])  # ni una llamada más
+        self.assertEqual(primero, segundo)
+        cambiado = [dict(self.ficheros[0], bytes=11), self.ficheros[1]]  # a.mxf ha cambiado de tamaño
+        self.analizar(cambiado)
+        self.assertEqual(self.llamadas, ["a.mxf", "b.mxf", "a.mxf"])
+
+    def test_lo_que_falla_se_vuelve_a_intentar(self):
+        roto = [{"ruta": "roto.mxf", "nombre": "roto.mxf", "ext": ".mxf", "bytes": 5, "modificado": ""}]
+        self.analizar(roto)
+        self.analizar(roto)
+        self.assertEqual(self.llamadas, ["roto.mxf", "roto.mxf"])
+
+    def test_si_algo_falla_a_mitad_lo_leido_no_se_pierde(self):
+        con_fallo = self.ficheros[:1] + [{"ruta": "falla.mxf", "nombre": "falla.mxf", "ext": ".mxf", "bytes": 5, "modificado": ""}]
+        with self.assertRaises(RuntimeError):
+            self.analizar(con_fallo)
+        self.analizar(self.ficheros[:1])
+        self.assertEqual(self.llamadas, ["a.mxf", "falla.mxf"])  # a.mxf no se ha vuelto a leer
+
+    def test_olvida_lo_que_ya_no_esta_y_las_versiones_viejas(self):
+        self.analizar(self.ficheros)
+        c = self.da.CacheMXF(self.ruta)
+        c.quedarse(self.ficheros[:1])
+        c.guardar()
+        self.assertEqual(len(self.da.CacheMXF(self.ruta).datos), 1)
+        self.ruta.write_text(json.dumps({"version": -1, "ficheros": c.datos}), encoding="utf-8")
+        self.assertEqual(self.da.CacheMXF(self.ruta).datos, {})  # de otra versión: no se usa
+        self.ruta.write_text("{roto", encoding="utf-8")
+        self.assertEqual(self.da.CacheMXF(self.ruta).datos, {})
+
+    def test_si_cambia_lo_que_se_guarda_hay_que_subir_la_version(self):
+        r = self.da.resumir_mxf({"format": {"tags": {}}, "streams": [{"codec_type": "video"}]})
+        self.assertEqual((self.da.VERSION_CACHE, sorted(r), sorted(r["pistas"][0])), (1, [
+            "comentarios", "duracion", "formato", "marca", "marca_tipo", "nombre_clip", "op", "pistas", "producto", "timecode", "umid"], [
+            "alto", "ancho", "bits", "canales", "codec", "color_matriz", "color_primarias", "color_rango", "color_transfer", "duracion",
+            "field_order", "file_package_name", "file_package_umid", "fps", "fps_medio", "muestreo", "perfil", "pix_fmt", "rotacion",
+            "tipo"]), "Ha cambiado lo que guarda resumir_mxf: sube VERSION_CACHE y actualiza esta lista")
+
+
 class MediaEnlazada(unittest.TestCase):
     """Media enlazada (AMA) o importada sin MXF de Avid: el fichero original se busca en el disco esté donde esté."""
 

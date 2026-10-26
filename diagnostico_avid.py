@@ -582,7 +582,7 @@ def fijar_fechas_grabacion(clips, mxf=()):
     fuentes, solo_fecha, columnas, imposibles = Counter(), Counter(), Counter(), Counter()
     desfasados = 0
     for c in clips:
-        columnas.update(c.get("columnas") or {})
+        columnas.update(list(c.get("columnas") or {}))  # cuántos clips tienen cada columna (el nombre, no lo que pone)
         columnas.update("MXF: " + k for k in (c.get("comentarios") or {}))
         f, fuente = buscar_fecha_grabacion(c)
         if f:
@@ -810,7 +810,11 @@ def mxf_de_proyectos(ficheros, origen, bins, progreso):
     todos = [f for f in ficheros if f["ext"] == ".mxf"]
 
     def es_suyo(f):
-        p = mxf_util.paquetes(ruta_larga(Path(origen) / f["ruta"]))
+        try:
+            p = mxf_util.paquetes(ruta_larga(Path(origen) / f["ruta"]))
+        except Exception as e:  # algo raro en un fichero no para el análisis: se analiza entero con ffprobe
+            LOG.warning("Cabecera de %s: %s", f["ruta"], e)
+            return True
         return p is None or any(material(u) in ids for u in p["umids"]) or any(nombre_normal(n) in nombres for n in p["nombres"])
 
     elegidos, hechos = [], 0

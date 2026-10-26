@@ -8,7 +8,7 @@ ACABADO PROFESIONAL DE LOS BRUTOS
   aquí se reescribe en su sitio, sin cambiar el tamaño del fichero. Solo se tocan
   los elementos de imagen del MXF: un 00 00 01 B8 dentro del audio no se toca.
 - Ficha técnica: comprueba sobre el fichero exportado (ffprobe) que es XDCAM HD422
-  50 Mb/s 1080i25 16:9 con las pistas y el TC pedidos.
+  50 Mb/s 1080i50 16:9 con las pistas y el TC pedidos.
 - MD5 del bruto, en el formato estándar de md5sum (hash *fichero).
 """
 
@@ -204,7 +204,7 @@ def escribir_md5(ruta, parar=None):
 
 
 def ficha_tecnica(ffprobe, ruta, esperado, flags=None):
-    """Comprueba el bruto exportado contra el perfil XDCAM HD422 50 Mb/s 1080i25 16:9. esperado: {"pistas": n,
+    """Comprueba el bruto exportado contra el perfil XDCAM HD422 50 Mb/s 1080i50 16:9 (25 imágenes/s, 50 campos/s). esperado: {"pistas": n,
     "tc": "hh:mm:ss:ff", "duracion": segundos, "tc_gop": True si se ha reescrito el TC interno}.
     Devuelve (conforme, texto de la ficha)."""
     r = subprocess.run([ffprobe, "-v", "error", "-show_format", "-show_streams", "-of", "json", str(ruta)],
@@ -255,5 +255,5 @@ def ficha_tecnica(ffprobe, ruta, esperado, flags=None):
     else:
         lineas.append("—      TC interno del vídeo: se conserva el del material copiado sin recomprimir")
     lineas.append("Creado: %s" % (fecha_creacion(ruta) or "sin fecha"))
-    cab = "Ficha técnica de %s\nPerfil: XDCAM HD422 50 Mb/s 1080i25 16:9\nVeredicto: %s\n\n" % (Path(ruta).name, "CONFORME" if conforme else "NO CONFORME")
+    cab = "Ficha técnica de %s\nPerfil: XDCAM HD422 50 Mb/s 1080i50 16:9 (25 imágenes/s entrelazadas = 50 campos/s, campo superior primero)\nVeredicto: %s\n\n" % (Path(ruta).name, "CONFORME" if conforme else "NO CONFORME")
     return conforme, cab + "\n".join(lineas) + "\n"

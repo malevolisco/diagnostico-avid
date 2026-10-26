@@ -792,7 +792,7 @@ class PantallaMontaje:
 # Opciones avanzadas de exportación
 # ---------------------------------------------------------------------------
 
-FORMATOS = [("xdcam_hd50", "XDCAM HD422 50 Mb/s 1080i25 16:9 (recomendado: lo pide el Archivo)"),
+FORMATOS = [("xdcam_hd50", "XDCAM HD422 50 Mb/s 1080i50 16:9 (recomendado: lo pide el Archivo)"),
             ("auto", "Formato mayoritario de cada bruto (avanzado)")]
 PISTAS = [("max", "Las que más haya en el bruto, hasta 8 (recomendado)"), (4, "4"), (8, "8")]
 FUENTES = ["Silencio"] + ["Pista %d del clip" % i for i in range(1, 9)]

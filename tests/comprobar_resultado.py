@@ -158,7 +158,7 @@ def main():
                 xdcam = {"codec_name": "mpeg2video", "profile": "4:2:2", "width": "1920", "height": "1080", "pix_fmt": "yuv422p",
                          "field_order": "tt", "r_frame_rate": "25/1", "display_aspect_ratio": "16:9"}
                 if any(v.get(k) != x for k, x in xdcam.items()):
-                    fallo("bruto %s: vídeo %s, esperado XDCAM HD 50 1080i25 16:9 %s" % (proy, v, xdcam))
+                    fallo("bruto %s: vídeo %s, esperado XDCAM HD 50 1080i50 16:9 %s" % (proy, v, xdcam))
                 acabado_profesional(proy, b, mxf, tc, a)
         tcs, _, clips, fechas = tc_shotlist(Path(a.brutos) / b["shotlist"])
         if a.agrupar == "proyecto_mes":

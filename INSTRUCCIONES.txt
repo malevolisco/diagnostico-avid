@@ -150,7 +150,8 @@ Pestaña "Origen del material" (arriba a la izquierda, junto a "Brutos")
 
 Página 3 · Exportar
 - A la izquierda, los ajustes con los valores recomendados ya puestos:
-  - Formato XDCAM HD422 50 Mb/s 1080i25 16:9.
+  - Formato XDCAM HD422 50 Mb/s 1080i50 16:9 (25 imágenes por segundo
+    entrelazadas, es decir, 50 campos; a veces se escribe 1080i/25).
   - Timecode de inicio de cada bruto (00:00:00:00).
   - Audio: 4 pistas u 8 pistas. Viene marcado lo que corresponde al
     material; pulsa el otro para cambiarlo.
@@ -181,7 +182,7 @@ clips en orden de fecha y de 2 horas como mucho:
    - PANAMA 2019 PIEZAS JULIO DE 2019.mxf        piezas ya renderizadas (solo si se marcan)
    - PANAMA 2019.mxf                             clips sin fecha
    - SIN PROYECTO <MES> DE <AÑO>.mxf             clips que no están en ningún bin
-   Todos salen en XDCAM HD422 50 (1920x1080, 25i, 16:9). El material en SD
+   Todos salen en XDCAM HD422 50 (1920x1080, 1080i50, 16:9). El material en SD
    4:3 queda con bandas negras a los lados, sin deformar; el NTSC pasa a 25.
    Cada uno lleva al lado:
    - _shotlist.xlsx: los clips con su timecode dentro del bruto, la fecha,

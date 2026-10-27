@@ -29,7 +29,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # la consola de Wind
 def preparar(analisis, brutos):
     leer = lambda n: json.loads((Path(analisis) / n).read_text(encoding="utf-8"))
     clips, cruce, mxf = leer("clips.json"), leer("cruce.json"), leer("mxf.json")
-    m = montaje.Montaje.desde_analisis(clips, cruce, mxf, json.loads(json.dumps(eb.CONFIG_DEFECTO)), brutos)
+    # El disco simulado tiene material capturado sin nombre de cámara: con la regla de solo lo de cámara se quedaría
+    # fuera (el CI exporta con solo_material_de_camara = false, como aquí)
+    cfg = dict(json.loads(json.dumps(eb.CONFIG_DEFECTO)), solo_material_de_camara=False)
+    m = montaje.Montaje.desde_analisis(clips, cruce, mxf, cfg, brutos)
     clave = {c["nombre"]: c["clave"] for b in m.brutos(SEPT) + m.brutos(ABORTO) for c in b["clips"]}
     print("15 SEPT:", [[c["nombre"] for c in b["clips"]] for b in m.brutos(SEPT)])
     m.cortar(SEPT, clave["2017 07 21"])

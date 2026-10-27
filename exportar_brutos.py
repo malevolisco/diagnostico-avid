@@ -68,7 +68,9 @@ CONFIG_DEFECTO = {
     "horas_por_bruto": 2,
     "_horas_por_bruto": "Duración máxima de un bruto (proyecto_mes y dias). El clip que la pasaría no se añade: abre el bruto siguiente",
     "excluir_importados": True,
-    "_excluir_importados": "true = fuera de los brutos lo que viene de fuera (agencias, descargas, móvil...), decidido por pistas: metadatos del fichero, carpeta de la que se importó, nombre del bin y del fichero. Lo dudoso entra marcado 'para revisar' en el shotlist",
+    "_excluir_importados": "true = fuera de los brutos lo que viene de fuera (agencias, descargas, móvil...), decidido por pistas: metadatos del fichero, carpeta de la que se importó, nombre del bin y del fichero",
+    "solo_material_de_camara": True,
+    "_solo_material_de_camara": "true = en los brutos de material solo entra lo que tiene alguna pista de cámara (nombre de clip P2, carpeta de tarjeta, metadatos o nombre de fichero de cámara) o se marcó 'Entra' en Origen del material; lo dudoso se queda fuera (Adrián, 27/10/2026: 'solo lo de P2, no lo extraño') | false = lo dudoso entra marcado 'para revisar'",
     "dia_empieza_hora": 6,
     "_dia_empieza_hora": "agrupar=dias: lo volcado antes de esta hora cuenta como del día anterior (volcados de madrugada)",
     "partir_por_tarjeta": True,
@@ -498,6 +500,9 @@ CLASES_ORIGEN = {"propio": "Material propio", "agencia": "Agencia", "importado":
                  "efecto": "Efecto de Avid", "dudoso": "Dudoso"}
 # Nombres de fichero de móvil: IMG_1234.MOV (iPhone), VID_20210915_101500.mp4 y PXL_... (Android), VID-20210915-WA0001 (WhatsApp)
 MOVIL_REGEX = r"^(IMG_\d{4}|IMG_\d{8}_\d{6}|VID_\d{4,}|PXL_\d{8}|VID-\d{8}-WA\d+|.*-WA\d{4})(\D|$)"
+# Nombre de clip de una tarjeta P2 de Panasonic (0001AB, 0001AB.new.01), como la regla de config_origen.json; aquí
+# también para los clips sin bin, a los que no se aplica esa regla
+NOMBRE_P2 = r"^\d{4}[A-Z0-9]{2}(\.new)?(\.\d+)?$"
 # Carpetas de las que lo importado viene de fuera: descargas y mensajería
 CARPETAS_DE_FUERA = r"(^|[\\/])(downloads|descargas|whatsapp[^\\/]*|telegram[^\\/]*|wechat[^\\/]*)([\\/]|$)"
 # Marcas de móvil en los metadatos (make): el resto de marcas es de cámara
@@ -607,6 +612,8 @@ def senales_de_origen(c, cfg):
         s.append((3, "propio", "carpeta de tarjeta (%s)" % marca))
     if es_fichero_de_camara(fichero, cfg) or (origen.startswith("Cámara") and not tarjeta):
         s.append((2, "propio", "nombre de fichero de cámara" if fichero else origen))
+    elif not tarjeta and any(re.match(NOMBRE_P2, str(n or "").strip(), re.IGNORECASE) for n in [c.get("nombre"), *(c.get("nombres_bin") or ())]):
+        s.append((2, "propio", "nombre de clip P2"))
     if fichero and re.search(MOVIL_REGEX, _base_fichero(fichero), re.IGNORECASE):
         s.append((2, "importado", "nombre de fichero de móvil"))
     m = re.search(CARPETAS_DE_FUERA, str(fichero or ""), re.IGNORECASE)
@@ -618,8 +625,9 @@ def senales_de_origen(c, cfg):
 def clasificar(c, cfg):
     """Origen de un clip por señales: (clase, motivo, seguro). clase: propio | agencia | importado | efecto | dudoso.
     Manda lo que se eligió a mano; si no, la pista más fuerte. Si las más fuertes se contradicen (propio frente a fuera),
-    dudoso. Un fichero importado sin ninguna pista, también dudoso: entra en el bruto marcado "para revisar"
-    (Adrián, 23/10/2026: ante la duda, entra). Sin ruta de importación (capturado, tarjeta en Avid), propio."""
+    dudoso. Un fichero importado sin ninguna pista, también dudoso. Sin ruta de importación ni pistas (capturado, creado
+    en Avid), dudoso con solo_material_de_camara (Adrián, 27/10/2026: "solo lo de P2, no lo extraño"); si no, propio.
+    Lo dudoso se queda fuera de los brutos con solo_material_de_camara; si no, entra marcado "para revisar"."""
     if c.get("render"):
         return "efecto", "efecto de Avid", True
     elegido = decision_de_origen(c, cfg)
@@ -632,6 +640,8 @@ def clasificar(c, cfg):
             return "dudoso", "importado de %s, sin pistas de origen" % carpeta, False
         if str(c.get("origen") or "").startswith("Fichero importado"):
             return "dudoso", "importado (según el bin), sin ruta ni pistas de origen", False
+        if cfg.get("solo_material_de_camara", True):
+            return "dudoso", "sin pistas de cámara ni ruta de importación (¿capturado o creado en Avid?)", False
         return "propio", "sin ruta de importación (capturado o de tarjeta)", True
     fuerza = max(f for f, _, _ in senales)
     arriba = [(cl, m) for f, cl, m in senales if f == fuerza]
@@ -734,16 +744,20 @@ def es_de_camara(c, cfg):
 
 
 def es_importado(c, cfg):
-    """De fuera (agencia, internet, móvil...) según clasificar: lo dudoso no, porque ante la duda entra."""
+    """De fuera (agencia, internet, móvil...) según clasificar. Lo dudoso no: eso lo decide excluido."""
     return clasificar(c, cfg)[0] in ("agencia", "importado")
 
 
 def excluido(c, cfg):
-    return bool(cfg.get("excluir_importados", True)) and es_importado(c, cfg)
+    """Fuera de los brutos de material: lo de fuera y, con solo_material_de_camara, también lo dudoso."""
+    if not cfg.get("excluir_importados", True):
+        return False
+    clase = clasificar(c, cfg)[0]
+    return clase in ("agencia", "importado") or (clase == "dudoso" and bool(cfg.get("solo_material_de_camara", True)))
 
 
 def motivo_descarte(c, cfg):
-    """Por qué un clip no entra en ningún bruto ("efecto de Avid", "agencia", "importado"), o None si entra."""
+    """Por qué un clip no entra en ningún bruto ("efecto de Avid", "agencia", "importado", "dudoso"), o None si entra."""
     if c.get("render") and not cfg.get("renders_en_piezas", False):
         return "efecto de Avid"
     if excluido(c, cfg):
@@ -1946,7 +1960,8 @@ def exportar_todo(clips, cruce, mxf, origen, destino, ffmpeg, ffprobe, progreso,
     anotar_origen(clips, cfg)
     dudosos = [c for c in clips if c.get("origen_clase") == "dudoso"]
     if dudosos:
-        LOG.info("Origen dudoso (entran marcados 'para revisar'): %d clips, p. ej. %s", len(dudosos),
+        LOG.info("Origen dudoso (%s): %d clips, p. ej. %s",
+                 "fuera de los brutos" if cfg.get("solo_material_de_camara", True) else "entran marcados 'para revisar'", len(dudosos),
                  "; ".join("%s (%s)" % (c["nombre"], c["origen_motivo"]) for c in dudosos[:5]))
     if cortes:
         LOG.info("Cortes elegidos a mano en %d proyectos", len(cortes))

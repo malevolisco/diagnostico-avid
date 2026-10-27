@@ -137,7 +137,8 @@ jobs:
           if (Test-Path dist/DiagnosticoAvid/config_brutos.json) { Remove-Item dist/DiagnosticoAvid/config_brutos.json }
           $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--origen disco_prueba --destino salida5 --brutos brutos_camara --sin-gui --no-abrir --sin-miniaturas --media-extra disco_prueba_media2" -PassThru -Wait -NoNewWindow
           if ($p.ExitCode -ne 0) { Get-Content salida5/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
-          python -c "import json; r = {b['proyecto']: b['incluidos'] for b in json.load(open('brutos_camara/brutos_resultado.json', encoding='utf-8'))}; print(r); assert r == {'20260916_CHINA 北京 SEPTIEMBRE DE 2021': 3, 'ENLACES SEPTIEMBRE DE 2021': 2, 'NTSC SEPTIEMBRE DE 2021': 2, 'ORIGEN SEPTIEMBRE DE 2021': 1}, r"
+          # Sin caracteres chinos en la orden ni en la consola (cp1252): el bruto de China se reconoce por el principio del nombre
+          python -c "import json; r = {b['proyecto']: b['incluidos'] for b in json.load(open('brutos_camara/brutos_resultado.json', encoding='utf-8'))}; print(ascii(r)); n = {k.split(' ')[0] if k.startswith('20260916_CHINA') else k: v for k, v in r.items()}; assert n == {'20260916_CHINA': 3, 'ENLACES SEPTIEMBRE DE 2021': 2, 'NTSC SEPTIEMBRE DE 2021': 2, 'ORIGEN SEPTIEMBRE DE 2021': 1}, ascii(r)"
           Remove-Item dist/DiagnosticoAvid/config_brutos.json
 
       - name: Autoactualización (release falsa en local; el .bat cambia la carpeta)

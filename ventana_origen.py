@@ -62,8 +62,8 @@ class PantallaOrigen:
         ayuda = ttk.Frame(f, style="Fondo.TFrame", padding=(16, 8, 16, 0))
         ayuda.pack(fill="x")
         ttk.Label(ayuda, wraplength=760 if compacto else 1100, style="Suave.TLabel", text=(
-            "De dónde viene cada clip, agrupado por la carpeta de la que se importó y el bin. Arriba, lo dudoso: entra en el "
-            "bruto marcado \"para revisar\" hasta que se decida. Marca una o varias filas (Ctrl para varias) y elige abajo. "
+            "De dónde viene cada clip, agrupado por la carpeta de la que se importó y el bin. Arriba, lo dudoso: se queda "
+            "fuera de los brutos hasta que elijas \"Entra\". Marca una o varias filas (Ctrl para varias) y elige abajo. "
             "Los efectos de Avid no salen aquí: nunca entran.")).pack(anchor="w")
 
         tabla = ttk.Frame(f, style="Fondo.TFrame", padding=(12, 8, 12, 4))

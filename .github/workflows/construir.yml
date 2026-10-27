@@ -58,6 +58,10 @@ jobs:
       - name: Probar el .exe (análisis + brutos) en Windows
         shell: pwsh
         run: |
+          # El disco simulado tiene material capturado sin nombre de cámara (como el de México): estas pruebas lo meten en
+          # los brutos, como hasta el 27/10/2026. La regla nueva (solo lo de cámara) se prueba aparte, al final.
+          '{"solo_material_de_camara": false}' | Set-Content dist/DiagnosticoAvid/config_brutos.json -Encoding utf8NoBOM
+          '{"solo_material_de_camara": false}' | Set-Content config_brutos.json -Encoding utf8NoBOM
           $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--origen disco_prueba --destino salida --brutos brutos --sin-gui --no-abrir --media-extra disco_prueba_media2" -PassThru -Wait -NoNewWindow
           if ($p.ExitCode -ne 0) { Get-Content salida/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
           Get-Content salida/*/diagnostico.log | Select-Object -Last 15
@@ -119,11 +123,22 @@ jobs:
       - name: Exportación con agrupar=proyecto y formato auto (por tarjetas, copia, timecode NTSC drop-frame)
         shell: pwsh
         run: |
-          Set-Content dist/DiagnosticoAvid/config_brutos.json '{"agrupar": "proyecto", "formato_salida": "auto", "excluir_importados": false}' -Encoding utf8NoBOM
+          Set-Content dist/DiagnosticoAvid/config_brutos.json '{"agrupar": "proyecto", "formato_salida": "auto", "excluir_importados": false, "solo_material_de_camara": false}' -Encoding utf8NoBOM
           $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--origen disco_prueba --destino salida3 --brutos brutos_proyecto --sin-gui --no-abrir --media-extra disco_prueba_media2" -PassThru -Wait -NoNewWindow
           if ($p.ExitCode -ne 0) { Get-Content salida3/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
           Remove-Item dist/DiagnosticoAvid/config_brutos.json
           python tests/comprobar_resultado.py salida3 brutos_proyecto --ffprobe bin/ffprobe.exe --agrupar proyecto
+
+      - name: Por defecto, en los brutos solo entra lo que tiene pistas de cámara (Adrián, 27/10/2026)
+        shell: pwsh
+        run: |
+          # Sin config: valores por defecto. Lo capturado sin nombre de cámara (15 SEPT, ABORTO, APROX, huérfanos) se queda fuera;
+          # entran las tarjetas (NTSC, la XDROOT de China), el dron y la A7, la Panasonic por sus metadatos y lo enlazado de tarjeta
+          if (Test-Path dist/DiagnosticoAvid/config_brutos.json) { Remove-Item dist/DiagnosticoAvid/config_brutos.json }
+          $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--origen disco_prueba --destino salida5 --brutos brutos_camara --sin-gui --no-abrir --sin-miniaturas --media-extra disco_prueba_media2" -PassThru -Wait -NoNewWindow
+          if ($p.ExitCode -ne 0) { Get-Content salida5/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
+          python -c "import json; r = {b['proyecto']: b['incluidos'] for b in json.load(open('brutos_camara/brutos_resultado.json', encoding='utf-8'))}; print(r); assert r == {'20260916_CHINA 北京 SEPTIEMBRE DE 2021': 3, 'ENLACES SEPTIEMBRE DE 2021': 2, 'NTSC SEPTIEMBRE DE 2021': 2, 'ORIGEN SEPTIEMBRE DE 2021': 1}, r"
+          Remove-Item dist/DiagnosticoAvid/config_brutos.json
 
       - name: Autoactualización (release falsa en local; el .bat cambia la carpeta)
         shell: pwsh

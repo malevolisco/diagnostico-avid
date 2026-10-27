@@ -339,8 +339,8 @@ class ProyectoMes(unittest.TestCase):
         return dict({"clave": "K" + nombre, "nombre": nombre, "ficheros": [ruta], "fichero_video": ruta,
                      "duracion": minutos * 60, "origen": "Cámara (tarjeta P2)", "proyectos": list(proyectos)}, **extra)
 
-    def nombres(self, cs, cruce=None):
-        return {g["nombre"]: [c["nombre"] for c in g["clips"]] for g in eb.grupos_de_exportacion(cs, cruce or {}, self.mxf, self.cfg)}
+    def nombres(self, cs, cruce=None, cfg=None):
+        return {g["nombre"]: [c["nombre"] for c in g["clips"]] for g in eb.grupos_de_exportacion(cs, cruce or {}, self.mxf, cfg or self.cfg)}
 
     def test_por_defecto(self):
         self.assertEqual((eb.CONFIG_DEFECTO["agrupar"], eb.CONFIG_DEFECTO["horas_por_bruto"], eb.CONFIG_DEFECTO["formato_salida"],
@@ -357,9 +357,13 @@ class ProyectoMes(unittest.TestCase):
               self.clip("0001AB", "2019-09-16 12:00:00", 1, origen="Fichero importado", fichero_origen=r"E:\CARD01\CONTENTS\VIDEO\0001AB.MXF"),
               self.clip("X,Dissolve,1", "2019-09-16 12:00:00", 0.1, proyectos=(), render=True)]
         # VID_0001 (nombre de móvil) y la agencia, fuera. SIN RUTA es importado según el bin, pero sin ninguna pista de
-        # dónde viene: entra marcado "para revisar" (ante la duda, entra; Adrián, 23/10/2026)
-        self.assertEqual(self.nombres(cs), {"P SEPTIEMBRE DE 2019": ["0016Q3", "SIN RUTA", "0001AB"]})
+        # dónde viene: dudoso, fuera (Adrián, 27/10/2026: "solo lo de P2, no lo extraño")
+        self.assertEqual(self.nombres(cs), {"P SEPTIEMBRE DE 2019": ["0016Q3", "0001AB"]})
         self.assertEqual(eb.clasificar(cs[2], self.cfg)[0], "dudoso")
+        self.assertEqual(eb.clasificar(cs[0], self.cfg)[0], "propio")
+        # Con solo_material_de_camara = false, lo dudoso entra marcado "para revisar" (como hasta el 27/10/2026)
+        self.assertEqual(self.nombres(cs, cfg=dict(self.cfg, solo_material_de_camara=False)),
+                         {"P SEPTIEMBRE DE 2019": ["0016Q3", "SIN RUTA", "0001AB"]})
         self.cfg["excluir_importados"] = False
         self.assertEqual(len(self.nombres(cs)["P SEPTIEMBRE DE 2019"]), 5)
 
@@ -579,7 +583,7 @@ class OrdenYParalelo(unittest.TestCase):
                       "pistas": [{"tipo": "video", "codec": "dvvideo", "ancho": 720, "alto": 480, "fps": "30000/1001",
                                   "pix_fmt": "yuv411p", "field_order": "bb"}]}
             clips.append({"clave": "K%d" % i, "nombre": "CLIP %02d" % i, "ficheros": [v], "fichero_video": v, "num_audio": 0,
-                          "duracion": DUR, "bytes": 1000, "timecode": None, "proyectos": ["P%d" % (i % 2)]})
+                          "duracion": DUR, "bytes": 1000, "timecode": None, "proyectos": ["P%d" % (i % 2)], "origen": "Cámara (tarjeta P2)"})
         self.en_marcha, self.maximo = 0, 0
         cerrojo = threading.Lock()
 
@@ -1055,7 +1059,7 @@ class Detener(unittest.TestCase):
                 mxf.append({"ruta": v, "pistas": [{"tipo": "video", "codec": "dnxhd", "ancho": 1920, "alto": 1080,
                                                    "fps": "25/1", "pix_fmt": "yuv422p", "field_order": "progressive"}]})
                 clips.append({"clave": "K" + p, "nombre": "CLIP " + p, "ficheros": [v], "fichero_video": v, "num_audio": 0,
-                              "duracion": DUR, "bytes": 1000, "timecode": None, "proyectos": ["PROY " + p]})
+                              "duracion": DUR, "bytes": 1000, "timecode": None, "proyectos": ["PROY " + p], "origen": "Cámara (tarjeta P2)"})
 
             def ejecutar(cmd, timeout):
                 if any("BV01" in str(x) for x in cmd):  # se pulsa Detener mientras se hace el proyecto B
@@ -1192,14 +1196,31 @@ class OrigenPorSenales(unittest.TestCase):
         self.assertEqual(eb.clasificar(c, self.cfg), ("propio", "metadatos: Panasonic DC-GH5", True))
         self.assertFalse(eb.es_importado(c, self.cfg))
 
-    def test_sin_pistas_es_dudoso_y_entra(self):
+    def test_sin_pistas_es_dudoso_y_queda_fuera(self):
+        # Adrián, 27/10/2026: "solo lo de P2, no lo extraño". Hasta entonces, ante la duda entraba (solo_material_de_camara = false)
         c = self.clip(r"D:\varios\plano recurso.mp4")
         clase, motivo, seguro = eb.clasificar(c, self.cfg)
         self.assertEqual((clase, seguro), ("dudoso", False))
         self.assertIn("varios", motivo)
-        self.assertFalse(eb.es_importado(c, self.cfg))  # ante la duda, entra
-        self.assertIsNone(eb.motivo_descarte(c, self.cfg))
+        self.assertFalse(eb.es_importado(c, self.cfg))
+        self.assertEqual(eb.motivo_descarte(c, self.cfg), "dudoso")
+        self.assertIsNone(eb.motivo_descarte(c, dict(self.cfg, solo_material_de_camara=False)))
         self.assertEqual(eb.texto_origen(clase, motivo, seguro), "Dudoso · para revisar")
+        # Sin ruta de importación y sin nombre de cámara (capturado, o creado en Avid: pantallas partidas): dudoso, fuera
+        for c in [self.clip(), self.clip(nombre="PANTALLA PARTIDA")]:
+            self.assertEqual(eb.clasificar(c, self.cfg)[:2], ("dudoso", "sin pistas de cámara ni ruta de importación (¿capturado o creado en Avid?)"))
+            self.assertEqual(eb.motivo_descarte(c, self.cfg), "dudoso")
+            self.assertEqual(eb.clasificar(c, dict(self.cfg, solo_material_de_camara=False))[0], "propio")
+        # Un clip P2 (aunque no esté en ningún bin) o con el origen de cámara de config_origen.json, entra
+        for c in [self.clip(nombre="0001AB"), self.clip(nombre="X", nombres_bin=["0016Q3.new.01"]),
+                  self.clip(origen="Cámara (tarjeta P2)")]:
+            self.assertEqual(eb.clasificar(c, self.cfg)[0], "propio", c)
+            self.assertIsNone(eb.motivo_descarte(c, self.cfg))
+        for n in ["0001AB EXTRA", "2017 07 21", "12345AB", "AB0001"]:
+            self.assertEqual(eb.clasificar(self.clip(nombre=n), self.cfg)[0], "dudoso", n)
+        # Lo marcado "Entra" en Origen del material entra
+        cfg = dict(self.cfg, decisiones_origen=[{"carpeta": "", "bin": "material.avb", "clase": "propio"}])
+        self.assertIsNone(eb.motivo_descarte(self.clip(nombre="PANTALLA PARTIDA"), cfg))
 
     def test_bin_de_compras_es_dudoso_no_agencia(self):
         c = self.clip(r"C:\material\compras\vista aerea.mp4", bins=["compras.avb"])
@@ -1241,7 +1262,8 @@ class OrigenPorSenales(unittest.TestCase):
         self.assertEqual(cl(self.clip(r"C:\Users\a\WhatsApp Video\x.mp4")), "importado")
         # Tarjeta, capturado (sin ruta) y render
         self.assertEqual(cl(self.clip(r"E:\TARJETAS\CARD01\CONTENTS\VIDEO\0001AB.MXF", origen="Fichero importado")), "propio")
-        self.assertEqual(cl(self.clip()), "propio")
+        self.assertEqual(cl(self.clip(nombre="0001AB")), "propio")
+        self.assertEqual(cl(self.clip()), "dudoso")  # capturado sin nombre de cámara: solo_material_de_camara
         self.assertEqual(cl(self.clip(render=True)), "efecto")
 
     def test_agencia_por_el_nombre(self):
@@ -1267,10 +1289,10 @@ class OrigenPorSenales(unittest.TestCase):
             self.assertNotEqual(cl(self.clip(nombre=n))[0], "agencia", n)
         self.assertEqual(cl(self.clip(nombre="REUTERS", nombres_bin=None)), cl(self.clip(nombre="REUTERS")))
         # Se puede apagar
-        self.assertEqual(eb.clasificar(self.clip(nombre="REUTERS"), dict(self.cfg, nombres_agencia_regex=""))[0], "propio")
+        self.assertEqual(eb.clasificar(self.clip(nombre="REUTERS"), dict(self.cfg, nombres_agencia_regex=""))[0], "dudoso")
 
     def test_anotar_y_leer_decisiones(self):
-        cs = [self.clip(r"D:\varios\a.mp4"), self.clip()]
+        cs = [self.clip(r"D:\varios\a.mp4"), self.clip(nombre="0001AB")]
         eb.anotar_origen(cs, self.cfg)
         self.assertEqual([c["origen_texto"] for c in cs], ["Dudoso · para revisar", "Material propio"])
         d = Path(tempfile.mkdtemp())
@@ -1306,12 +1328,13 @@ class PantallaDeOrigen(unittest.TestCase):
 
     def test_agrupa_por_procedencia_con_lo_dudoso_arriba(self):
         gs = eb.grupos_de_origen(self.clips(), self.cfg)
+        # Lo capturado sin nombre de cámara también es dudoso (solo_material_de_camara): arriba, por duración
         self.assertEqual([(g["carpeta"], len(g["clips"])) for g in gs],
-                         [(r"\varios", 2), (r"\material\compras", 1), (r"\XDROOT\Clip", 1), ("", 1)])  # sin el render
-        varios = gs[0]
+                         [("", 1), (r"\varios", 2), (r"\material\compras", 1), (r"\XDROOT\Clip", 1)])  # sin el render
+        varios = gs[1]
         self.assertEqual((varios["dudosos"], varios["segundos"], varios["propuesta"], varios["ejemplos"]), (2, 30.0, "Dudoso", ["A1", "A2"]))
         self.assertIn("sin pistas", varios["motivo"])
-        self.assertEqual(gs[2]["propuesta"], "Material propio")
+        self.assertEqual(gs[3]["propuesta"], "Material propio")
         self.assertIsNone(varios["elegido"])
 
     def test_guardar_y_aplicar_lo_elegido(self):

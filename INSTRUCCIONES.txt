@@ -202,9 +202,15 @@ clips en orden de fecha y de 2 horas como mucho:
      rótulos y efectos renderizados por Avid.
    - Sí entra el material de cámara propia aunque se copiara al ordenador
      antes de importarlo.
-   - Ante la duda, entra: un fichero importado del que no hay ninguna pista
-     (por ejemplo, de "Mis vídeos" con un nombre cualquiera) va al bruto
-     marcado "Dudoso · para revisar".
+   - Solo entra lo que es de cámara: clips de tarjeta P2 (0001AB...),
+     carpetas de tarjeta, metadatos o nombres de fichero de cámara.
+     Lo dudoso se queda fuera: un fichero importado sin ninguna pista
+     (por ejemplo, de "Mis vídeos" con un nombre cualquiera) o un clip
+     sin ruta ni nombre de cámara (pantallas partidas y otras cosas
+     hechas en Avid). Sale en Montaje > "Origen del material" como
+     "Dudoso · para revisar": si algo de ahí es material, elige "Entra".
+     (Para volver a lo de antes, "ante la duda, entra": en
+     config_brutos.json, "solo_material_de_camara": false.)
    El shotlist lo dice en la columna "Origen" ("Material propio", "Dudoso ·
    para revisar"...) y la siguiente, "Por qué", da el motivo ("metadatos:
    Panasonic DC-GH5", "carpeta Downloads", "importado de \varios, sin

@@ -1,6 +1,6 @@
 # Diseño: que valga para cualquier disco
 
-Pedido por Adrián el 23/10/2026: "no quiero que me los hagas exactamente hechos para esos discos… necesito que me los hagas para cualquier disco que venga, con cualquier casuística".
+Requisito (23/10/2026): el programa no puede estar ajustado a los discos ya vistos; tiene que funcionar con cualquier disco que llegue, con cualquier casuística.
 
 ## Cómo quedó (23/10/2026)
 
@@ -33,7 +33,7 @@ Que el programa trate bien un disco de Avid que nadie ha visto antes, sin tener 
 ## Decisiones
 
 - **Principio**: se decide por lo que el material es (lo que dice el propio fichero), no por cómo se llama. Los nombres solo sirven como pista.
-- **Ante la duda, entra** (Adrián, 23/10/2026, opción A): un clip del que no se sabe si es propio o de fuera entra en el bruto marcado "para revisar". No se pierde material propio aunque nadie lo revise. Lo que sí se sabe que es de fuera (agencia, descarga, móvil, efectos de Avid) se queda fuera, como ahora.
+- **Ante la duda, entra** (23/10/2026): un clip del que no se sabe si es propio o de fuera entra en el bruto marcado "para revisar". No se pierde material propio aunque nadie lo revise. Lo que sí se sabe que es de fuera (agencia, descarga, móvil, efectos de Avid) se queda fuera, como ahora.
 - Nada falla en silencio: lo que no se puede leer o convertir se salta, se lista con el motivo y lo demás sigue (ya es así; se amplía a los casos nuevos).
 - Las listas actuales (cámaras, agencias, carpetas de tarjeta) se mantienen como pistas y se pueden ampliar en `config_brutos.json`. Ya no son lo único que decide.
 

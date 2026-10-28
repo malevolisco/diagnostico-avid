@@ -357,7 +357,7 @@ class ProyectoMes(unittest.TestCase):
               self.clip("0001AB", "2019-09-16 12:00:00", 1, origen="Fichero importado", fichero_origen=r"E:\CARD01\CONTENTS\VIDEO\0001AB.MXF"),
               self.clip("X,Dissolve,1", "2019-09-16 12:00:00", 0.1, proyectos=(), render=True)]
         # VID_0001 (nombre de móvil) y la agencia, fuera. SIN RUTA es importado según el bin, pero sin ninguna pista de
-        # dónde viene: dudoso, fuera (Adrián, 27/10/2026: "solo lo de P2, no lo extraño")
+        # dónde viene: dudoso, fuera (solo_material_de_camara)
         self.assertEqual(self.nombres(cs), {"P SEPTIEMBRE DE 2019": ["0016Q3", "0001AB"]})
         self.assertEqual(eb.clasificar(cs[2], self.cfg)[0], "dudoso")
         self.assertEqual(eb.clasificar(cs[0], self.cfg)[0], "propio")
@@ -405,7 +405,7 @@ class ProyectoMes(unittest.TestCase):
 
 
 class NombresDeBruto(unittest.TestCase):
-    """Nombre por defecto (Adrián, oct. 2026): proyecto en mayúsculas y mes y año en letra, sin guiones."""
+    """Nombre por defecto: proyecto en mayúsculas y mes y año en letra, sin guiones."""
 
     def f(self, texto):
         import datetime as dt
@@ -1097,7 +1097,7 @@ class DiscosDeChina(unittest.TestCase):
             self.assertFalse(eb.es_fichero_de_camara(f, self.cfg), f)
 
     def test_camaras_con_tarjeta_sd_y_osmo(self):
-        # 28/10/2026: "a lo mejor hay cámaras Osmo o cámaras con una SD". Con un config_brutos.json viejo (escrito al
+        # Osmo y cámaras con tarjeta SD. Con un config_brutos.json viejo (escrito al
         # primer uso, sin los patrones nuevos) también se reconocen: van en el código
         viejo = dict(self.cfg, camara_propia_regex=r"^(DJI_\d{3,5}|C\d{4})(\D|$)")
         for f in [r"C:\Users\a\Desktop\osmo\DJI_20231015123456_0001_D.MP4", "DJI_0012.MP4", "DSCF1234.MOV", "ZOOM0001.WAV",
@@ -1208,6 +1208,14 @@ class OrigenPorSenales(unittest.TestCase):
         # Los MXF de Avid y lo recodificado con ffmpeg no dicen nada de la cámara
         self.assertEqual(m({"company_name": "Avid Technology, Inc.", "product_name": "Media Composer"}), (None, None))
         self.assertEqual(m({"encoder": "Lavf60.16.100", "major_brand": "isom"}), (None, None))
+        # Grabadores externos: la cabecera de un Atomos (make, o solo el encoder en otros firmwares) y la de Blackmagic
+        self.assertEqual(m({"make": "Atomos", "encoder": "Blade - 5.2   "}), ("Atomos", "camara"))
+        self.assertEqual(m({"encoder": "Blade - 5.2   "}), ("Atomos (Blade - 5.2)", "camara"))
+        self.assertEqual(m({"encoder": "Ninja V"}), ("Atomos (Ninja V)", "camara"))
+        self.assertEqual(m({"encoder": "Atomos Shogun 7"}), ("Atomos Shogun 7", "camara"))
+        self.assertEqual(m({"com.blackmagic-design.camera.model": "Pocket Cinema Camera 6K"}),
+                         ("Blackmagic Pocket Cinema Camera 6K", "camara"))
+        self.assertEqual(m({"encoder": "Bladerunner export"}), (None, None))  # la palabra entera, no un trozo
 
     def test_metadatos_de_camara_con_nombre_desconocido_es_propio(self):
         c = self.clip(r"E:\material\entrevista alcalde.mov", marca="Panasonic DC-GH5", marca_tipo="camara")
@@ -1215,7 +1223,7 @@ class OrigenPorSenales(unittest.TestCase):
         self.assertFalse(eb.es_importado(c, self.cfg))
 
     def test_sin_pistas_es_dudoso_y_queda_fuera(self):
-        # Adrián, 27/10/2026: "solo lo de P2, no lo extraño". Hasta entonces, ante la duda entraba (solo_material_de_camara = false)
+        # Desde el 27/10/2026 solo entra lo de cámara. Hasta entonces, ante la duda entraba (solo_material_de_camara = false)
         c = self.clip(r"D:\varios\plano recurso.mp4")
         clase, motivo, seguro = eb.clasificar(c, self.cfg)
         self.assertEqual((clase, seguro), ("dudoso", False))
@@ -1387,7 +1395,7 @@ class PantallaDeOrigen(unittest.TestCase):
 
 
 class QueProyectosRestaurar(unittest.TestCase):
-    """Adrián, 28/10/2026: antes del montaje, por proyecto, los clips de cámara (P2, no agencias) con una captura de
+    """Antes del montaje, por proyecto, los clips de cámara (P2, no agencias) con una captura de
     cada uno, y los que solo tienen uno o dos clips cortos marcados para descartar."""
 
     def setUp(self):
@@ -1426,7 +1434,7 @@ class QueProyectosRestaurar(unittest.TestCase):
                          ["DOS", "GRANDE", "LARGO", "CORTO", "SIN_PROYECTO", "AGENCIAS", "VACIO"])
 
     def test_proyectos_solo_con_mp4_y_mov(self):
-        # Adrián, 28/10/2026: "hay proyectos solo con MP4 y MOVs... esos a lo mejor hay que darle una vuelta". Sin nombre ni
+        # Proyectos solo con MP4 y MOV. Sin nombre ni
         # datos de cámara son dudosos y no entran en los brutos, pero el proyecto no es "sin material": se revisa
         cs = [self.clip("entrevista alcalde", ["MOVS"], 900, fichero_origen=r"D:\rodaje\entrevista alcalde.mov"),
               self.clip("recurso plaza", ["MOVS"], 300, fichero_origen=r"D:\rodaje\recurso plaza.mp4"),
@@ -1479,7 +1487,7 @@ class QueProyectosRestaurar(unittest.TestCase):
             shutil.rmtree(d)
 
     def test_aviso_de_clips_sin_audio(self):
-        # Adrián, 28/10/2026: "que detecte que algo no tenga audio asociado, que me avise"
+        # Los clips de cámara sin ninguna pista de sonido se avisan
         cs = self.clips()
         cs[1]["num_audio"] = 0
         t = {x["proyecto"]: x for x in eb.triaje_proyectos(cs, self.cfg)}
@@ -1495,8 +1503,7 @@ class QueProyectosRestaurar(unittest.TestCase):
 
 @unittest.skipIf(da is None, "sin pyavb")
 class AnalisisAcumulado(unittest.TestCase):
-    """Adrián, 28/10/2026: "que se guarde ese análisis, para no tener que volverlo a hacer cuando se hace otro proyecto".
-    Un análisis de algunos proyectos suma los de análisis anteriores del mismo disco que no se repiten."""
+    """Un análisis guardado no se repite al pasar a otro proyecto. Un análisis de algunos proyectos suma los de análisis anteriores del mismo disco que no se repiten."""
 
     def setUp(self):
         self.d = Path(tempfile.mkdtemp())
@@ -1601,7 +1608,7 @@ class DatosRarosDeUnDiscoReal(unittest.TestCase):
         import diagnostico_avid as da
         (self.tmp / "disco").mkdir()
         original = da.detectar_proyectos
-        da.detectar_proyectos = lambda ficheros: 1 / 0
+        da.detectar_proyectos = lambda *a: 1 / 0
         try:
             with self.assertRaises(ZeroDivisionError) as cm:
                 da.ejecutar(self.tmp / "disco", self.tmp / "informe", progreso=lambda m: None, abrir=False)
@@ -1687,6 +1694,90 @@ class CacheDelAnalisis(unittest.TestCase):
             "tipo"]), "Ha cambiado lo que guarda resumir_mxf: sube VERSION_CACHE y actualiza esta lista")
 
 
+@unittest.skipIf(da is None, "sin pyavb")
+class CarpetasSinAvid(unittest.TestCase):
+    """Todo el disco: si tiene 118 carpetas y 108 con proyecto de Avid, salen las 118. Las carpetas de primer nivel sin proyecto de Avid también son proyectos, y sus vídeos cuentan como material solo si
+    algo los reconoce como de cámara (la cabecera, la carpeta de tarjeta o el nombre)."""
+
+    def inventario(self, rutas):
+        return [{"ruta": r, "carpeta": str(Path(r).parent), "nombre": Path(r).name, "ext": Path(r).suffix.lower(), "bytes": 1,
+                 "modificado": "2026-10-28 10:00:00"} for r in rutas]
+
+    def setUp(self):
+        self.ficheros = self.inventario([
+            "MEXICO/MEXICO.avp", "MEXICO/MEXICO Bin.avb", "MEXICO/brutos/C0001.MP4",
+            "BINS VIEJOS/viejo.avb", "BINS VIEJOS/sub/otro.avb", "suelto.avb",
+            "VIAJE/BLADE_S001_S001_T001.MOV", "VIAJE/sub/recurso.mp4", "VIAJE/notas.txt",
+            "SOLO PAPELES/guion.docx", "Avid MediaFiles/MXF/1/a.mxf", "$RECYCLE.BIN/x.mp4", "raiz.mp4"])
+
+    def test_bins_sin_avp_son_el_proyecto_de_su_carpeta(self):
+        p = {x["nombre"]: x for x in da.detectar_proyectos(self.ficheros)}
+        self.assertEqual(sorted(p), ["(bins sin proyecto)", "BINS VIEJOS", "MEXICO"])
+        self.assertEqual(p["BINS VIEJOS"]["num_bins"], 2)
+        self.assertTrue(p["BINS VIEJOS"]["sin_avp"])
+        self.assertEqual([b["ruta"] for b in p["(bins sin proyecto)"]["bins"]], ["suelto.avb"])
+
+    def test_carpetas_sin_nada_de_avid(self):
+        proyectos = da.detectar_proyectos(self.ficheros)
+        nuevos, videos = da.carpetas_sin_avid(self.ficheros, proyectos)
+        # MEXICO y BINS VIEJOS ya son proyectos; la media de Avid, la papelera y lo de la raíz no son carpetas de proyecto
+        self.assertEqual([(n["nombre"], n["videos"]) for n in nuevos], [("SOLO PAPELES", 0), ("VIAJE", 2)])
+        self.assertTrue(all(n["sin_avid"] for n in nuevos))
+        self.assertEqual(videos, {"VIAJE/BLADE_S001_S001_T001.MOV": "VIAJE", "VIAJE/sub/recurso.mp4": "VIAJE"})
+
+    def test_carpetas_de_otro_origen(self):
+        otro = str(Path("/otro/disco").resolve())
+        fich = self.inventario([str(Path(otro) / "RODAJE" / "C0002.MP4"), str(Path(otro) / "PROY" / "PROY.avp")])
+        nuevos, videos = da.carpetas_sin_avid(fich, da.detectar_proyectos(fich, [otro]), [otro])
+        self.assertEqual([n["nombre"] for n in nuevos], ["RODAJE"])
+        self.assertEqual(nuevos[0]["carpeta"], str(Path(otro) / "RODAJE"))
+        self.assertEqual(list(videos.values()), ["RODAJE"])
+
+    def test_el_nombre_no_choca_con_un_proyecto(self):
+        fich = self.inventario(["A/VIAJE/VIAJE.avp", "VIAJE/plano.mov"])
+        nuevos, _ = da.carpetas_sin_avid(fich, da.detectar_proyectos(fich))
+        self.assertEqual([n["nombre"] for n in nuevos], ["VIAJE (carpeta)"])
+
+    def test_asignar_sueltos(self):
+        clips = [{"nombre": "BLADE_S001_S001_T001", "ficheros": ["VIAJE/BLADE_S001_S001_T001.MOV"]},
+                 {"nombre": "enlazado", "ficheros": ["VIAJE/sub/recurso.mp4"]},
+                 {"nombre": "de un bin", "ficheros": ["VIAJE/x.mov"], "proyectos": ["MEXICO"]}]
+        videos = {"VIAJE/BLADE_S001_S001_T001.MOV": "VIAJE", "VIAJE/sub/recurso.mp4": "VIAJE", "VIAJE/x.mov": "VIAJE"}
+        origen = str(Path("/disco").resolve())
+        da.asignar_sueltos(clips, videos, {r"E:\VIAJE\sub\recurso.mp4": "VIAJE/sub/recurso.mp4"}, origen)
+        self.assertEqual(clips[0]["proyectos"], ["VIAJE"])
+        self.assertEqual(clips[0]["fichero_origen"], str(Path(origen) / "VIAJE/BLADE_S001_S001_T001.MOV"))
+        self.assertTrue(clips[0]["sin_avid"])
+        self.assertNotIn("proyectos", clips[1])  # lo enlaza un bin: es de ese proyecto, no de la carpeta
+        self.assertEqual(clips[2]["proyectos"], ["MEXICO"])
+
+    def test_solo_cuenta_lo_que_la_cabecera_reconoce(self):
+        """Un vídeo suelto solo es material si algo de la cabecera lo reconoce. Con la de un Atomos es
+        material; un MP4 sin nada (recodificado, descargado) es dudoso: fuera del bruto y el proyecto, para revisar."""
+        cfg = dict(eb.CONFIG_DEFECTO)
+        base = {"origen": "Fichero importado", "sin_avid": True, "proyectos": ["VIAJE"], "bins": [], "fichero_video": "x"}
+        atomos = dict(base, nombre="toma 1", fichero_origen=r"D:\VIAJE\toma 1.mov", marca="Atomos", marca_tipo="camara")
+        anonimo = dict(base, nombre="recurso", fichero_origen=r"D:\VIAJE\recurso.mp4")
+        self.assertEqual(eb.clasificar(atomos, cfg)[:2], ("propio", "metadatos: Atomos"))
+        self.assertEqual(eb.clasificar(anonimo, cfg)[0], "dudoso")
+        self.assertTrue(eb.excluido(anonimo, cfg))
+        self.assertTrue(eb.es_fichero_de_camara(r"D:\VIAJE\BLADE_S001_S001_T001.MOV", cfg))
+        t = eb.triaje_proyectos([anonimo], cfg)
+        self.assertEqual(t[0]["veredicto"], "revisar")
+
+    def test_lista_rapida_con_carpetas(self):
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            (tmp / "VACIA").mkdir()
+            for f in ["MEXICO/MEXICO.avp", "VIAJE/a.mov", "Avid MediaFiles/MXF/1/a.mxf", "System Volume Information/x"]:
+                (tmp / f).parent.mkdir(parents=True, exist_ok=True)
+                (tmp / f).write_bytes(b"")
+            lista = da.listar_proyectos(tmp)
+            self.assertEqual([(p["nombre"], bool(p.get("sin_avid"))) for p in lista], [("MEXICO", False), ("VACIA", True), ("VIAJE", True)])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class MediaEnlazada(unittest.TestCase):
     """Media enlazada (AMA) o importada sin MXF de Avid: el fichero original se busca en el disco esté donde esté."""
 
@@ -1757,6 +1848,9 @@ class TextosDeLaCola(unittest.TestCase):
         self.assertEqual(interfaz.resumen_disco(lista), "2 proyectos · 3 bins · 3 bins sin proyecto · último cambio 16/09/2021")
         self.assertEqual(interfaz.resumen_disco(lista[:1]), "1 proyecto · 2 bins · último cambio 15/09/2021")
         self.assertIn("No hay proyectos de Avid", interfaz.resumen_disco([]))
+        carpeta = {"nombre": "VIAJE", "bins": 0, "modificado": "2026-10-28 10:00:00", "sin_avid": True}
+        self.assertEqual(interfaz.resumen_disco(lista[:1] + [carpeta]),
+                         "1 proyecto · 1 carpeta sin Avid · 2 bins · último cambio 15/09/2021")
         self.assertEqual(interfaz.texto_calidad(None), "—")
 
 

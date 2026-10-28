@@ -70,7 +70,7 @@ CONFIG_DEFECTO = {
     "excluir_importados": True,
     "_excluir_importados": "true = fuera de los brutos lo que viene de fuera (agencias, descargas, móvil...), decidido por pistas: metadatos del fichero, carpeta de la que se importó, nombre del bin y del fichero",
     "solo_material_de_camara": True,
-    "_solo_material_de_camara": "true = en los brutos de material solo entra lo que tiene alguna pista de cámara (nombre de clip P2, carpeta de tarjeta, metadatos o nombre de fichero de cámara) o se marcó 'Entra' en Origen del material; lo dudoso se queda fuera (Adrián, 27/10/2026: 'solo lo de P2, no lo extraño') | false = lo dudoso entra marcado 'para revisar'",
+    "_solo_material_de_camara": "true = en los brutos de material solo entra lo que tiene alguna pista de cámara (nombre de clip P2, carpeta de tarjeta, metadatos o nombre de fichero de cámara) o se marcó 'Entra' en Origen del material; lo dudoso se queda fuera | false = lo dudoso entra marcado 'para revisar'",
     "dia_empieza_hora": 6,
     "_dia_empieza_hora": "agrupar=dias: lo volcado antes de esta hora cuenta como del día anterior (volcados de madrugada)",
     "partir_por_tarjeta": True,
@@ -101,7 +101,7 @@ CONFIG_DEFECTO = {
     "piezas_regex": "",
     "_piezas_regex": "Van al bruto _PIEZAS los renders de efectos y los clips que se llaman como una secuencia del proyecto (pieza exportada o mixdown). Aquí se puede añadir una expresión regular sobre el nombre del clip, p. ej. (?i)mixdown|emitid",
     "exportar_piezas": False,
-    "_exportar_piezas": "Los brutos de piezas renderizadas se reparten pero no se exportan (Adrián, oct. 2026: se descartan). true = se exportan. En la ventana manda la casilla de cada bruto",
+    "_exportar_piezas": "Los brutos de piezas renderizadas se reparten pero no se exportan (en la práctica se descartan). true = se exportan. En la ventana manda la casilla de cada bruto",
     "renders_en_piezas": False,
     "_renders_en_piezas": "Los renders de efectos (fundidos, picture-in-picture, rótulos) no son material: false = no entran en ningún bruto | true = van con las piezas",
     "clips_compartidos": "primero",
@@ -327,13 +327,13 @@ def duracion_ffprobe(ffprobe, ruta):
 # El nombre de un clip P2 (0016Q3) NO sirve para saber la tarjeta: en el disco real de México, clips
 # grabados con segundos de diferencia se llaman 00016R, 0002CI, 000328.
 MARCAS_TARJETA = {"CONTENTS", "PRIVATE", "DCIM", "XDROOT", "BPAV", "AVCHD", "M4ROOT", "CLIPR", "MP_ROOT"}
-# Nombres de fichero de cámaras que graban en tarjeta SD (28/10/2026: "cámaras Osmo o cámaras con una SD"). Van en el
+# Nombres de fichero de cámaras que graban en tarjeta SD (28/10/2026: Osmo y cámaras con tarjeta SD). Van en el
 # código y no solo en config_brutos.json → camara_propia_regex porque ese fichero se escribe al primer uso y no se
 # actualiza: así los reconocen también los programas ya instalados. DJI (dron, Osmo Pocket/Action/360: DJI_0001 y
 # DJI_20231015123456_0001_D), Sony (C0001, MAH/MAQ00001), Canon (MVI_1234), GoPro, Panasonic (P1000123), Nikon (DSC_),
 # Fujifilm (DSCF), Zoom (ZOOM0001), ARRI/Blackmagic/Canon XF (A001C002), Sony con fecha (20231015_C0001)
 CAMARAS_SD_REGEX = (r"^(DJI_\d+|C\d{4}|MA[HQ]\d{5}|MVI_\d{4}|GH\d{6}|GX\d{6}|GOPR\d{4}|GP\d{6}|DSC_?\d{4}|DSCF\d{4}|"
-                    r"P\d{7}|A\d{3}C\d{3}|\d{8}_C\d{3,4}|ZOOM\d{4})(\D|$)")
+                    r"P\d{7}|A\d{3}C\d{3}|\d{8}_C\d{3,4}|ZOOM\d{4}|.+_S\d{3}_S\d{3}_T\d{3})(\D|$)")
 # AVCHD (Sony, Panasonic, Canon de consumo): 00000.MTS en PRIVATE/AVCHD/BDMV/STREAM
 AVCHD_REGEX = r"^\d{5}\.(mts|m2ts)$"
 
@@ -386,7 +386,7 @@ def fecha_imposible(grabacion, volcado=None, ahora=None):
 
 
 def fecha_clip(c, mxf_por_ruta):
-    """La fecha que manda (Adrián, oct. 2026): la de grabación si consta; si no, la del fichero de media (volcado)."""
+    """La fecha que manda: la de grabación si consta; si no, la del fichero de media (volcado)."""
     return fecha_grabacion(c) or fecha_media(c, mxf_por_ruta)
 
 
@@ -523,6 +523,11 @@ NOMBRE_P2 = r"^\d{4}[A-Z0-9]{2}(\.new)?(\.\d+)?$"
 CARPETAS_DE_FUERA = r"(^|[\\/])(downloads|descargas|whatsapp[^\\/]*|telegram[^\\/]*|wechat[^\\/]*)([\\/]|$)"
 # Marcas de móvil en los metadatos (make): el resto de marcas es de cámara
 MARCAS_MOVIL = ("apple", "samsung", "xiaomi", "huawei", "honor", "google", "oneplus", "oppo", "vivo", "motorola", "realme", "nokia", "lg")
+# Grabadores externos (graban la señal de la cámara por HDMI/SDI): el encoder que escriben cuando no ponen make.
+# Atomos: Ninja, Shogun, Samurai, Sumo, Shinobi; "Blade" es el sistema de los Ninja/Shogun (BLADE_S001_S001_T001.MOV)
+GRABADORES = (("atomos", "Atomos"), ("ninja", "Atomos"), ("shogun", "Atomos"), ("samurai", "Atomos"), ("sumo", "Atomos"),
+              ("shinobi", "Atomos"), ("blade", "Atomos"), ("ki pro", "AJA Ki Pro"), ("hyperdeck", "Blackmagic HyperDeck"),
+              ("video assist", "Blackmagic Video Assist"), ("pix", "Sound Devices PIX"), ("odyssey", "Convergent Design Odyssey"))
 # Quien escribe el fichero y no es una cámara (MXF de Avid, recodificados...)
 NO_CAMARA = ("avid", "ffmpeg", "lavf", "adobe", "apple final cut", "telestream", "harmonic", "evs", "blackmagic design davinci")
 
@@ -547,6 +552,12 @@ def marca_de_metadatos(tags_formato, tags_flujos=()):
         return "GoPro", "camara"
     if "dji" in (handlers + " " + t.get("encoder", "")).lower():
         return "DJI", "camara"
+    encoder = t.get("encoder", "").strip()
+    grabador = next((m for clave, m in GRABADORES if re.search(r"(?<![a-z])%s(?![a-z])" % clave, encoder.lower())), None)
+    if grabador:
+        return "%s (%s)" % (grabador, encoder) if grabador.lower() not in encoder.lower() else encoder, "camara"
+    if any(k.startswith("com.blackmagic-design.camera") for k in t):
+        return " ".join(x for x in ["Blackmagic", t.get("com.blackmagic-design.camera.model", "").strip()] if x), "camara"
     if t.get("major_brand", "").upper().startswith("XAVC") or "xavc" in t.get("compatible_brands", "").lower():
         return "Sony (XAVC)", "camara"
     compania = (t.get("company_name") or "").strip()
@@ -646,7 +657,7 @@ def clasificar(c, cfg):
     """Origen de un clip por señales: (clase, motivo, seguro). clase: propio | agencia | importado | efecto | dudoso.
     Manda lo que se eligió a mano; si no, la pista más fuerte. Si las más fuertes se contradicen (propio frente a fuera),
     dudoso. Un fichero importado sin ninguna pista, también dudoso. Sin ruta de importación ni pistas (capturado, creado
-    en Avid), dudoso con solo_material_de_camara (Adrián, 27/10/2026: "solo lo de P2, no lo extraño"); si no, propio.
+    en Avid), dudoso con solo_material_de_camara (27/10/2026); si no, propio.
     Lo dudoso se queda fuera de los brutos con solo_material_de_camara; si no, entra marcado "para revisar"."""
     if c.get("render"):
         return "efecto", "efecto de Avid", True
@@ -679,11 +690,11 @@ TRIAJE = {"restaurar": "Restaurar", "poco": "Poco material: ¿descartar?", "revi
 
 
 def triaje_proyectos(clips, cfg, proyectos=()):
-    """Para decidir qué proyectos restaurar antes del montaje (Adrián, 28/10/2026: "localizar los que solo tienen uno o
-    dos ficheros de tarjeta cortos"). Por proyecto, sus clips de cámara (clasificar: propio; sin agencias, importados,
+    """Para decidir qué proyectos restaurar antes del montaje (28/10/2026): separar los que
+    tienen material de los que solo tienen uno o dos clips cortos. Por proyecto, sus clips de cámara (clasificar: propio; sin agencias, importados,
     dudosos ni efectos de Avid), cuántos son y cuánto duran, y un veredicto: sin (ninguno), poco (hasta
     triaje_max_clips y menos de triaje_max_minutos en total) o restaurar; y revisar cuando hay vídeos dudosos (MP4 o
-    MOV sin nombre ni datos de cámara: Adrián, 28/10/2026, "hay proyectos solo con MP4 y MOV") que pueden ser el
+    MOV sin nombre ni datos de cámara, 28/10/2026) que pueden ser el
     material y no hay de cámara (o hay poco y lo dudoso dura más). Un clip en varios proyectos cuenta en todos;
     uno sin bin, en SIN_PROYECTO. proyectos: los del disco, para que salgan también los que no tienen ningún clip.
     Devuelve una lista ordenada (restaurar, poco, revisar, sin; dentro, por nombre) de dicts con proyecto, veredicto,
@@ -984,7 +995,7 @@ def nombre_proyecto(proyecto):
 
 
 def nombre_bruto(proyecto, fechas, piezas=False):
-    """Nombre por defecto de un bruto (Adrián, oct. 2026): PROYECTO [PIEZAS] MES DE AÑO, en letra y sin guiones:
+    """Nombre por defecto de un bruto: PROYECTO [PIEZAS] MES DE AÑO, en letra y sin guiones:
     "VENEZUELA SEPTIEMBRE DE 2021", "... SEPTIEMBRE A OCTUBRE DE 2021", "... DICIEMBRE DE 2021 A ENERO DE 2022".
     Sin fechas, solo el proyecto. La numeración de los repetidos (" 1", " 2") la pone quien reparte."""
     partes = [nombre_proyecto(proyecto)] + (["PIEZAS"] if piezas else [])
@@ -1515,7 +1526,7 @@ def hacer_segmento(clip, idx, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, nomb
     # Con el enrutado por defecto, que al clip le falten pistas es lo normal (se rellenan con silencio): solo se avisa
     # si el enrutado elegido a mano pide una pista que el clip no tiene, o si se pierden pistas del clip.
     avisos = ["pista %d del clip no existe (silencio)" % r for r in sorted({r for r in fuentes if r > len(audios)})] if enrutado else []
-    if not audios:  # el clip no trae sonido: se avisa (Adrián, 28/10/2026), aunque en el bruto vaya en silencio
+    if not audios:  # el clip no trae sonido: se avisa, aunque en el bruto vaya en silencio
         avisos.insert(0, "SIN AUDIO")
     perdidas = [r for r in range(1, len(audios) + 1) if r not in fuentes]
     if perdidas:

@@ -15,7 +15,7 @@
 - Acento `#e8833a`.
 - Segoe UI en Windows; si no está, la letra por defecto.
 - Las ventanas existentes no pueden quedar rotas a medio camino: cada tarea termina con todo funcionando.
-- Commits a nombre de Adrián, con escaneo Opsera antes de cada uno.
+- Análisis de seguridad antes de cada commit.
 
 ## Puntos de atención
 
@@ -112,4 +112,4 @@
 
 - Prueba en pantalla virtual (script en el scratchpad): recorrer las tres páginas, analizar, montar, exportar y comprobar estados; capturas de las tres páginas.
 - Documentación: `INSTRUCCIONES.txt` (CRLF), `LEEME_tecnico.md` y `NOTAS_DESARROLLO.md`.
-- Pruebas unitarias, disco simulado de principio a fin, reanudar, `probar_montaje.py`, Opsera, commit, push y Windows. Fusionar cuando esté en verde.
+- Pruebas unitarias, disco simulado de principio a fin, reanudar, `probar_montaje.py`, análisis de seguridad, commit, push y Windows. Fusionar cuando esté en verde.

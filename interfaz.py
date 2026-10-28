@@ -60,16 +60,21 @@ def texto_calidad(res):
 
 
 def resumen_disco(lista):
-    """'7 proyectos · 11 bins · último cambio 15/09/2021' a partir de listar_proyectos."""
+    """'7 proyectos · 2 carpetas sin Avid · 11 bins · último cambio 15/09/2021' a partir de listar_proyectos. La fecha
+    es la del último bin (la de una carpeta cambia con cualquier copia)."""
     if not lista:
-        return "No hay proyectos de Avid en esta carpeta (ningún .avp ni .avb)."
-    proyectos = [p for p in lista if p["nombre"] != "(bins sin proyecto)"]
+        return "No hay proyectos de Avid ni carpetas en esta carpeta."
+    carpetas = [p for p in lista if p.get("sin_avid")]
+    proyectos = [p for p in lista if p["nombre"] != "(bins sin proyecto)" and not p.get("sin_avid")]
     sueltos = sum(p["bins"] for p in lista if p["nombre"] == "(bins sin proyecto)")
     bins = sum(p["bins"] for p in proyectos)
-    partes = ["%d proyecto%s" % (len(proyectos), "" if len(proyectos) == 1 else "s"), "%d bin%s" % (bins, "" if bins == 1 else "s")]
+    partes = ["%d proyecto%s" % (len(proyectos), "" if len(proyectos) == 1 else "s")]
+    if carpetas:
+        partes.append("%d carpeta%s sin Avid" % (len(carpetas), "" if len(carpetas) == 1 else "s"))
+    partes.append("%d bin%s" % (bins, "" if bins == 1 else "s"))
     if sueltos:
         partes.append("%d bin%s sin proyecto" % (sueltos, "" if sueltos == 1 else "s"))
-    fechas = sorted(p["modificado"] for p in lista if p.get("modificado"))
+    fechas = sorted(p["modificado"] for p in lista if p.get("modificado") and not p.get("sin_avid"))
     if fechas:
         partes.append("último cambio %s/%s/%s" % (fechas[-1][8:10], fechas[-1][5:7], fechas[-1][:4]))
     return " · ".join(partes)
@@ -148,7 +153,7 @@ class App:
         self.barra_paginas.pack(side="left", padx=(18, 0), fill="y")
         if not self.compacto:
             ttk.Label(cab, text="%s · solo lectura del disco de origen" % da.BUILD, style="Tarjeta.Suave.TLabel").pack(side="left", padx=14)
-        # Sin actualización automática al abrir (decisión de Adrián para la revisión de Ingeniería, oct. 2026): solo se
+        # Sin actualización automática al abrir (para la revisión de Ingeniería, oct. 2026): solo se
         # busca una versión nueva si alguien pulsa este botón (aparece solo en el .exe de Windows).
         self.bt_act = ttk.Button(cab, text="Buscar actualización", style="Fantasma.TButton", command=self.buscar_actualizacion)
         if da.puede_actualizarse():
@@ -290,7 +295,7 @@ class App:
 
         fila = ttk.Frame(izq, style="Fondo.TFrame")
         fila.pack(fill="x", pady=(10, 0))
-        self.bt_proy = ttk.Button(fila, text="☰  Elegir proyectos: todos", style="Destacado.TButton", command=self.elegir_proyectos)
+        self.bt_proy = ttk.Button(fila, text="☰  Elegir proyectos: todos", style="Proyectos.TButton", command=self.elegir_proyectos)
         self.bt_proy.pack(side="left")
         self.lbl_proy = ttk.Label(fila, text="", style="Suave.TLabel")
         self.lbl_proy.pack(side="left", padx=12)
@@ -299,8 +304,9 @@ class App:
         fila.pack(fill="x", pady=(16, 0))
         self.bt_analizar = ttk.Button(fila, text="Analizar disco", style="Principal.TButton", command=self.iniciar)
         self.bt_analizar.pack(side="left")
-        self.bt_parar = ttk.Button(fila, text="Detener", style="Fantasma.TButton", command=self.detener)
+        self.bt_parar = ttk.Button(fila, text="■  Detener", style="Detener.TButton", command=self.detener)
         self.bt_parar.pack(side="left", padx=10)
+        self.bt_parar.state(["disabled"])  # solo con algo en marcha
         self.bt_avanzadas = ttk.Button(fila, text="Opciones avanzadas ▸", style="Fantasma.TButton", command=self.plegar)
         self.bt_avanzadas.pack(side="right")
         self.avanzadas = ttk.Frame(izq, style="Panel.TFrame", padding=(14, 10))
@@ -507,6 +513,12 @@ class App:
                 lista = listar_todos(da, self.origen.get(), self.estado["media_extra"])
             finally:
                 self.raiz.configure(cursor="")
+        carpeta = self.analisis_actual()
+        try:  # las carpetas que el análisis ha visto que son media enlazada de otros proyectos no se ofrecen
+            media = set(json.loads((carpeta / "resumen.json").read_text(encoding="utf-8")).get("carpetas_media_enlazada") or []) if carpeta else set()
+        except (OSError, ValueError):
+            media = set()
+        lista = [p for p in lista if p["nombre"] not in media]
         hechos = da.brutos_hechos(self.brutos.get()) if self.brutos.get() else set()
         elegidos = da.dialogo_proyectos(self.raiz, lista, self.estado["proyectos"], hechos, self.triaje_actual(),
                                         self.analizados([p["nombre"] for p in lista] + ["SIN_PROYECTO"]))
@@ -805,8 +817,9 @@ class App:
         pie.pack(fill="x", pady=(14, 0))
         self.bt_exportar = ttk.Button(pie, text="Exportar", style="Principal.TButton", command=self.exportar)
         self.bt_exportar.pack(side="right")
-        self.bt_parar_exp = ttk.Button(pie, text="Detener", style="Fantasma.TButton", command=self.detener)
+        self.bt_parar_exp = ttk.Button(pie, text="■  Detener", style="Detener.TButton", command=self.detener)
         self.bt_parar_exp.pack(side="right", padx=10)
+        self.bt_parar_exp.state(["disabled"])  # solo con algo en marcha
         self.lbl_motivo = ttk.Label(pie, text="", style="Aviso.TLabel", wraplength=280 if self.compacto else 560, justify="right")
         self.lbl_motivo.pack(side="right", padx=10)
         if not self.compacto:

@@ -1,10 +1,10 @@
 # Diseño: interfaz nueva al estilo DaVinci Resolve
 
-Pedido por Adrián el 22/10/2026: "más vistosa y más user friendly, más parecido a DaVinci". Maquetas aprobadas en el canvas "DiagnosticoAvid — nueva interfaz" (privado de Adrián), con acento naranja.
+Requisito (22/10/2026): una ventana más clara y fácil de usar, con el aspecto de las herramientas de postproducción (DaVinci Resolve como referencia). Maquetas aprobadas el 22/10/2026, con acento naranja.
 
 ## Objetivo
 
-Quien usa el programa es personal del Archivo: sin conocimientos técnicos, en Windows, sin Adrián delante.
+Quien usa el programa es personal del Archivo: sin conocimientos técnicos, en Windows, sin nadie técnico delante.
 
 - **Vistoso**: tema oscuro profesional, como un programa de edición.
 - **Fácil**: se ve qué toca hacer y en qué orden; el programa da los valores ya elegidos y solo se cambian si hace falta.
@@ -67,7 +67,7 @@ Sustituye al panel de opciones, que hoy es una ventana aparte.
   - **"Opciones avanzadas…"**: enrutado de pistas, ganancia por pista, prefijo, formato mayoritario, "Guardar como predeterminados" y "Restablecer recomendados".
 - **Centro, cola de exportación**: tabla con cada bruto (casilla para incluirlo, nombre, duración, estado y formato).
   - Durante la exportación cada fila muestra su avance ("Convirtiendo · clip 18 de 40" y barra) y al acabar "Conforme · MD5", o "NO CONFORME" en rojo.
-  - **Los brutos de piezas vienen desmarcados**: no se exportan salvo que se marquen (Adrián: "déjalas como bruto aparte, pero siempre se va a descartar").
+  - **Los brutos de piezas vienen desmarcados**: no se exportan salvo que se marquen (son un bruto aparte que en la práctica se descarta).
 - Tarjetas **Espacio** (necesario frente a libre, con barra; en rojo si no cabe) y **Tiempo** (estimado tras el primer bruto).
 - **Botón principal "Exportar N brutos"** (naranja) y "Detener". Con errores (TC no válido, nombres repetidos, sin espacio) el botón se desactiva y dice por qué, como ahora.
 

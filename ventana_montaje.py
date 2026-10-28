@@ -197,7 +197,7 @@ class PantallaMontaje:
         lt.pack(fill="x")
         self.alto_linea = 56 if compacto else 90
         # Cada clip mide al menos esto en la línea de tiempo: en un bruto de 2 h con cientos de clips, uno de 5 s medía
-        # menos de un píxel y no se podía pinchar (Adrián, 26/10/2026)
+        # menos de un píxel y no se podía pinchar
         self.min_clip = 30 if compacto else 40
         self.linea = tk.Canvas(lt, height=self.alto_linea, bg=tema.CAMPO, highlightthickness=1, highlightbackground=tema.BORDE)
         self.linea.pack(fill="x")

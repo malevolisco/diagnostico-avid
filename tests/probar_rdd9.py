@@ -16,6 +16,8 @@ Sale con 1 si algún bruto no supera la comprobación.
 """
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +40,28 @@ def md5_flujo(ffmpeg, ruta, mapa, copiar):
     codec = ["-c", "copy"] if copiar else ["-c:a", "pcm_s24le"]
     rc, out, err = ejecutar([ffmpeg, "-v", "error", "-i", ruta, "-map", mapa, *codec, "-f", "md5", "-"])
     return out.strip() if rc == 0 else "error: " + err[-200:]
+
+
+def reempaquetar(transwrap, orig, destino):
+    """bmx en Windows abre los ficheros con la página de códigos del sistema: "北京" le llega como "??" y no lo
+    encuentra. Por eso trabaja con nombres ASCII (entrada.mxf, salida.mxf) en una carpeta de trabajo que es su
+    directorio actual, sin ver la ruta completa (que también puede llevar cualquier carácter); el resultado se mueve
+    después a su nombre de verdad."""
+    trabajo = destino.parent / "_rdd9_trabajo"
+    shutil.rmtree(trabajo, ignore_errors=True)
+    trabajo.mkdir()
+    try:
+        try:
+            os.link(orig, trabajo / "entrada.mxf")  # sin copiar si están en el mismo disco
+        except OSError:
+            shutil.copyfile(orig, trabajo / "entrada.mxf")
+        r = subprocess.run([str(transwrap), "-t", "rdd9", "-o", "salida.mxf", "entrada.mxf"], cwd=trabajo,
+                           capture_output=True, timeout=600)
+        if r.returncode == 0 and (trabajo / "salida.mxf").exists():
+            os.replace(trabajo / "salida.mxf", destino)
+        return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
+    finally:
+        shutil.rmtree(trabajo, ignore_errors=True)
 
 
 def herramienta(carpeta, nombre):
@@ -69,7 +93,7 @@ def main():
         orig = Path(a.brutos) / b["fichero"]
         rdd9 = salida / orig.name
         print("\n=== %s" % orig.name)
-        rc, out, err = ejecutar([transwrap, "-t", "rdd9", "-o", rdd9, orig])
+        rc, out, err = reempaquetar(transwrap, orig, rdd9)
         if rc != 0 or not rdd9.exists():
             print("FALLO  bmxtranswrap -t rdd9 (código %d):\n%s%s" % (rc, out[-1500:], err[-1500:]))
             fallos += 1

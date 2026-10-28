@@ -55,6 +55,7 @@ def main():
     ap.add_argument("--ffmpeg", default="ffmpeg")
     ap.add_argument("--ffprobe", default="ffprobe")
     a = ap.parse_args()
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # la consola de Windows (cp1252) no escribe "北京"
     transwrap, mxf2raw = herramienta(a.bmx, "bmxtranswrap"), herramienta(a.bmx, "mxf2raw")
     print(ejecutar([transwrap, "-v"])[1].strip() or ejecutar([transwrap, "-v"])[2].strip())
     salida = Path(a.salida)

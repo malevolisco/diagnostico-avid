@@ -69,6 +69,21 @@ jobs:
       - name: Comprobar resultado
         run: python tests/comprobar_resultado.py salida brutos --ffprobe bin/ffprobe.exe
 
+      - name: Prueba de viabilidad RDD 9 (bmx de la BBC reempaqueta los brutos; no bloquea)
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view v1.6 --repo bbc/bmx --json assets --jq '.assets[] | .name + "  " + (.size|tostring)'
+          $zip = gh release view v1.6 --repo bbc/bmx --json assets --jq '.assets[].name' | Where-Object { $_ -match 'win' -and $_ -match '\.zip$' } | Select-Object -First 1
+          if (-not $zip) { throw "No hay binarios de Windows en la release v1.6 de bbc/bmx" }
+          gh release download v1.6 --repo bbc/bmx --pattern $zip --dir bmxdl
+          Write-Host "bmx: $zip  SHA256 $((Get-FileHash bmxdl/$zip -Algorithm SHA256).Hash)"
+          Expand-Archive bmxdl/$zip -DestinationPath bmx
+          Get-ChildItem bmx -Recurse -Include *.exe | ForEach-Object { $_.FullName }
+          python tests/probar_rdd9.py brutos brutos_rdd9 --bmx bmx --ffmpeg bin/ffmpeg.exe --ffprobe bin/ffprobe.exe
+
       - name: Segunda ejecución sobre los mismos brutos (debe reanudar, no repetir)
         shell: pwsh
         run: |

@@ -674,39 +674,52 @@ def clasificar(c, cfg):
     return "dudoso", "pistas contrarias: " + motivos, False
 
 
-TRIAJE = {"restaurar": "Restaurar", "poco": "Poco material: ¿descartar?", "sin": "Sin material de cámara"}
+TRIAJE = {"restaurar": "Restaurar", "poco": "Poco material: ¿descartar?", "revisar": "Revisar: vídeos sin pistas de cámara",
+          "sin": "Sin material de cámara"}
 
 
 def triaje_proyectos(clips, cfg, proyectos=()):
     """Para decidir qué proyectos restaurar antes del montaje (Adrián, 28/10/2026: "localizar los que solo tienen uno o
     dos ficheros de tarjeta cortos"). Por proyecto, sus clips de cámara (clasificar: propio; sin agencias, importados,
     dudosos ni efectos de Avid), cuántos son y cuánto duran, y un veredicto: sin (ninguno), poco (hasta
-    triaje_max_clips y menos de triaje_max_minutos en total) o restaurar. Un clip en varios proyectos cuenta en todos;
+    triaje_max_clips y menos de triaje_max_minutos en total) o restaurar; y revisar cuando hay vídeos dudosos (MP4 o
+    MOV sin nombre ni datos de cámara: Adrián, 28/10/2026, "hay proyectos solo con MP4 y MOV") que pueden ser el
+    material y no hay de cámara (o hay poco y lo dudoso dura más). Un clip en varios proyectos cuenta en todos;
     uno sin bin, en SIN_PROYECTO. proyectos: los del disco, para que salgan también los que no tienen ningún clip.
-    Devuelve una lista ordenada (restaurar, poco, sin; dentro, por nombre) de dicts con proyecto, veredicto, camara
-    (clips, por nombre), sin_audio (los de cámara sin ninguna pista de sonido), segundos, mas_largo y otros (Counter
-    de las demás clases)."""
+    Devuelve una lista ordenada (restaurar, poco, revisar, sin; dentro, por nombre) de dicts con proyecto, veredicto,
+    camara (clips, por nombre), dudosos (los vídeos dudosos, por nombre), sin_audio (los de cámara sin ninguna pista de
+    sonido), segundos, mas_largo y otros (Counter de las demás clases)."""
     max_clips = int(cfg.get("triaje_max_clips", CONFIG_DEFECTO["triaje_max_clips"]))
     max_seg = float(cfg.get("triaje_max_minutos", CONFIG_DEFECTO["triaje_max_minutos"])) * 60
-    por = {p: {"proyecto": p, "camara": [], "otros": Counter()} for p in proyectos}
+    nuevo = lambda p: {"proyecto": p, "camara": [], "dudosos": [], "otros": Counter()}
+    por = {p: nuevo(p) for p in proyectos}
     for c in clips:
         if c.get("render"):
             continue
         clase = clasificar(c, cfg)[0]
         for p in c.get("proyectos") or ["SIN_PROYECTO"]:
-            t = por.setdefault(p, {"proyecto": p, "camara": [], "otros": Counter()})
+            t = por.setdefault(p, nuevo(p))
             if clase == "propio" and c.get("fichero_video"):
                 t["camara"].append(c)
+            elif clase == "dudoso" and c.get("fichero_video"):
+                t["dudosos"].append(c)
+                t["otros"]["dudoso"] += 1
             else:
                 t["otros"][clase if c.get("fichero_video") else "sin vídeo"] += 1
     orden = list(TRIAJE)
     for t in por.values():
         t["camara"].sort(key=lambda c: c["nombre"])
+        t["dudosos"].sort(key=lambda c: c["nombre"])
         t["sin_audio"] = [c for c in t["camara"] if not c.get("num_audio")]
         duraciones = [c.get("duracion") or 0 for c in t["camara"]]
         t["segundos"], t["mas_largo"] = sum(duraciones), max(duraciones, default=0)
-        t["veredicto"] = ("sin" if not t["camara"] else
-                          "poco" if len(t["camara"]) <= max_clips and t["segundos"] < max_seg else "restaurar")
+        dudoso_seg = sum(c.get("duracion") or 0 for c in t["dudosos"])
+        if not t["camara"]:
+            t["veredicto"] = "revisar" if t["dudosos"] else "sin"
+        elif len(t["camara"]) <= max_clips and t["segundos"] < max_seg:
+            t["veredicto"] = "revisar" if dudoso_seg >= max_seg else "poco"
+        else:
+            t["veredicto"] = "restaurar"
     return sorted(por.values(), key=lambda t: (orden.index(t["veredicto"]), t["proyecto"].lower()))
 
 

@@ -441,7 +441,8 @@ class App:
         solo = ("Solo %d de %d proyectos: %s\n" % (len(parcial["proyectos"]), parcial["proyectos_disco"], ", ".join(parcial["proyectos"]))
                 if parcial else "")
         tri = r.get("triaje")
-        tri = ("\nPara restaurar %d · poco material %d · sin cámara %d" % (tri.get("restaurar", 0), tri.get("poco", 0), tri.get("sin", 0))
+        tri = ("\nPara restaurar %d · poco material %d · revisar %d · sin cámara %d"
+               % (tri.get("restaurar", 0), tri.get("poco", 0), tri.get("revisar", 0), tri.get("sin", 0))
                if tri is not None else "")
         self.lbl_ultimo.configure(text="%s\n\n%s%s proyectos · %s clips · %s de material\n%s GB de media · %s bins (%s ilegibles)%s\nCarpeta: %s"
                                   % (r.get("fecha", "?"), solo[:200], r.get("proyectos", "?"), r.get("clips_fisicos", "?"), horas,

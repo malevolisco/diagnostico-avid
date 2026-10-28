@@ -147,8 +147,9 @@ jobs:
           if ($p.ExitCode -ne 0) { Get-Content salida5/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
           # Sin caracteres chinos en la orden ni en la consola (cp1252): el bruto de China se reconoce por el principio del nombre
           python -c "import json; r = {b['proyecto']: b['incluidos'] for b in json.load(open('brutos_camara/brutos_resultado.json', encoding='utf-8'))}; print(ascii(r)); n = {k.split(' ')[0] if k.startswith('20260916_CHINA') else k: v for k, v in r.items()}; assert n == {'20260916_CHINA': 3, 'ENLACES SEPTIEMBRE DE 2021': 2, 'NTSC SEPTIEMBRE DE 2021': 2, 'ORIGEN SEPTIEMBRE DE 2021': 1}, ascii(r)"
-          # Qué proyectos restaurar (28/10/2026): con --sin-miniaturas, igualmente una captura por clip de cámara (8 en el disco de prueba)
-          python -c "import json, glob; d = glob.glob('salida5/Diagnostico_*/')[0]; t = {x['proyecto']: x['veredicto'] for x in json.load(open(d + 'triaje.json', encoding='utf-8'))}; print(ascii(t)); n = len(glob.glob(d + 'miniaturas/*.jpg')); print(n, 'capturas'); assert t['NTSC'] == 'poco' and t['ABORTO'] == 'sin' and [v for k, v in t.items() if k.startswith('20260916')] == ['restaurar'] and n == 8, ascii(t)"
+          # Qué proyectos restaurar (28/10/2026): con --sin-miniaturas, igualmente una captura por clip de cámara o dudoso (8 + 14 en el
+          # disco de prueba); ABORTO solo tiene vídeos sin pistas de cámara: "revisar", no "sin material"
+          python -c "import json, glob; d = glob.glob('salida5/Diagnostico_*/')[0]; t = {x['proyecto']: x['veredicto'] for x in json.load(open(d + 'triaje.json', encoding='utf-8'))}; print(ascii(t)); n = len(glob.glob(d + 'miniaturas/*.jpg')); print(n, 'capturas'); assert t['NTSC'] == 'poco' and t['ABORTO'] == 'revisar' and [v for k, v in t.items() if k.startswith('20260916')] == ['restaurar'] and n == 22, ascii(t)"
           Remove-Item dist/DiagnosticoAvid/config_brutos.json
 
       - name: Autoactualización (release falsa en local; el .bat cambia la carpeta)

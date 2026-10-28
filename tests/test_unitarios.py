@@ -350,7 +350,7 @@ class ProyectoMes(unittest.TestCase):
     def test_importados_y_agencias_fuera(self):
         cs = [self.clip("0016Q3", "2019-09-16 10:52:26", 1),
               self.clip("VID_0001", "2019-09-16 11:00:00", 1, origen="Fichero importado",
-                        fichero_origen=r"D:\Documents and Settings\rtve1\Mis documentos\Mis vídeos\VID_0001.mp4"),
+                        fichero_origen=r"D:\Documents and Settings\usuario1\Mis documentos\Mis vídeos\VID_0001.mp4"),
               self.clip("SIN RUTA", "2019-09-16 11:00:00", 1, origen="Fichero importado"),
               self.clip("REUTERS", "2019-09-16 11:00:00", 1, origen="Agencia Reuters", fichero_origen=r"C:\Downloads\x_RTRMADV_y.MP4"),
               # MXF importado de una tarjeta P2: el origen dice "Fichero importado" pero la ruta es de tarjeta
@@ -911,8 +911,8 @@ class DatosReales(unittest.TestCase):
     """Casos sacados del disco real de la Corresponsalía de México (oct. 2026)."""
 
     def test_rutas_con_acentos_mal_leidos(self):
-        self.assertEqual(da.reparar_ruta("D//Documents and Settings/rtve1/Mis documentos/Mis vÌdeos/a.mp4"),
-                         "D//Documents and Settings/rtve1/Mis documentos/Mis vídeos/a.mp4")
+        self.assertEqual(da.reparar_ruta("D//Documents and Settings/usuario1/Mis documentos/Mis vÌdeos/a.mp4"),
+                         "D//Documents and Settings/usuario1/Mis documentos/Mis vídeos/a.mp4")
         self.assertEqual(da.reparar_ruta("P//notas IÒigo/a.mov"), "P//notas Iñigo/a.mov")
         self.assertEqual(da.reparar_ruta("/Users/x/Mis vídeos/a.mov"), "/Users/x/Mis vídeos/a.mov")  # Mac: no se toca
         self.assertIsNone(da.reparar_ruta(None))
@@ -1115,8 +1115,8 @@ class DiscosDeChina(unittest.TestCase):
             self.assertEqual(eb.clasificar({"origen": "Fichero importado", "fichero_origen": r, "bins": ["b.avb"]}, viejo)[0], "propio", r)
 
     def test_camara_propia_importada_de_una_carpeta_es_material(self):
-        dji = {"origen": "Fichero importado", "fichero_origen": r"C:\Users\RTVE\Desktop\China\DJI_0012.MP4"}
-        movil = {"origen": "Fichero importado", "fichero_origen": r"C:\Users\RTVE\Desktop\China\IMG_1234.MOV"}
+        dji = {"origen": "Fichero importado", "fichero_origen": r"C:\Users\Usuario\Desktop\China\DJI_0012.MP4"}
+        movil = {"origen": "Fichero importado", "fichero_origen": r"C:\Users\Usuario\Desktop\China\IMG_1234.MOV"}
         tarjeta = {"origen": "Fichero importado", "fichero_origen": r"J:\XDROOT\Clip\C0001.MXF"}
         self.assertFalse(eb.es_importado(dji, self.cfg))
         self.assertTrue(eb.es_importado(movil, self.cfg))
@@ -1411,8 +1411,9 @@ class QueProyectosRestaurar(unittest.TestCase):
     def test_veredicto_por_proyecto(self):
         t = {x["proyecto"]: x for x in eb.triaje_proyectos(self.clips(), self.cfg, ["GRANDE", "CORTO", "AGENCIAS", "LARGO", "DOS", "VACIO"])}
         self.assertEqual({k: v["veredicto"] for k, v in t.items()},
-                         {"GRANDE": "restaurar", "CORTO": "poco", "AGENCIAS": "sin", "LARGO": "restaurar", "DOS": "restaurar",
+                         {"GRANDE": "restaurar", "CORTO": "poco", "AGENCIAS": "revisar", "LARGO": "restaurar", "DOS": "restaurar",
                           "VACIO": "sin", "SIN_PROYECTO": "poco"})
+        self.assertEqual([c["nombre"] for c in t["AGENCIAS"]["dudosos"]], ["PANTALLA PARTIDA"])  # para revisar, no de cámara
         self.assertEqual([c["nombre"] for c in t["GRANDE"]["camara"]], ["0001AB", "0002AB", "0003AB", "0007AC"])
         self.assertEqual((t["GRANDE"]["segundos"], t["GRANDE"]["mas_largo"]), (1010, 600))
         self.assertEqual(t["GRANDE"]["otros"], {"sin vídeo": 1})  # el render no cuenta
@@ -1423,6 +1424,21 @@ class QueProyectosRestaurar(unittest.TestCase):
         # Orden: restaurar, poco, sin; dentro, por nombre
         self.assertEqual([x["proyecto"] for x in eb.triaje_proyectos(self.clips(), self.cfg, ["GRANDE", "CORTO", "AGENCIAS", "LARGO", "DOS", "VACIO"])],
                          ["DOS", "GRANDE", "LARGO", "CORTO", "SIN_PROYECTO", "AGENCIAS", "VACIO"])
+
+    def test_proyectos_solo_con_mp4_y_mov(self):
+        # Adrián, 28/10/2026: "hay proyectos solo con MP4 y MOVs... esos a lo mejor hay que darle una vuelta". Sin nombre ni
+        # datos de cámara son dudosos y no entran en los brutos, pero el proyecto no es "sin material": se revisa
+        cs = [self.clip("entrevista alcalde", ["MOVS"], 900, fichero_origen=r"D:\rodaje\entrevista alcalde.mov"),
+              self.clip("recurso plaza", ["MOVS"], 300, fichero_origen=r"D:\rodaje\recurso plaza.mp4"),
+              self.clip("0001AB", ["MEZCLA"], 30), self.clip("toma larga", ["MEZCLA"], 600, fichero_origen=r"D:\x\toma larga.mov"),
+              self.clip("IMG_1234", ["MOVIL"], 60, fichero_origen=r"D:\x\IMG_1234.MOV")]
+        t = {x["proyecto"]: x for x in eb.triaje_proyectos(cs, self.cfg, ["MOVS", "MEZCLA", "MOVIL"])}
+        self.assertEqual((t["MOVS"]["veredicto"], len(t["MOVS"]["dudosos"]), t["MOVS"]["camara"]), ("revisar", 2, []))
+        self.assertEqual(t["MEZCLA"]["veredicto"], "revisar")  # un P2 corto, pero 10 min de MOV sin pistas: se revisa
+        self.assertEqual(t["MOVIL"]["veredicto"], "sin")  # el móvil es importado de fuera, no dudoso
+        # Elegido "Entra" en Origen del material: pasan a ser de cámara y el proyecto se restaura
+        cfg = dict(self.cfg, decisiones_origen=[{"carpeta": r"\rodaje", "bin": "b.avb", "clase": "propio"}])
+        self.assertEqual({x["proyecto"]: x["veredicto"] for x in eb.triaje_proyectos(cs, cfg)}["MOVS"], "restaurar")
         # Los umbrales se cambian en config_brutos.json
         t = {x["proyecto"]: x["veredicto"] for x in eb.triaje_proyectos(self.clips(), dict(self.cfg, triaje_max_clips=3, triaje_max_minutos=5))}
         self.assertEqual((t["DOS"], t["LARGO"], t["GRANDE"]), ("poco", "poco", "restaurar"))
@@ -1439,7 +1455,7 @@ class QueProyectosRestaurar(unittest.TestCase):
             cs[0]["miniatura"] = "miniaturas/00000_0001AB.jpg"
             triaje = eb.triaje_proyectos(cs, self.cfg, ["GRANDE", "CORTO", "AGENCIAS"])
             cuenta = da.escribir_triaje(triaje, {"origen": "E:\\", "fecha": "28/10/2026"}, d, self.cfg)
-            self.assertEqual(cuenta, {"restaurar": 3, "poco": 2, "sin": 1})
+            self.assertEqual(cuenta, {"restaurar": 3, "poco": 2, "revisar": 1})
             html = (d / "proyectos.html").read_text(encoding="utf-8")
             self.assertIn("Qué proyectos restaurar", html)
             self.assertIn("miniaturas/00000_0001AB.jpg", html)
@@ -1453,7 +1469,9 @@ class QueProyectosRestaurar(unittest.TestCase):
             self.assertEqual((datos["CORTO"]["veredicto"], datos["CORTO"]["clips"], datos["CORTO"]["segundos"]), ("poco", 2, 60))
             # Lo que dice el selector de proyectos
             self.assertEqual(da.texto_triaje(datos["CORTO"]), "   · Poco material: ¿descartar?: 2 clips de cámara, %s" % da.fmt_duracion(60))
-            self.assertEqual(da.texto_triaje(datos["AGENCIAS"]), "   · Sin material de cámara")
+            self.assertEqual(da.texto_triaje(datos["AGENCIAS"]), "   · Revisar: vídeos sin pistas de cámara: 1")
+            self.assertEqual(da.texto_triaje({"clips": 0, "dudosos": 0}), "   · Sin material de cámara")
+            self.assertIn("vídeo sin pistas de cámara", html)
             self.assertEqual(da.texto_triaje(None), "")
             self.assertEqual(da.texto_triaje(dict(datos["CORTO"], sin_audio=1)),
                              "   · Poco material: ¿descartar?: 2 clips de cámara, %s, 1 SIN AUDIO" % da.fmt_duracion(60))

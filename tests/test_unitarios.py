@@ -611,6 +611,7 @@ class OrdenYParalelo(unittest.TestCase):
         cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
         cfg["clips_a_la_vez"] = 3
         cfg["ficha_tecnica"] = False  # ffmpeg simulado: no hay MXF de verdad que comprobar (eso se prueba en test_mxf.py)
+        cfg["rdd9"] = False  # ni que reempaquetar (eso se prueba en EmpaquetarRDD9 y en el CI con bmx)
         destino = self.tmp / "brutos"
         destino.mkdir()
         unidos = []

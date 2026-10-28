@@ -1,10 +1,10 @@
 # Diseño: pantalla de montaje y panel de exportación
 
-Aprobado por Adrián el 22/10/2026, parte por parte. Va antes del visto bueno de Ingeniería, así que el resultado tiene que ser comprobable y presentable.
+Aprobado el 22/10/2026, parte por parte. Va antes del visto bueno de Ingeniería, así que el resultado tiene que ser comprobable y presentable.
 
 ## Objetivo
 
-Antes de lanzar la exportación, que es lo caro (unos 40 s de proceso por minuto de material en un PC de 4 núcleos), Adrián quiere:
+Antes de lanzar la exportación, que es lo caro (unos 40 s de proceso por minuto de material en un PC de 4 núcleos), hace falta:
 
 1. ver cómo ha quedado montado cada bruto y moverse por él en una línea de tiempo, para detectar saltos raros, clips fuera de sitio o algo al revés;
 2. corregirlo: quitar clips, moverlos (también a otro bruto) y decidir dónde se corta;
@@ -53,7 +53,7 @@ Los brutos de un proyecto incluyen material, `SIN FECHA` y `PIEZAS`, igual que a
 - Se guardan en `<carpeta del análisis>/visor/<clave del clip>/`. Así son por clip, sirven aunque el clip cambie de bruto y no se repiten.
 - Nunca entran en el zip de diagnóstico ni salen del PC (norma del proyecto).
 - Estimación sin medir: 1–2 min y unos 100 MB por bruto de 2 h. Se medirá en las pruebas y se anotará en `LEEME_tecnico.md`.
-- Sin sonido: decidido por Adrián.
+- Sin sonido: basta con la imagen para decidir cortes, y así el visor es ligero.
 
 ## Almacenamiento: `montaje.json`
 
@@ -96,7 +96,7 @@ Por defecto: proyecto (en mayúsculas, como esté en Avid) y mes y año de los c
 - Junto al bruto, el shotlist, la hoja de contactos, el `.md5` y la ficha técnica llevan el mismo nombre base.
 - Se puede editar en el panel (prefijo) y por bruto en el montaje.
 
-Esto sustituye al `PROYECTO_AAAA-MM` actual. Sigue cumpliendo el punto 2 del correo del Archivo (proyecto + año y mes), pero con otra forma. Adrián se lo comunica al Archivo.
+Esto sustituye al `PROYECTO_AAAA-MM` actual. Sigue cumpliendo el punto 2 del correo del Archivo (proyecto + año y mes), pero con otra forma, comunicada al Archivo.
 
 ## Panel de opciones de exportación
 

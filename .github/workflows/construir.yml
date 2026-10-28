@@ -137,7 +137,7 @@ jobs:
           Remove-Item dist/DiagnosticoAvid/config_brutos.json
           python tests/comprobar_resultado.py salida3 brutos_proyecto --ffprobe bin/ffprobe.exe --agrupar proyecto
 
-      - name: Por defecto, en los brutos solo entra lo que tiene pistas de cámara (Adrián, 27/10/2026)
+      - name: Por defecto, en los brutos solo entra lo que tiene pistas de cámara
         shell: pwsh
         run: |
           # Sin config: valores por defecto. Lo capturado sin nombre de cámara (15 SEPT, ABORTO, APROX, huérfanos) se queda fuera;

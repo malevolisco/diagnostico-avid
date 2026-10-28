@@ -333,15 +333,57 @@ def listar_proyectos(origen):
             ficheros.append({"ruta": str(rel), "carpeta": str(rel.parent), "nombre": nombre, "ext": ext, "bytes": 0,
                              "modificado": dt.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")})
     salida = []
-    for p in detectar_proyectos(ficheros):
+    proyectos = detectar_proyectos(ficheros)
+    for p in proyectos:
         fechas = [b["modificado"] for b in p["bins"]]
         salida.append({"nombre": p["nombre"], "carpeta": p["carpeta"], "bins": p["num_bins"], "modificado": max(fechas) if fechas else ""})
+    # Y las carpetas de primer nivel sin nada de Avid: también son proyectos (sus vídeos se ven al analizar)
+    con_avid = {primera_carpeta(b["ruta"])[1] for p in proyectos for b in p["bins"]}
+    con_avid |= {primera_carpeta(str(Path(p["carpeta"]) / a))[1] for p in proyectos for a in p.get("ficheros_avp") or []}
+    nombres = {p["nombre"] for p in salida}
+    try:
+        dentro = sorted(os.scandir(raiz_disco), key=lambda d: d.name.lower())
+    except OSError:
+        dentro = []
+    for d in dentro:
+        try:
+            if not d.is_dir() or carpeta_ignorada(d.name) or d.name in con_avid:
+                continue
+            fecha = dt.datetime.fromtimestamp(d.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        except OSError:
+            continue
+        salida.append({"nombre": d.name if d.name not in nombres else d.name + " (carpeta)", "carpeta": d.name, "bins": 0,
+                       "modificado": fecha, "sin_avid": True})
     return sorted(salida, key=lambda x: x["nombre"].lower())
 
 
-def detectar_proyectos(ficheros):
+def primera_carpeta(ruta, raices=()):
+    """(raíz, carpeta de primer nivel) de una ruta del inventario: relativa al disco, o absoluta dentro de una de las
+    raíces de otros orígenes. (raíz, None) si el fichero está en la raíz; (None, None) si no es de ninguna."""
+    r = Path(str(ruta))
+    if r.is_absolute():
+        for raiz in raices:
+            try:
+                partes = r.relative_to(Path(raiz)).parts
+            except ValueError:
+                continue
+            return str(raiz), (partes[0] if len(partes) > 1 else None)
+        return None, None
+    return "", (r.parts[0] if len(r.parts) > 1 else None)
+
+
+def carpeta_ignorada(nombre):
+    """Carpetas de primer nivel que no son proyectos: las del sistema, la media y las de Avid (Avid MediaFiles,
+    Avid Attic...), y las ocultas."""
+    n = str(nombre).lower()
+    return n in CARPETAS_SISTEMA or n in CARPETAS_MEDIA or n.startswith(("avid", ".", "$"))
+
+
+def detectar_proyectos(ficheros, raices=()):
     """Un proyecto es una carpeta que contiene un .avp. Sus bins son los .avb
-    de esa carpeta y subcarpetas (los de Trash se marcan como papelera)."""
+    de esa carpeta y subcarpetas (los de Trash se marcan como papelera).
+    Los bins de una carpeta de primer nivel sin .avp son el proyecto de esa carpeta (28/10/2026: el
+    análisis tiene que ver todas las carpetas del disco); los que están en la raíz del disco, "(bins sin proyecto)". raices: las de otros orígenes."""
     carpetas_avp = {}
     for f in ficheros:
         if f["ext"] == ".avp":
@@ -374,13 +416,75 @@ def detectar_proyectos(ficheros):
             "num_bins": len(bins),
         })
 
-    sueltos = [{"ruta": f["ruta"], "nombre": f["nombre"], "bytes": f["bytes"], "modificado": f["modificado"], "papelera": False}
+    sueltos = [{"ruta": f["ruta"], "nombre": f["nombre"], "bytes": f["bytes"], "modificado": f["modificado"],
+                "papelera": any(p.lower() == "trash" for p in Path(f["carpeta"]).parts)}
                for f in ficheros if f["ext"] == ".avb" and f["ruta"] not in bins_asignados]
-    if sueltos:
-        proyectos.append({"nombre": "(bins sin proyecto)", "carpeta": "", "ficheros_avp": [],
-                          "bins": sueltos, "num_bins": len(sueltos)})
+    por_carpeta = defaultdict(list)
+    for b in sueltos:
+        raiz, top = primera_carpeta(b["ruta"], raices)
+        por_carpeta[(raiz or "", top if top and not carpeta_ignorada(top) else None)].append(b)
+    nombres = {p["nombre"] for p in proyectos}
+    for (raiz, top), bs in sorted(por_carpeta.items(), key=lambda kv: (kv[0][1] is None, str(kv[0][1]).lower())):
+        if top:  # carpeta con bins y sin .avp: un proyecto con su nombre
+            nombre = top if top not in nombres else top + " (bins sueltos)"
+            nombres.add(nombre)
+            proyectos.append({"nombre": nombre, "carpeta": str(Path(raiz) / top) if raiz else top, "ficheros_avp": [],
+                              "bins": bs, "num_bins": len(bs), "sin_avp": True})
+        else:
+            proyectos.append({"nombre": "(bins sin proyecto)", "carpeta": "", "ficheros_avp": [],
+                              "bins": bs, "num_bins": len(bs)})
     LOG.info("Proyectos detectados: %d", len(proyectos))
     return proyectos
+
+
+VIDEO_SUELTO = {".mov", ".mp4", ".m4v", ".mxf", ".mts", ".m2ts", ".avi", ".mkv", ".mpg", ".mpeg", ".3gp"}
+
+
+def carpetas_sin_avid(ficheros, proyectos, raices=()):
+    """Carpetas de primer nivel del disco (y de los otros orígenes) sin nada de Avid: también son proyectos (28/10/2026:
+    si el disco tiene 118 carpetas y 108 con proyecto de Avid, salen las 118). Devuelve (proyectos nuevos,
+    {ruta de vídeo: proyecto}) con sus vídeos sueltos (MP4, MOV, MXF...), que se analizan como la media enlazada.
+    Una carpeta que contiene un proyecto de Avid (o bins) no cuenta: ya es (o contiene) un proyecto."""
+    con_avid = set()
+    for p in proyectos:
+        for b in p.get("bins") or []:
+            con_avid.add(primera_carpeta(b["ruta"], raices))
+        for avp in p.get("ficheros_avp") or []:
+            con_avid.add(primera_carpeta(str(Path(p["carpeta"]) / avp), raices))
+    carpetas, videos = {}, {}
+    for f in ficheros:
+        clave = primera_carpeta(f["ruta"], raices)
+        raiz, top = clave
+        if not top or carpeta_ignorada(top) or clave in con_avid or f["ext"] in (".avp", ".avb"):
+            continue
+        carpetas.setdefault(clave, []).append(f)
+    nombres = {p["nombre"] for p in proyectos}
+    nuevos = []
+    for (raiz, top), fs in sorted(carpetas.items(), key=lambda kv: kv[0][1].lower()):
+        nombre = top if top not in nombres else top + " (carpeta)"
+        nombres.add(nombre)
+        vid = [f for f in fs if f["ext"] in VIDEO_SUELTO and not es_ruta_media(Path(f["ruta"]).parts)]
+        nuevos.append({"nombre": nombre, "carpeta": str(Path(raiz) / top) if raiz else top, "ficheros_avp": [], "bins": [],
+                       "num_bins": 0, "sin_avid": True, "videos": len(vid)})
+        for f in vid:
+            videos[f["ruta"]] = nombre
+    if nuevos:
+        LOG.info("Carpetas sin proyecto de Avid: %d (%d vídeos sueltos)", len(nuevos), len(videos))
+    return nuevos, videos
+
+
+def asignar_sueltos(clips, videos_sueltos, enlaces, origen):
+    """Los clips de los vídeos sueltos de una carpeta sin proyecto de Avid son de esa carpeta (proyecto). Su ruta hace de
+    "fichero importado" para decidir el origen (carpeta de tarjeta, nombre de cámara...). Un vídeo que un bin enlaza
+    es de ese proyecto, no de la carpeta."""
+    enlazados = set((enlaces or {}).values())
+    for c in clips:
+        ruta = next((r for r in c["ficheros"] if r in videos_sueltos and r not in enlazados), None)
+        if ruta and not c.get("proyectos"):
+            c["proyectos"] = [videos_sueltos[ruta]]
+            c["fichero_origen"] = str(ruta) if Path(str(ruta)).is_absolute() else str(Path(origen) / ruta)
+            c["origen"] = "Fichero importado"
+            c["sin_avid"] = True
 
 
 def mobid_claves(mob_id):
@@ -1111,6 +1215,10 @@ def cruzar(proyectos, bins, clips, mxf=(), enlaces=None):
                         "ambiguos": 0, "offline_items": [], "secuencias": 0, "secuencias_nombres": set(), "volumenes": Counter(),
                         "origenes": Counter()}
     por_proyecto = defaultdict(nuevo_pr)
+    for c in clips:  # los de carpetas sin proyecto de Avid ya llegan con su proyecto (asignar_sueltos)
+        for p in c.get("proyectos") or []:
+            por_proyecto[p]["claves"].add(c["clave"])
+            por_proyecto[p]["online"] += 1
 
     def asignar(fisico, clip, proyecto, pr, nbin):
         pr["online"] += 1
@@ -1437,11 +1545,11 @@ def construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmp
     aprox = [p for p in cruce["por_proyecto"] if p.get("clips_aproximados") or p.get("clips_ambiguos")]
     if aprox:
         avisos.append(("aviso", "Cruce por nombre y duración en %d proyectos (%s): %d clips emparejados así y %d ambiguos que quedan sin emparejar. "
-                       "El identificador no ha coincidido en esos proyectos; revisar con Adrián."
+                       "El identificador no ha coincidido en esos proyectos; consultar al responsable de la herramienta."
                        % (len(aprox), ", ".join(p["proyecto"] for p in aprox), sum(p["clips_aproximados"] for p in aprox), sum(p["clips_ambiguos"] for p in aprox))))
     exactos = {k: v for k, v in cruce["modo_coincidencia"].items() if k in ("le", "be") or k.startswith("fuente_")}
     if clips and not exactos and bins and any(b["ok"] and b["clips"] for b in bins):
-        avisos.append(("error", "Ningún clip de bin ha coincidido con ningún MXF. El cruce por identificador no funciona con estos ficheros; revisar con Adrián."))
+        avisos.append(("error", "Ningún clip de bin ha coincidido con ningún MXF. El cruce por identificador no funciona con estos ficheros; consultar al responsable de la herramienta."))
     if tags_comentario:
         avisos.append(("info", "Metadatos de usuario encontrados dentro de los MXF: " + ", ".join(sorted(tags_comentario))))
     origenes_tot = sum((Counter(p.get("origenes", {})) for p in cruce["por_proyecto"]), Counter())
@@ -1807,10 +1915,16 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
             cache.quedarse(ficheros)
 
         progreso("2/6 Detectando proyectos y leyendo bins...")
-        proyectos = detectar_proyectos(ficheros)
+        raices = [str(Path(x)) for x in carpetas_media or ()]
+        proyectos = detectar_proyectos(ficheros, raices)
+        carpetas, videos_sueltos = carpetas_sin_avid(ficheros, proyectos, raices)
+        if carpetas:
+            progreso("2/6 %d carpetas sin proyecto de Avid también son proyectos (%d vídeos sueltos)" % (len(carpetas), len(videos_sueltos)))
+        proyectos += carpetas
         if solo:
             del_disco = len(proyectos)
             proyectos = [p for p in proyectos if p["nombre"] in solo]
+            videos_sueltos = {r: n for r, n in videos_sueltos.items() if n in solo}
             if not proyectos:
                 raise ValueError("No hay en el disco ningún proyecto con esos nombres: %s" % "; ".join(sorted(solo)))
             progreso("2/6 Solo %d de %d proyectos: %s" % (len(proyectos), del_disco, "; ".join(p["nombre"] for p in proyectos)))
@@ -1824,6 +1938,19 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
                                else (None, sum(1 for f in ficheros if f["ext"] == ".mxf")))
         mxf = analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=objetivo, cache=cache) if ffmpeg_ok else []
         enlazados, enlaces, faltan = buscar_enlazados(bins, ficheros, mxf) if ffmpeg_ok else ([], {}, [])
+        # Una carpeta sin proyecto de Avid cuyos vídeos enlazan los bins de otro proyecto (media AMA) es media de ese
+        # proyecto, no un proyecto aparte
+        de_bins = set(enlaces.values())
+        media_de_otros = {n for n in set(videos_sueltos.values())
+                          if all(r in de_bins for r, x in videos_sueltos.items() if x == n)}
+        if media_de_otros:
+            proyectos = [p for p in proyectos if p["nombre"] not in media_de_otros]
+            videos_sueltos = {r: n for r, n in videos_sueltos.items() if n not in media_de_otros}
+            guardar_json(destino, "proyectos.json", proyectos)
+            LOG.info("Carpetas que son media enlazada de otros proyectos (no son proyectos): %s", "; ".join(sorted(media_de_otros)))
+        if ffmpeg_ok and videos_sueltos:  # los vídeos de las carpetas sin proyecto de Avid, como la media enlazada
+            ya = {m["ruta"] for m in mxf} | {f["ruta"] for f in enlazados}
+            enlazados += [f for f in ficheros if f["ruta"] in videos_sueltos and f["ruta"] not in ya]
         if enlazados:
             progreso("3/6 Media enlazada (AMA) o importada sin MXF de Avid: %d ficheros en el disco..." % len(enlazados))
             mxf = sorted(mxf + analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=enlazados, enlazado=True, cache=cache),
@@ -1833,6 +1960,7 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
 
         progreso("4/6 Reconstruyendo clips y cruzando con los bins...")
         clips = agrupar_clips(mxf)
+        asignar_sueltos(clips, videos_sueltos, enlaces, origen)
         cruce = cruzar(proyectos, bins, clips, mxf, enlaces)
         cruce["enlazados"] = {"encontrados": len(enlaces), "faltan": len(faltan), "ejemplos_faltan": faltan[:50],
                               "de_mac": sum(1 for x in faltan if es_ruta_de_mac(x)), "carpetas_media": [str(x) for x in carpetas_media or ()]}
@@ -1918,10 +2046,11 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
             triaje = exportar_brutos.triaje_proyectos(clips, cfg_origen, nombres)
             resumen["triaje"] = escribir_triaje(triaje, resumen, destino, cfg_origen)
             sin_audio = sorted({c["nombre"] for t in triaje for c in t["sin_audio"]})
-            if sin_audio:  # Adrián, 28/10/2026: "que detecte que algo no tenga audio asociado, que me avise"
+            if sin_audio:  # aviso de clips sin audio (28/10/2026)
                 resumen["avisos"].append({"nivel": "aviso", "texto": "%d clips de cámara no tienen audio (ninguna pista de sonido): %s%s. "
                                           "En el bruto irían en silencio: mira si el sonido está en otro fichero o en otro disco."
                                           % (len(sin_audio), ", ".join(sin_audio[:15]), "…" if len(sin_audio) > 15 else "")})
+        resumen["carpetas_media_enlazada"] = sorted(media_de_otros)  # el selector de proyectos no las ofrece
         guardar_json(destino, "resumen.json", resumen)
         informe_html(resumen, proyectos, bins, clips, cruce, destino)
 
@@ -1984,8 +2113,7 @@ def buscar_analisis(destino_base, origen):
 
 def sumar_analisis_anteriores(destino_base, origen, destino, ficheros, proyectos, bins, mxf, clips, cruce):
     """Análisis de solo algunos proyectos: se le suman los proyectos de los análisis anteriores de este disco que no se
-    han vuelto a analizar (Adrián, 28/10/2026: "que se guarde ese análisis, para no tener que volverlo a hacer cuando se
-    hace otro proyecto"). Cada proyecto sale del análisis más reciente que lo tiene, y solo si sus MXF siguen en el disco
+    han vuelto a analizar (28/10/2026: un análisis guardado no se repite al pasar a otro proyecto). Cada proyecto sale del análisis más reciente que lo tiene, y solo si sus MXF siguen en el disco
     con el mismo tamaño y fecha; si han cambiado, no se suma y hay que volver a analizarlo. Cambia las listas en su sitio
     y copia las miniaturas. Devuelve ({proyecto: fecha del análisis del que sale}, [proyectos que han cambiado])."""
     inventario = {f["ruta"]: f for f in ficheros}
@@ -2216,8 +2344,9 @@ def dialogo_proyectos(raiz, lista, marcados, hechos=(), triaje=None, analizados=
     import tema
     triaje, analizados = triaje or {}, analizados or {}
     ya = lambda n: ("   ✓ analizado el %s" % str(analizados[n])[:10] if n in analizados else "") + ("   ✓ ya tiene brutos" if n in hechos else "")
-    filas = [(p["nombre"], "%s   (%d bins%s)%s%s" % (p["nombre"], p["bins"], ", último cambio " + p["modificado"][:10] if p["modificado"] else "",
-                                                       texto_triaje(triaje.get(p["nombre"])), ya(p["nombre"])))
+    filas = [(p["nombre"], "%s   (%s%s)%s%s" % (p["nombre"], "carpeta sin proyecto de Avid" if p.get("sin_avid") else "%d bins" % p["bins"],
+                                                  ", último cambio " + p["modificado"][:10] if p["modificado"] else "",
+                                                  texto_triaje(triaje.get(p["nombre"])), ya(p["nombre"])))
              for p in lista]
     filas.append(("SIN_PROYECTO", "SIN_PROYECTO   (clips que no están en ningún bin)%s%s" % (texto_triaje(triaje.get("SIN_PROYECTO")), ya("SIN_PROYECTO"))))
     v = tk.Toplevel(raiz)

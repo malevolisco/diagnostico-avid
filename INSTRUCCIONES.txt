@@ -17,7 +17,7 @@ NO modifica nada en el disco de Avid: solo lo lee. No hay que instalar nada.
 Orden recomendado (la primera vez con un disco)
 -----------------------------------------------
 1. Primero, SOLO el análisis (página 1 · Disco). Envía el zip.
-2. Exporta los brutos (página 3 · Exportar) cuando Adrián haya revisado el
+2. Exporta los brutos (página 3 · Exportar) cuando el responsable haya revisado el
    informe y te diga que adelante. No hace falta volver a analizar.
 
 Antes de empezar
@@ -63,7 +63,7 @@ Página 1 · Disco
    segundos, sin abrir nada) y lo dice debajo de las carpetas, por ejemplo
    "7 proyectos · 11 bins · último cambio 15/09/2021". Sirve para ver de un
    vistazo si es el disco que esperabas.
-   "Elegir proyectos" (el botón con borde naranja) sirve para no hacerlos todos de una vez: sale la
+   "Elegir proyectos" (el botón azul) sirve para no hacerlos todos de una vez: sale la
    lista de proyectos del disco y marcas los que quieres ahora. Los que ya tienen brutos en esa carpeta salen con
    "✓ ya tiene brutos"; el botón "Solo los que faltan" marca el resto.
    Otro día, misma carpeta de brutos y eliges los siguientes: los ya hechos
@@ -73,6 +73,15 @@ Página 1 · Disco
    disco": Montaje y Exportar avisan si el análisis no lo tiene.
    SIN_PROYECTO (clips que no están en ningún bin) obliga a mirar el disco
    entero.
+   CARPETAS SIN PROYECTO DE AVID: cada carpeta del disco que no tiene
+   proyecto de Avid sale también en la lista, como "carpeta sin proyecto
+   de Avid" (si el disco tiene 118 carpetas, salen las 118). Sus vídeos
+   (MOV, MP4, MXF...) cuentan como material solo si algo los reconoce
+   como de cámara: la cabecera del fichero (marca de la cámara o del
+   grabador, p. ej. un Atomos), la carpeta de tarjeta o el nombre. Los
+   demás quedan como dudosos y la carpeta sale como "Revisar". Si los
+   vídeos de una carpeta ya los usa un proyecto de Avid, la carpeta no
+   sale aparte: es media de ese proyecto.
    ANÁLISIS INICIAL AL RECIBIR UN DISCO: deja "Elegir proyectos: todos" y
    pulsa "Analizar todo el disco". Analiza y enlaza todo una vez; luego
    cada proyecto se abre en Montaje directamente, sin volver a analizar.

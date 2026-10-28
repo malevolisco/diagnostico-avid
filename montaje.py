@@ -399,7 +399,7 @@ def sacar_portada(ffmpeg, ruta_video, carpeta_visor, clave, timeout=120):
 def siguiente_preparacion(claves, actual, hechos, portadas, en_curso, fallidos, tipos=("portada", "tira")):
     """Qué preparar ahora para el visor. Primero el clip que se mira: su portada (una imagen, al momento) y luego todos
     sus fotogramas; después los clips siguientes y por último los de antes. Antes se preparaban todos en orden desde el
-    primero: si se miraba el clip 20 había que esperar a los 19 anteriores (Adrián, 26/10/2026).
+    primero: si se miraba el clip 20 había que esperar a los 19 anteriores.
     claves: las del bruto en orden; actual: índice del clip que se mira; tipos: qué se busca. Devuelve ("portada" | "tira",
     clave) o None."""
     if not claves:

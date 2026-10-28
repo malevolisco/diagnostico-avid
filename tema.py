@@ -33,6 +33,7 @@ AVISO = "#ff8a80"
 BIEN = "#6fdc9b"
 CLIP = "#3d6fa8"
 CABEZAL = "#ff5252"
+DETENER = "#9e3434"  # rojo apagado: se ve sin competir con el naranja de la acción principal
 
 LETRA = "Segoe UI"
 MONO = "Consolas"
@@ -95,11 +96,16 @@ def aplicar(raiz):
                 font=letras["negrita"], padding=(18, 6))
     e.map("Elegido.TButton", background=[("disabled", BOTON), ("active", ACENTO_ENCIMA)], foreground=[("disabled", "#6b6f75")],
           bordercolor=[("disabled", BORDE_CLARO)], lightcolor=[("disabled", BOTON)], darkcolor=[("disabled", BOTON)])
-    # Botón que tiene que verse sin ser el principal (Elegir proyectos): borde naranja, letra en negrita y algo más grande
-    e.configure("Destacado.TButton", background=BOTON, foreground=TEXTO, bordercolor=ACENTO, lightcolor=BOTON, darkcolor=BOTON,
-                font=letras["grande"], padding=(18, 8), borderwidth=2)
-    e.map("Destacado.TButton", background=[("disabled", PANEL), ("pressed", BOTON_ENCIMA), ("active", BOTON_ENCIMA)],
+    # Botones que tienen que verse sin ser el principal (naranja): Elegir proyectos, en azul; Detener, en rojo
+    e.configure("Proyectos.TButton", background=CLIP, foreground=TEXTO, bordercolor=CLIP, lightcolor=CLIP, darkcolor=CLIP,
+                font=letras["negrita"], padding=(14, 6))
+    e.map("Proyectos.TButton", background=[("disabled", PANEL), ("pressed", "#2f5a8c"), ("active", "#4a80bd")],
           foreground=[("disabled", "#6b6f75")])
+    e.configure("Detener.TButton", background=DETENER, foreground=TEXTO, bordercolor=DETENER, lightcolor=DETENER, darkcolor=DETENER,
+                font=letras["negrita"], padding=(14, 6))
+    e.map("Detener.TButton", background=[("disabled", PANEL), ("pressed", "#7d2626"), ("active", "#b54545")],
+          foreground=[("disabled", "#6b6f75")], bordercolor=[("disabled", BORDE)], lightcolor=[("disabled", PANEL)],
+          darkcolor=[("disabled", PANEL)])
     e.configure("Accion.TButton", padding=(9, 4), width=-6)  # cada uno lo que mide su texto (el tema pide 11 letras)
     # botones de acción en una pantalla pequeña: sin el ancho mínimo del tema (11 letras), cada uno lo que mide su texto
     e.configure("Compacta.TButton", padding=(6, 3), font=letras["pequena"], width=-4)

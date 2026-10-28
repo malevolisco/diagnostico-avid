@@ -24,7 +24,7 @@
 - **Visor:** 1 fotograma/s, 480×270, nunca en el zip de diagnóstico.
 - **Por defecto:** MD5, ficha técnica y medidor activados; actualización automática desactivada.
 - **El montaje solo se aplica con `agrupar = proyecto_mes`.** En los otros modos se avisa y se ignora.
-- **Commits:** a nombre de Adrián, sin firmas. Escaneo Opsera antes de cada commit.
+- **Commits:** análisis de seguridad antes de cada commit.
 
 ## Puntos de atención (casos no cubiertos explícitamente por el diseño)
 
@@ -210,4 +210,4 @@
   - tabla de ficheros;
   - lo no verificado.
 - [ ] Pruebas unitarias, disco simulado de principio a fin (dos veces, la segunda debe reanudar), `probar_montaje`, prueba de la ventana y MediaInfo sobre un bruto.
-- [ ] Escaneo Opsera, commit, push y workflow en Windows sobre la rama. Fusionar cuando esté en verde.
+- [ ] Análisis de seguridad, commit, push y workflow en Windows sobre la rama. Fusionar cuando esté en verde.

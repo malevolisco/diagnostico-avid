@@ -7,7 +7,7 @@ Prueba de la ventana (interfaz.py) de principio a fin sobre el disco de prueba, 
 
 Pestañas de las páginas arriba; en cada página se comprueba que todo cabe sin desplazar de lado (y Montaje y Exportar
 tampoco de arriba abajo), con la pantalla que haya: en una pequeña la ventana va en modo compacto.
-1 · Disco: al elegir el disco se leen solos sus proyectos ("7 proyectos · …"), y "Proyectos…" reutiliza esa lectura;
+1 · Disco: al elegir el disco se leen solos sus proyectos ("7 proyectos · 2 carpetas sin Avid · …"), y "Proyectos…" reutiliza esa lectura;
    Montaje sin análisis avisa en vez de fallar; analizar; la tarjeta "Último análisis" se rellena.
 2 · Montaje: "Fuera del bruto" con agencia, efecto e importado. Pestaña "Origen del material": el bin "compras" sale
    arriba como dudoso; se marca "Fuera: agencia", se guarda origen.json (y se aprende en el fichero de lo aprendido) y el
@@ -119,7 +119,7 @@ def disco():
 @seguro
 def disco_leido():
     texto = app.lbl_disco.cget("text")
-    comprobar(texto.startswith("7 proyectos · 11 bins"), "al elegir el disco deben salir solos sus proyectos: %r" % texto)
+    comprobar(texto.startswith("7 proyectos · 2 carpetas sin Avid · 11 bins"), "al elegir el disco deben salir solos sus proyectos: %r" % texto)
     llamadas = []
     listar, dialogo = d.listar_proyectos, d.dialogo_proyectos
 
@@ -131,7 +131,8 @@ def disco_leido():
     d.dialogo_proyectos = selector
     app.elegir_proyectos()
     d.listar_proyectos, d.dialogo_proyectos = listar, dialogo
-    comprobar(not llamadas and len(r.get("selector") or []) == 7, "Proyectos… debe reutilizar la lectura: %s, %s" % (llamadas, r.get("selector")))
+    # 7 proyectos de Avid y 2 carpetas sin proyecto (RODAJE y material: antes de analizar no se sabe que son media enlazada)
+    comprobar(not llamadas and len(r.get("selector") or []) == 9, "Proyectos… debe reutilizar la lectura: %s, %s" % (llamadas, r.get("selector")))
     captura("1_disco.png")
     app.bt_analizar.invoke()
     comprobar(app.estado["ocupado"] == "analisis", "al pulsar Analizar debe quedar trabajando")

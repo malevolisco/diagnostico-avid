@@ -13,12 +13,12 @@
 
 Lo que no se puede comprobar sin un disco real está en "No verificable aquí", al final del diseño.
 
-**Diseño:** `docs/diseno_cualquier_disco.md` (aprobado por Adrián el 23/10/2026: "me encaja"). Si este plan y el diseño no coinciden, manda el diseño.
+**Diseño:** `docs/diseno_cualquier_disco.md` (aprobado el 23/10/2026). Si este plan y el diseño no coinciden, manda el diseño.
 
 **Restricciones comunes:**
 - Destino XDCAM HD422 50 Mb/s 1080i25 16:9; el disco de origen solo se lee.
 - Nada falla en silencio: lo que no se puede, se salta y se lista con el motivo.
-- Cada parte se fusiona por separado, con su build de Windows en verde, el escaneo Opsera antes de cada commit y los commits a nombre de Adrián.
+- Cada parte se fusiona por separado, con su build de Windows en verde y un análisis de seguridad antes de cada commit.
 - El disco simulado y `comprobar_resultado.py` crecen con cada parte.
 
 ---

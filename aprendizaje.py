@@ -1,4 +1,4 @@
-"""Aprender el origen del material de las decisiones de cada disco, sin internet (opción 1, Adrián, 25/10/2026).
+"""Aprender el origen del material de las decisiones de cada disco, sin internet.
 
 Cada vez que se guarda la pestaña "Origen del material", cada procedencia decidida (carpeta de importación y bin) se
 apunta con sus pistas: palabras de la carpeta y del bin, la forma de los nombres de fichero (IMG_####), la marca de

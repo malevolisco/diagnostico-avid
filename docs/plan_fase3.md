@@ -17,7 +17,7 @@ No verificado: cruce con MXF reales de Avid (codificación del UMID), códec rea
 
 ## Objetivo
 
-Que la primera ejecución sobre el disco real (persona sin conocimientos técnicos, sin Adrián delante) produzca un informe útil aunque algo falle, y que la exportación de brutos no pierda horas de trabajo por un fallo puntual. Que Adrián pueda corregir y redistribuir sin tocar el PC de destino.
+Que la primera ejecución sobre el disco real (persona sin conocimientos técnicos, sin nadie técnico delante) produzca un informe útil aunque algo falle, y que la exportación de brutos no pierda horas de trabajo por un fallo puntual. Que el autor pueda corregir y redistribuir sin tocar el PC de destino.
 
 ## Enfoque
 
@@ -28,11 +28,11 @@ Fuera de alcance: reconstruir secuencias/piezas montadas (requiere Avid); firma 
 ## Pasos de implementación
 
 ### Paso 1. Repo y CI (bloqueado por el usuario)
-- Adrián crea `malevolisco/diagnostico-avid` (privado, vacío). Se adjunta a la sesión, `git push`.
+- Se crea el repositorio `malevolisco/diagnostico-avid` y se sube el código.
 - En `construir.yml`, fijar ffmpeg a una release concreta de BtbN (URL con tag de fecha, no `latest`), anotando la versión en el LEEME. Reproducibilidad de cada release.
 - El workflow escribe `build.txt` (`build-<run_number> <sha corto> <fecha>`) y lo incluye con `--add-data "build.txt;."`. El programa lo lee desde `sys._MEIPASS` si está congelado (igual que `localizar_ffmpeg`), si no desde `carpeta_base()`, y si no existe usa `"local"`. Se muestra en el título de la ventana y en el pie del informe.
 - Verificar en Actions: build, prueba del .exe en Windows, release con `DiagnosticoAvid_portable.zip`.
-- Adrián descarga la release y la prueba en su PC con una carpeta que tenga su `.avp` + bins reales. Criterio: la ventana abre, el informe muestra 3 bins y 1.130 clips offline, el pie muestra el número de build.
+- Se descarga la release y se prueba en un PC con una carpeta que tenga su `.avp` + bins reales. Criterio: la ventana abre, el informe muestra 3 bins y 1.130 clips offline, el pie muestra el número de build.
 
 ### Paso 2. Resiliencia de la exportación (`exportar_brutos.py`, `diagnostico_avid.py`)
 - **Reestructurar**: el cuerpo del bucle de `exportar_todo` pasa a `exportar_proyecto(proyecto, clips, ..., modo_forzado=None) -> res`. `exportar_todo` solo agrupa, itera, reanuda y persiste.
@@ -61,10 +61,10 @@ Fuera de alcance: reconstruir secuencias/piezas montadas (requiere Avid); firma 
 - Casilla en la ventana (marcada por defecto): "Incluir miniaturas en el zip para enviar". Desmarcada, el zip lleva JSON, CSV, log e informe sin `miniaturas/` (el informe local sí las tiene). CLI: `--zip-sin-miniaturas`.
 
 ### Paso 5. Origen de material: APTN y otros
-- Añadir regla APTN en `PATRONES_ORIGEN_DEFECTO` cuando Adrián facilite un nombre de fichero real. Hasta entonces, nada.
+- Añadir regla APTN en `PATRONES_ORIGEN_DEFECTO` cuando haya un nombre de fichero real. Hasta entonces, nada.
 
 ### Paso 6. Protocolo de primera ejecución real (documentación)
-- `INSTRUCCIONES.txt`: primero solo análisis; enviar el zip; segunda ejecución con brutos solo cuando Adrián confirme; relanzar repite el análisis entero; cerrar Avid antes.
+- `INSTRUCCIONES.txt`: primero solo análisis; enviar el zip; segunda ejecución con brutos solo cuando el responsable lo confirme; relanzar repite el análisis entero; cerrar Avid antes.
 - `LEEME_tecnico.md`: lista de comprobación del primer zip: `modo_coincidencia` con modos exactos no vacíos; `formatos` y `productos`; `bins_ilegibles`; proporción offline y sus volúmenes; `clips_aproximados`/`ambiguos`; tiempos en `diagnostico.log`.
 
 ## Casos límite que sí cubrimos

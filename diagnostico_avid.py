@@ -1535,6 +1535,9 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
                  (r["huerfanos"], "clips huérfanos"), (r["offline"], "clips offline")]:
         h.append("<div class='kpi'><b>%s</b><span>%s</span></div>" % (esc(v), esc(k)))
     h.append("</div>")
+    if r.get("triaje") is not None and EXPORT_OK:
+        h.append("<p><a href='proyectos.html'><b>Qué proyectos restaurar</b></a>: %s.</p>"
+                 % esc(", ".join("%d %s" % (r["triaje"].get(v, 0), CUENTA_TRIAJE[v]) for v in CUENTA_TRIAJE)))
 
     h.append("<h2>Avisos</h2>")
     if not r["avisos"]:
@@ -1641,6 +1644,60 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
     (destino / "informe.html").write_text("\n".join(h), encoding="utf-8")
 
 
+OTROS_TRIAJE = {"agencia": ("de agencia", "de agencia"), "importado": ("importado", "importados"), "dudoso": ("dudoso", "dudosos"),
+                "sin vídeo": ("sin vídeo", "sin vídeo")}
+CUENTA_TRIAJE = {"restaurar": "para restaurar", "poco": "con poco material", "sin": "sin material de cámara"}
+
+
+def escribir_triaje(triaje, resumen, destino, cfg):
+    """Qué proyectos restaurar (exportar_brutos.triaje_proyectos): proyectos.html con una captura por clip de cámara,
+    proyectos.csv para Excel y triaje.json para la ventana (el selector de proyectos). Devuelve {veredicto: n}."""
+    otros = lambda t: ", ".join("%d %s" % (n, OTROS_TRIAJE.get(k, (k, k))[n != 1]) for k, n in sorted(t["otros"].items()))
+    cuenta = Counter(t["veredicto"] for t in triaje)
+    guardar_json(destino, "triaje.json", [{"proyecto": t["proyecto"], "veredicto": t["veredicto"], "clips": len(t["camara"]),
+                                           "segundos": round(t["segundos"], 1), "mas_largo": round(t["mas_largo"], 1),
+                                           "otros": dict(t["otros"])} for t in triaje])
+    with open(destino / "proyectos.csv", "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(["Proyecto", "Propuesta", "Clips de cámara", "Duración", "El más largo", "Otros clips"])
+        for t in triaje:
+            w.writerow([t["proyecto"], exportar_brutos.TRIAJE[t["veredicto"]], len(t["camara"]), fmt_duracion(t["segundos"]),
+                        fmt_duracion(t["mas_largo"]) if t["camara"] else "", otros(t)])
+    color = {"restaurar": "#e7f6ec", "poco": "#fffaeb", "sin": "#eef1f5"}
+    marca = lambda v: "<span class='tag' style='background:%s'>%s</span>" % (color[v], esc(exportar_brutos.TRIAJE[v]))
+    h = ["<!doctype html><html lang='es'><head><meta charset='utf-8'><title>Qué proyectos restaurar</title><style>%s</style></head><body>" % CSS,
+         "<header><h1>Qué proyectos restaurar</h1><p>%s &middot; analizado el %s</p></header><main>" % (esc(resumen["origen"]), esc(resumen["fecha"])),
+         "<div class='kpis'>"]
+    for v in exportar_brutos.TRIAJE:
+        h.append("<div class='kpi'><b>%d</b><span>%s</span></div>" % (cuenta.get(v, 0), esc(exportar_brutos.TRIAJE[v])))
+    h.append("</div><p class='muted'>Clips de cámara: los de tarjeta P2 y los de otras cámaras que reconoce el programa. No cuentan las "
+             "agencias, lo importado de fuera, lo dudoso ni los efectos hechos en Avid. Poco material: hasta %d clips de cámara y menos de "
+             "%d min en total (triaje_max_clips y triaje_max_minutos en config_brutos.json). Es una propuesta: decide mirando las "
+             "capturas. En el programa, 1 &middot; Disco &rarr; Proyectos&hellip; deja marcar solo los que se restauran.</p>"
+             % (int(cfg.get("triaje_max_clips", 2)), int(cfg.get("triaje_max_minutos", 2))))
+    h.append("<table><tr><th>Proyecto</th><th>Propuesta</th><th class='n'>Clips de cámara</th><th class='n'>Duración</th>"
+             "<th class='n'>El más largo</th><th>Otros clips</th></tr>")
+    for i, t in enumerate(triaje):
+        h.append("<tr><td><a href='#p%d'>%s</a></td><td>%s</td><td class='n'>%d</td><td class='n'>%s</td><td class='n'>%s</td><td>%s</td></tr>"
+                 % (i, esc(t["proyecto"]), marca(t["veredicto"]), len(t["camara"]), fmt_duracion(t["segundos"]),
+                    fmt_duracion(t["mas_largo"]) if t["camara"] else "", esc(otros(t))))
+    h.append("</table>")
+    for i, t in enumerate(triaje):
+        h.append("<h2 id='p%d'>%s %s</h2>" % (i, esc(t["proyecto"]), marca(t["veredicto"])))
+        if not t["camara"]:
+            h.append("<p class='muted'>Ningún clip de cámara%s.</p>" % (": " + esc(otros(t)) if t["otros"] else ""))
+            continue
+        h.append("<details%s><summary>%d clip%s de cámara &middot; %s%s</summary><div class='grid'>"
+                 % (" open" if len(t["camara"]) <= 24 else "", len(t["camara"]), "s" if len(t["camara"]) != 1 else "", fmt_duracion(t["segundos"]),
+                    " &middot; también " + esc(otros(t)) if t["otros"] else ""))
+        h.extend(tarjeta_clip(c) for c in t["camara"])
+        h.append("</div></details>")
+    h.append("<footer>Generado por diagnostico_avid.py v%s, %s. No se ha modificado nada en el disco de origen.</footer></main></body></html>" % (VERSION, esc(BUILD)))
+    (destino / "proyectos.html").write_text("\n".join(h), encoding="utf-8")
+    LOG.info("Qué proyectos restaurar: %s", ", ".join("%d %s" % (cuenta.get(v, 0), CUENTA_TRIAJE[v]) for v in CUENTA_TRIAJE))
+    return dict(cuenta)
+
+
 # ---------------------------------------------------------------------------
 # Orquestación
 # ---------------------------------------------------------------------------
@@ -1663,13 +1720,14 @@ def guardar_json(destino, nombre, datos):
 
 
 def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_miniaturas=0, abrir=True, brutos=None,
-             zip_miniaturas=True, proyectos_brutos=None, carpetas_media=(), solo_proyectos=None, usar_cache=True):
+             zip_miniaturas=True, proyectos_brutos=None, carpetas_media=(), solo_proyectos=None, usar_cache=True, capturas_camara=True):
     """proyectos_brutos: nombres de los proyectos de los que hacer brutos (None = todos; "SIN_PROYECTO" = clips sin bin);
     las miniaturas, solo de sus clips.
     solo_proyectos: analizar solo estos proyectos (None = el disco entero): se leen solo sus bins y, de los MXF, solo los
     suyos (se reconocen por la cabecera, sin ffprobe). Con SIN_PROYECTO, o sin pyavb, se analiza el disco entero: para
     saber qué clips no están en ningún bin hay que mirarlos todos.
-    usar_cache: lo ya leído con ffprobe en un análisis anterior del mismo disco no se repite (CacheMXF)."""
+    usar_cache: lo ya leído con ffprobe en un análisis anterior del mismo disco no se repite (CacheMXF).
+    capturas_camara: sin hacer_miniaturas, una captura de cada clip de cámara para proyectos.html (qué proyectos restaurar)."""
     origen = Path(origen)
     if not origen.exists():
         raise FileNotFoundError("No existe la carpeta de origen: %s" % origen)
@@ -1761,10 +1819,15 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
             clips = [c for c in clips if c["proyectos"] or c.get("proyectos_render")]
             cruce["huerfanos"] = []
 
+        cfg_origen = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json") if EXPORT_OK else None
         if hacer_miniaturas and ffmpeg_ok:
             progreso("5/6 Generando miniaturas...")
             elegidos = clips if proyectos_brutos is None or not EXPORT_OK else [c for c in clips if exportar_brutos.de_proyectos(c, proyectos_brutos)]
             miniaturas(elegidos, origen, ffmpeg, destino, progreso, max_miniaturas)
+        elif capturas_camara and ffmpeg_ok and EXPORT_OK:  # para decidir qué proyectos restaurar: solo lo de cámara
+            de_camara = [c for c in clips if not c.get("render") and exportar_brutos.clasificar(c, cfg_origen)[0] == "propio"]
+            progreso("5/6 Una captura de cada clip de cámara (%d) para decidir qué proyectos restaurar..." % len(de_camara))
+            miniaturas(de_camara, origen, ffmpeg, destino, progreso, max_miniaturas)
         else:
             progreso("5/6 Miniaturas omitidas.")
         guardar_json(destino, "clips.json", clips)
@@ -1809,6 +1872,9 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
             resumen["detenido"] = True
             resumen["avisos"].insert(0, {"nivel": "error", "texto": "%s Para seguir, exportar con las mismas carpetas: los terminados no se repiten."
                                          % (str(perdido) if perdido else "Exportación de brutos DETENIDA a mano: solo están los brutos de la tabla del final.")})
+        if EXPORT_OK:  # qué proyectos restaurar, antes del montaje
+            nombres = [p["nombre"] for p in proyectos] + ([] if solo else ["SIN_PROYECTO"] if cruce.get("huerfanos") else [])
+            resumen["triaje"] = escribir_triaje(exportar_brutos.triaje_proyectos(clips, cfg_origen, nombres), resumen, destino, cfg_origen)
         guardar_json(destino, "resumen.json", resumen)
         informe_html(resumen, proyectos, bins, clips, cruce, destino)
 
@@ -1992,23 +2058,38 @@ def brutos_hechos(carpeta):
         return set()
 
 
-def dialogo_proyectos(raiz, lista, marcados, hechos=()):
+def texto_triaje(t):
+    """Lo que dice el selector de proyectos de un proyecto analizado: '· Restaurar: 23 clips de cámara, 1 h 05 min'."""
+    if not t or not EXPORT_OK:
+        return ""
+    if not t.get("clips"):
+        return "   · " + exportar_brutos.TRIAJE["sin"]
+    return "   · %s: %d clip%s de cámara, %s" % (exportar_brutos.TRIAJE.get(t.get("veredicto"), "?"), t["clips"], "s" if t["clips"] != 1 else "",
+                                           fmt_duracion(t.get("segundos")))
+
+
+def dialogo_proyectos(raiz, lista, marcados, hechos=(), triaje=None):
     """Ventana con la lista de proyectos para marcar los que se quieren hacer. Devuelve los nombres elegidos
-    (en el orden de la lista) o None si se cancela. marcados: los elegidos antes (None = todos)."""
+    (en el orden de la lista) o None si se cancela. marcados: los elegidos antes (None = todos). triaje: {proyecto: fila
+    de triaje.json} del último análisis (qué proyectos restaurar): sale en cada fila y da el botón "Solo los de material"."""
     import tkinter as tk
     from tkinter import ttk
     import tema
-    filas = [(p["nombre"], "%s   (%d bins%s)%s" % (p["nombre"], p["bins"], ", último cambio " + p["modificado"][:10] if p["modificado"] else "",
-                                                     "   ✓ ya tiene brutos" if p["nombre"] in hechos else ""))
+    triaje = triaje or {}
+    filas = [(p["nombre"], "%s   (%d bins%s)%s%s" % (p["nombre"], p["bins"], ", último cambio " + p["modificado"][:10] if p["modificado"] else "",
+                                                       texto_triaje(triaje.get(p["nombre"])), "   ✓ ya tiene brutos" if p["nombre"] in hechos else ""))
              for p in lista]
-    filas.append(("SIN_PROYECTO", "SIN_PROYECTO   (clips que no están en ningún bin)%s" % ("   ✓ ya tiene brutos" if "SIN_PROYECTO" in hechos else "")))
+    filas.append(("SIN_PROYECTO", "SIN_PROYECTO   (clips que no están en ningún bin)%s%s"
+                  % (texto_triaje(triaje.get("SIN_PROYECTO")), "   ✓ ya tiene brutos" if "SIN_PROYECTO" in hechos else "")))
     v = tk.Toplevel(raiz)
     v.title("Elegir proyectos")
-    v.geometry("720x540")
+    v.geometry("880x540" if triaje else "720x540")
     v.configure(bg=tema.FONDO)
     v.transient(raiz)
     ttk.Label(v, text="%d proyectos en el disco. Marca los que quieres hacer ahora (clic para marcar o desmarcar): se analizan\n"
-                      "y exportan solo esos. Los demás se pueden hacer otro día con la misma carpeta de brutos." % len(lista),
+                      "y exportan solo esos. Los demás se pueden hacer otro día con la misma carpeta de brutos." % len(lista)
+                      + ("\nAl lado, lo que propone el último análisis (Qué proyectos restaurar): \"Solo los de material\" marca los de restaurar."
+                         if triaje else ""),
               padding=12).pack(anchor="w")
     caja = ttk.Frame(v, padding=(12, 0))
     caja.pack(fill="both", expand=True)
@@ -2031,6 +2112,9 @@ def dialogo_proyectos(raiz, lista, marcados, hechos=()):
     ttk.Button(pie, text="Todos", command=lambda: lb.selection_set(0, "end")).pack(side="left")
     ttk.Button(pie, text="Ninguno", command=lambda: lb.selection_clear(0, "end")).pack(side="left", padx=6)
     ttk.Button(pie, text="Solo los que faltan", command=lambda: [lb.selection_clear(0, "end")] + [lb.selection_set(i) for i, (n, _) in enumerate(filas) if n not in hechos]).pack(side="left")
+    if triaje:  # qué proyectos restaurar, según el último análisis
+        ttk.Button(pie, text="Solo los de material", command=lambda: [lb.selection_clear(0, "end")] + [
+            lb.selection_set(i) for i, (n, _) in enumerate(filas) if (triaje.get(n) or {}).get("veredicto") == "restaurar"]).pack(side="left", padx=6)
     ttk.Button(pie, text="Aceptar", style="Elegido.TButton", command=aceptar).pack(side="right")
     ttk.Button(pie, text="Cancelar", style="Fantasma.TButton", command=v.destroy).pack(side="right", padx=6)
     v.grab_set()
@@ -2055,6 +2139,7 @@ def main():
     ap.add_argument("--destino", help="Carpeta donde dejar el informe")
     ap.add_argument("--sin-gui", action="store_true", help="No abrir ventana; requiere --origen y --destino")
     ap.add_argument("--sin-miniaturas", action="store_true", help="No generar miniaturas")
+    ap.add_argument("--sin-capturas", action="store_true", help="Sin miniaturas, tampoco la captura de cada clip de cámara (proyectos.html)")
     ap.add_argument("--max-miniaturas", type=int, default=0, help="Limitar el número de miniaturas (0 = todas)")
     ap.add_argument("--no-abrir", action="store_true", help="No abrir el informe en el navegador al terminar")
     ap.add_argument("--brutos", help="Carpeta donde exportar un MXF por proyecto (fase 2)")
@@ -2100,7 +2185,7 @@ def main():
         ejecutar(args.origen, args.destino, hacer_miniaturas=not args.sin_miniaturas,
                  max_miniaturas=args.max_miniaturas, abrir=not args.no_abrir, brutos=args.brutos,
                  zip_miniaturas=not args.zip_sin_miniaturas, proyectos_brutos=elegidos, solo_proyectos=elegidos,
-                 usar_cache=not args.sin_cache,
+                 usar_cache=not args.sin_cache, capturas_camara=not args.sin_capturas,
                  carpetas_media=[x.strip() for x in args.media_extra.split(";") if x.strip()] if args.media_extra else ())
         return
     try:

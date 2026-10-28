@@ -85,6 +85,9 @@ CONFIG_DEFECTO = {
     "_camara_propia_regex": "Ficheros de cámara propia importados desde una carpeta del PC (no desde la tarjeta): son material aunque el bin no guarde una ruta de tarjeta. Se mira el nombre del fichero que guarda el bin. Por defecto: dron DJI, Sony (C0001), Canon (MVI_), GoPro, Panasonic (P1000123), Nikon (DSC_), Zoom (MAH), ARRI/Blackmagic (A001C002). Los del móvil (IMG_) siguen siendo importados",
     "bins_agencia_regex": r"agencia|reuters|\bafp\b|\befe\b|\bap\b|eurovisi|\bebu\b|xinhua|\bcctv\b|\bcgtn\b",
     "_bins_agencia_regex": "Bins cuyo nombre indica material de agencia (p. ej. '20260916 agencias.avb'): lo que hay en ellos y no es de cámara cuenta como agencia",
+    "triaje_max_clips": 2,
+    "triaje_max_minutos": 2,
+    "_triaje": "Listado para decidir qué proyectos restaurar (proyectos.html del análisis): un proyecto con hasta triaje_max_clips clips de cámara y menos de triaje_max_minutos en total sale como 'Poco material: ¿descartar?'",
     "nombres_agencia_regex": r"(?<![a-z0-9])(reuters|rtr[a-z0-9]*|afp|efe|aptn|associated[ _-]?press|europa[ _-]?press|eurovisi[oó]n|evn|ebu|xinhua|cctv|cgtn)(?![a-z])",
     "_nombres_agencia_regex": "Indicativos de agencia en el nombre del clip (en el bin o en el MXF) o del fichero importado: Reuters (RTRMADV...), AFP, EFE... Si sale, el clip es de agencia aunque sus metadatos digan cámara (lo elegido a mano en 'Origen del material' sigue mandando). Vacío = no se mira",
     "reglas_origen": [],
@@ -652,6 +655,40 @@ def clasificar(c, cfg):
     if clases <= {"agencia", "importado"}:
         return "agencia", motivos, True
     return "dudoso", "pistas contrarias: " + motivos, False
+
+
+TRIAJE = {"restaurar": "Restaurar", "poco": "Poco material: ¿descartar?", "sin": "Sin material de cámara"}
+
+
+def triaje_proyectos(clips, cfg, proyectos=()):
+    """Para decidir qué proyectos restaurar antes del montaje (Adrián, 28/10/2026: "localizar los que solo tienen uno o
+    dos ficheros de tarjeta cortos"). Por proyecto, sus clips de cámara (clasificar: propio; sin agencias, importados,
+    dudosos ni efectos de Avid), cuántos son y cuánto duran, y un veredicto: sin (ninguno), poco (hasta
+    triaje_max_clips y menos de triaje_max_minutos en total) o restaurar. Un clip en varios proyectos cuenta en todos;
+    uno sin bin, en SIN_PROYECTO. proyectos: los del disco, para que salgan también los que no tienen ningún clip.
+    Devuelve una lista ordenada (restaurar, poco, sin; dentro, por nombre) de dicts con proyecto, veredicto, camara
+    (clips, por nombre), segundos, mas_largo y otros (Counter de las demás clases)."""
+    max_clips = int(cfg.get("triaje_max_clips", CONFIG_DEFECTO["triaje_max_clips"]))
+    max_seg = float(cfg.get("triaje_max_minutos", CONFIG_DEFECTO["triaje_max_minutos"])) * 60
+    por = {p: {"proyecto": p, "camara": [], "otros": Counter()} for p in proyectos}
+    for c in clips:
+        if c.get("render"):
+            continue
+        clase = clasificar(c, cfg)[0]
+        for p in c.get("proyectos") or ["SIN_PROYECTO"]:
+            t = por.setdefault(p, {"proyecto": p, "camara": [], "otros": Counter()})
+            if clase == "propio" and c.get("fichero_video"):
+                t["camara"].append(c)
+            else:
+                t["otros"][clase if c.get("fichero_video") else "sin vídeo"] += 1
+    orden = list(TRIAJE)
+    for t in por.values():
+        t["camara"].sort(key=lambda c: c["nombre"])
+        duraciones = [c.get("duracion") or 0 for c in t["camara"]]
+        t["segundos"], t["mas_largo"] = sum(duraciones), max(duraciones, default=0)
+        t["veredicto"] = ("sin" if not t["camara"] else
+                          "poco" if len(t["camara"]) <= max_clips and t["segundos"] < max_seg else "restaurar")
+    return sorted(por.values(), key=lambda t: (orden.index(t["veredicto"]), t["proyecto"].lower()))
 
 
 def texto_origen(clase, motivo, seguro):

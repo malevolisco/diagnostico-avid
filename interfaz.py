@@ -100,6 +100,7 @@ class App:
         self.brutos = tk.StringVar()
         self.minis = tk.BooleanVar(value=True)
         self.zip_minis = tk.BooleanVar(value=True)
+        self.capturas = tk.BooleanVar(value=True)
         self.seguido = tk.BooleanVar(value=False)
         self.cola = queue.Queue()
         self.estado = {"ocupado": None, "cerrar": False, "proyectos": None, "media_extra": []}  # ocupado: None | "analisis" | "exportacion" | "actualizacion"
@@ -283,6 +284,7 @@ class App:
         self.bt_avanzadas.pack(side="right")
         self.avanzadas = ttk.Frame(izq, style="Panel.TFrame", padding=(14, 10))
         for texto, var in (("Miniaturas de cada clip para el informe (más lento; el visor del montaje no las necesita)", self.minis),
+                           ("Sin miniaturas, al menos una captura de cada clip de cámara para decidir qué proyectos restaurar", self.capturas),
                            ("Incluir las miniaturas en el zip para enviar (desmarcado: el zip solo lleva texto)", self.zip_minis),
                            ("Analizar y exportar seguido: exporta los brutos sin pasar por Montaje ni Exportar", self.seguido)):
             ttk.Checkbutton(self.avanzadas, text=texto, variable=var, style="Panel.TCheckbutton").pack(anchor="w", pady=1)
@@ -299,6 +301,8 @@ class App:
         self.lbl_ultimo.pack(anchor="w")
         self.bt_informe = ttk.Button(t, text="Abrir el informe", command=self.abrir_informe)
         self.bt_informe.pack(anchor="w", pady=(10, 0))
+        self.bt_triaje = ttk.Button(t, text="Qué proyectos restaurar", command=self.abrir_triaje)
+        self.bt_triaje.pack(anchor="w", pady=(6, 0))
         t = tema.Tarjeta(der, "Siguiente paso")
         t.pack(fill="x", pady=(14, 0))
         self.lbl_siguiente = ttk.Label(t, text="", style="Tarjeta.TLabel", wraplength=ancho, justify="left")
@@ -397,6 +401,7 @@ class App:
             self.lbl_ultimo.configure(text="Todavía no hay análisis de este disco en la carpeta del informe."
                                       if self.origen.get() else "Elige el disco de Avid.")
             self.bt_informe.state(["disabled"])
+            self.bt_triaje.state(["disabled"])
             self.lbl_siguiente.configure(text="Pulsa \"Analizar disco\". Tarda de minutos a horas según el disco; se puede detener.")
             self.bt_siguiente.state(["disabled"])
             return
@@ -408,12 +413,19 @@ class App:
         parcial = r.get("parcial")
         solo = ("Solo %d de %d proyectos: %s\n" % (len(parcial["proyectos"]), parcial["proyectos_disco"], ", ".join(parcial["proyectos"]))
                 if parcial else "")
-        self.lbl_ultimo.configure(text="%s\n\n%s%s proyectos · %s clips · %s de material\n%s GB de media · %s bins (%s ilegibles)\nCarpeta: %s"
+        tri = r.get("triaje")
+        tri = ("\nPara restaurar %d · poco material %d · sin cámara %d" % (tri.get("restaurar", 0), tri.get("poco", 0), tri.get("sin", 0))
+               if tri is not None else "")
+        self.lbl_ultimo.configure(text="%s\n\n%s%s proyectos · %s clips · %s de material\n%s GB de media · %s bins (%s ilegibles)%s\nCarpeta: %s"
                                   % (r.get("fecha", "?"), solo[:200], r.get("proyectos", "?"), r.get("clips_fisicos", "?"), horas,
-                                     r.get("gb_media", "?"), r.get("bins", "?"), r.get("bins_ilegibles", 0), carpeta.name))
+                                     r.get("gb_media", "?"), r.get("bins", "?"), r.get("bins_ilegibles", 0), tri, carpeta.name))
         self.bt_informe.state(["!disabled"])
+        self.bt_triaje.state(["!disabled"] if (carpeta / "proyectos.html").exists() else ["disabled"])
         if self.brutos.get():
-            self.lbl_siguiente.configure(text="Revisa los brutos en Montaje (opcional) y expórtalos en Exportar.")
+            self.lbl_siguiente.configure(text="Mira \"Qué proyectos restaurar\" y marca en Proyectos… los que sí. Luego, "
+                                      "revisa los brutos en Montaje (opcional) y expórtalos en Exportar."
+                                      if (carpeta / "proyectos.html").exists() else
+                                      "Revisa los brutos en Montaje (opcional) y expórtalos en Exportar.")
             self.bt_siguiente.state(["!disabled"])
         else:
             self.lbl_siguiente.configure(text="Elige la carpeta de brutos para seguir con Montaje y Exportar.")
@@ -422,6 +434,18 @@ class App:
     def abrir_informe(self):
         if self.ultimo and (self.ultimo / "informe.html").exists():
             webbrowser.open((self.ultimo / "informe.html").resolve().as_uri())
+
+    def abrir_triaje(self):
+        if self.ultimo and (self.ultimo / "proyectos.html").exists():
+            webbrowser.open((self.ultimo / "proyectos.html").resolve().as_uri())
+
+    def triaje_actual(self):
+        """{proyecto: fila de triaje.json} del último análisis de este disco (qué proyectos restaurar), o {}."""
+        carpeta = self.analisis_actual()
+        try:
+            return {t["proyecto"]: t for t in json.loads((carpeta / "triaje.json").read_text(encoding="utf-8"))} if carpeta else {}
+        except (OSError, ValueError, KeyError, TypeError):
+            return {}
 
     def elegir_proyectos(self):
         from tkinter import messagebox
@@ -439,7 +463,7 @@ class App:
             finally:
                 self.raiz.configure(cursor="")
         hechos = da.brutos_hechos(self.brutos.get()) if self.brutos.get() else set()
-        elegidos = da.dialogo_proyectos(self.raiz, lista, self.estado["proyectos"], hechos)
+        elegidos = da.dialogo_proyectos(self.raiz, lista, self.estado["proyectos"], hechos, self.triaje_actual())
         if elegidos is None:
             return
         todos = [p["nombre"] for p in lista] + ["SIN_PROYECTO"]
@@ -474,7 +498,7 @@ class App:
         self.ocupar("analisis")
         self.escribe("— %s —" % da.ahora_txt())
         # las variables de tkinter se leen aquí: el hilo no puede tocarlas
-        datos = dict(origen=self.origen.get(), destino_base=self.destino.get(), hacer_miniaturas=self.minis.get(),
+        datos = dict(origen=self.origen.get(), destino_base=self.destino.get(), hacer_miniaturas=self.minis.get(), capturas_camara=self.capturas.get(),
                      brutos=self.brutos.get() if seguido else None, zip_miniaturas=self.zip_minis.get(),
                      proyectos_brutos=self.estado["proyectos"] if seguido else None, carpetas_media=list(self.estado["media_extra"]),
                      solo_proyectos=self.estado["proyectos"])

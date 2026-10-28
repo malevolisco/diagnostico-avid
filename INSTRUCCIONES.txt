@@ -87,6 +87,22 @@ Página 1 · Disco
    - un fichero   Diagnostico_<disco>_<fecha>.zip
    A la derecha, "Último análisis de este disco" resume lo encontrado, y
    "Siguiente paso" lleva al montaje.
+   QUÉ PROYECTOS RESTAURAR (antes de pasar al montaje): el botón "Qué
+   proyectos restaurar" abre un listado (proyectos.html en la carpeta
+   del informe; proyectos.csv para Excel) con cada proyecto, sus clips
+   de cámara (P2 y otras cámaras; sin agencias, importados, dudosos ni
+   efectos de Avid) y una captura de cada uno. Propone:
+   - "Restaurar": tiene material de verdad.
+   - "Poco material: ¿descartar?": uno o dos clips de cámara y menos de
+     2 minutos en total.
+   - "Sin material de cámara": ninguno.
+   Es una propuesta: decide mirando las capturas. Luego, en
+   "Proyectos...", el botón "Solo los de material" marca los de
+   "Restaurar" (puedes añadir o quitar a mano) y Montaje y Exportar
+   trabajan solo con los marcados. No hace falta volver a analizar.
+   Las capturas se hacen aunque no pidas miniaturas (una por clip de
+   cámara). Para no hacerlas: Opciones avanzadas, desmarca "Sin
+   miniaturas, al menos una captura de cada clip de cámara...".
 6. Envía el fichero .zip del informe. Es pequeño (texto y miniaturas, sin vídeo).
    Si te piden enviarlo sin imágenes, abre "Opciones avanzadas" antes de
    empezar y desmarca "Incluir las miniaturas en el zip para enviar".

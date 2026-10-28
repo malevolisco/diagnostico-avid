@@ -1368,6 +1368,79 @@ class PantallaDeOrigen(unittest.TestCase):
             da.carpeta_base = original
 
 
+class QueProyectosRestaurar(unittest.TestCase):
+    """Adrián, 28/10/2026: antes del montaje, por proyecto, los clips de cámara (P2, no agencias) con una captura de
+    cada uno, y los que solo tienen uno o dos clips cortos marcados para descartar."""
+
+    def setUp(self):
+        self.cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+
+    def clip(self, nombre, proyectos, segundos, **kw):
+        return dict({"clave": "K" + nombre, "nombre": nombre, "proyectos": list(proyectos), "duracion": segundos,
+                     "fichero_video": "MXF/%s.mxf" % nombre, "origen": "Sin determinar", "bins": ["b.avb"],
+                     "num_video": 1, "num_audio": 2, "timecode": "10:00:00:00"}, **kw)
+
+    def clips(self):
+        return [self.clip("0001AB", ["GRANDE"], 600), self.clip("0002AB", ["GRANDE"], 300), self.clip("0003AB", ["GRANDE"], 30),
+                self.clip("0004AB", ["CORTO"], 20), self.clip("0005AB", ["CORTO"], 40),
+                self.clip("REUTERS SISMO", ["CORTO"], 900), self.clip("RTR_X", ["AGENCIAS"], 900),
+                self.clip("PANTALLA PARTIDA", ["AGENCIAS"], 50),
+                self.clip("0006AB", ["LARGO"], 200),  # uno solo, pero largo
+                self.clip("0007AB", ["DOS"], 50), self.clip("0007AC", ["DOS", "GRANDE"], 80),  # en dos proyectos: cuenta en los dos
+                self.clip("X,Dissolve,1", ["GRANDE"], 1, render=True),
+                self.clip("0009AB", [], 30), self.clip("0010AB", ["GRANDE"], 0, fichero_video=None)]
+
+    def test_veredicto_por_proyecto(self):
+        t = {x["proyecto"]: x for x in eb.triaje_proyectos(self.clips(), self.cfg, ["GRANDE", "CORTO", "AGENCIAS", "LARGO", "DOS", "VACIO"])}
+        self.assertEqual({k: v["veredicto"] for k, v in t.items()},
+                         {"GRANDE": "restaurar", "CORTO": "poco", "AGENCIAS": "sin", "LARGO": "restaurar", "DOS": "restaurar",
+                          "VACIO": "sin", "SIN_PROYECTO": "poco"})
+        self.assertEqual([c["nombre"] for c in t["GRANDE"]["camara"]], ["0001AB", "0002AB", "0003AB", "0007AC"])
+        self.assertEqual((t["GRANDE"]["segundos"], t["GRANDE"]["mas_largo"]), (1010, 600))
+        self.assertEqual(t["GRANDE"]["otros"], {"sin vídeo": 1})  # el render no cuenta
+        self.assertEqual([c["nombre"] for c in t["CORTO"]["camara"]], ["0004AB", "0005AB"])  # Reuters no es de cámara
+        self.assertEqual(t["CORTO"]["otros"], {"agencia": 1})
+        self.assertEqual(t["AGENCIAS"]["otros"], {"agencia": 1, "dudoso": 1})
+        self.assertEqual(t["DOS"]["segundos"], 130)  # dos clips, pero 2 min 10 s: no es poco
+        # Orden: restaurar, poco, sin; dentro, por nombre
+        self.assertEqual([x["proyecto"] for x in eb.triaje_proyectos(self.clips(), self.cfg, ["GRANDE", "CORTO", "AGENCIAS", "LARGO", "DOS", "VACIO"])],
+                         ["DOS", "GRANDE", "LARGO", "CORTO", "SIN_PROYECTO", "AGENCIAS", "VACIO"])
+        # Los umbrales se cambian en config_brutos.json
+        t = {x["proyecto"]: x["veredicto"] for x in eb.triaje_proyectos(self.clips(), dict(self.cfg, triaje_max_clips=3, triaje_max_minutos=5))}
+        self.assertEqual((t["DOS"], t["LARGO"], t["GRANDE"]), ("poco", "poco", "restaurar"))
+        # Lo elegido a mano en Origen del material cuenta: lo dudoso marcado "Entra" es de cámara
+        cfg = dict(self.cfg, decisiones_origen=[{"carpeta": "", "bin": "b.avb", "clase": "propio"}])
+        t = {x["proyecto"]: x for x in eb.triaje_proyectos(self.clips(), cfg)}
+        self.assertIn("PANTALLA PARTIDA", [c["nombre"] for c in t["AGENCIAS"]["camara"]])
+
+    @unittest.skipIf(da is None, "sin pyavb")
+    def test_listado_html_csv_y_json(self):
+        d = Path(tempfile.mkdtemp())
+        try:
+            cs = self.clips()
+            cs[0]["miniatura"] = "miniaturas/00000_0001AB.jpg"
+            triaje = eb.triaje_proyectos(cs, self.cfg, ["GRANDE", "CORTO", "AGENCIAS"])
+            cuenta = da.escribir_triaje(triaje, {"origen": "E:\\", "fecha": "28/10/2026"}, d, self.cfg)
+            self.assertEqual(cuenta, {"restaurar": 3, "poco": 2, "sin": 1})
+            html = (d / "proyectos.html").read_text(encoding="utf-8")
+            self.assertIn("Qué proyectos restaurar", html)
+            self.assertIn("miniaturas/00000_0001AB.jpg", html)
+            self.assertIn("Poco material: ¿descartar?", html)
+            self.assertNotIn("REUTERS SISMO", html.split("<table>")[1].split("</table>")[1])  # sin captura de la agencia
+            self.assertIn("1 de agencia", html)
+            filas = (d / "proyectos.csv").read_text(encoding="utf-8-sig").splitlines()
+            self.assertEqual(filas[0], "Proyecto;Propuesta;Clips de cámara;Duración;El más largo;Otros clips")
+            self.assertTrue(filas[1].startswith("DOS;Restaurar;2;"))
+            datos = {t["proyecto"]: t for t in json.loads((d / "triaje.json").read_text(encoding="utf-8"))}
+            self.assertEqual((datos["CORTO"]["veredicto"], datos["CORTO"]["clips"], datos["CORTO"]["segundos"]), ("poco", 2, 60))
+            # Lo que dice el selector de proyectos
+            self.assertEqual(da.texto_triaje(datos["CORTO"]), "   · Poco material: ¿descartar?: 2 clips de cámara, %s" % da.fmt_duracion(60))
+            self.assertEqual(da.texto_triaje(datos["AGENCIAS"]), "   · Sin material de cámara")
+            self.assertEqual(da.texto_triaje(None), "")
+        finally:
+            shutil.rmtree(d)
+
+
 class AnalisisParcial(unittest.TestCase):
     def test_proyectos_fuera_del_analisis(self):
         import diagnostico_avid as da

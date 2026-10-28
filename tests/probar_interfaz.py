@@ -123,7 +123,7 @@ def disco_leido():
     llamadas = []
     listar, dialogo = d.listar_proyectos, d.dialogo_proyectos
 
-    def selector(raiz, lista, elegidos, hechos):  # en vez del diálogo: apunta lo que se le ofrece y cancela
+    def selector(raiz, lista, elegidos, hechos, triaje=None):  # en vez del diálogo: apunta lo que se le ofrece y cancela
         r["selector"] = [p["nombre"] for p in lista]
         return None
 
@@ -141,6 +141,11 @@ def disco_leido():
 @seguro
 def montaje():
     comprobar("proyectos" in app.lbl_ultimo.cget("text"), "la tarjeta Último análisis no se ha rellenado: %r" % app.lbl_ultimo.cget("text"))
+    # Qué proyectos restaurar: botón activo, resumen en la tarjeta y la propuesta de cada proyecto en el selector
+    comprobar(not app.bt_triaje.instate(["disabled"]) and (app.ultimo / "proyectos.html").exists(), "falta el listado de qué restaurar")
+    comprobar("Para restaurar" in app.lbl_ultimo.cget("text"), "la tarjeta no dice qué restaurar: %r" % app.lbl_ultimo.cget("text"))
+    tri = app.triaje_actual()
+    comprobar(tri.get("NTSC", {}).get("clips") == 2 and tri["NTSC"].get("veredicto") in ("poco", "restaurar"), "triaje de NTSC: %s" % tri.get("NTSC"))
     captura("2_disco_analizado.png")
     cabe("disco")
     app.ir("montaje")

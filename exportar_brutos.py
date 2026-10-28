@@ -1984,6 +1984,7 @@ def acabado_profesional(res, salida, plan, cfg, ffprobe, inicio, segundos, progr
             try:
                 empaquetar_rdd9([bmx], salida, parar=True)
                 res["rdd9"] = True
+                res["bytes"] = salida.stat().st_size  # crece unos KB: al reanudar se compara con este
             except Detenido:
                 raise
             except Exception as e:

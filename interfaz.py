@@ -401,13 +401,15 @@ class App:
 
     def pintar_proyectos(self):
         p = self.estado["proyectos"]
-        if p is None:
+        if p is None:  # el análisis inicial al recibir un disco: todo, sin elegir aún ningún proyecto
             self.bt_proy.configure(text="☰  Elegir proyectos: todos")
-            self.lbl_proy.configure(text="Se analizan todos los proyectos del disco.")
+            self.lbl_proy.configure(text="Análisis inicial: todo el disco, sin elegir aún.")
+            self.bt_analizar.configure(text="Analizar todo el disco")
         else:
             self.bt_proy.configure(text="☰  Elegir proyectos: %d de %d" % (len(p), self.estado.get("total_proyectos", len(p))))
             texto = "Solo " + ", ".join(p)
             self.lbl_proy.configure(text=texto[:90] + ("…" if len(texto) > 90 else ""))
+            self.bt_analizar.configure(text="Analizar %d proyecto%s" % (len(p), "" if len(p) == 1 else "s"))
 
     def analisis_actual(self):
         """Carpeta del último análisis del disco elegido en la carpeta del informe, o None."""
@@ -447,10 +449,12 @@ class App:
         self.bt_informe.state(["!disabled"])
         self.bt_triaje.state(["!disabled"] if (carpeta / "proyectos.html").exists() else ["disabled"])
         if self.brutos.get():
-            self.lbl_siguiente.configure(text="Mira \"Qué proyectos restaurar\" y marca en \"Elegir proyectos\" los que sí. Luego, "
-                                      "revisa los brutos en Montaje (opcional) y expórtalos en Exportar."
-                                      if (carpeta / "proyectos.html").exists() else
-                                      "Revisa los brutos en Montaje (opcional) y expórtalos en Exportar.")
+            self.lbl_siguiente.configure(text=("Todo el disco está analizado y enlazado: en Montaje eliges cada proyecto, sin volver a "
+                                               "analizar. " if not parcial else "")
+                                         + ("Mira \"Qué proyectos restaurar\" y marca en \"Elegir proyectos\" los que sí. Luego, "
+                                            "revisa los brutos en Montaje (opcional) y expórtalos en Exportar."
+                                            if (carpeta / "proyectos.html").exists() else
+                                            "Revisa los brutos en Montaje (opcional) y expórtalos en Exportar."))
             self.bt_siguiente.state(["!disabled"])
         else:
             self.lbl_siguiente.configure(text="Elige la carpeta de brutos para seguir con Montaje y Exportar.")

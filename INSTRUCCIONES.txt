@@ -73,7 +73,11 @@ Página 1 · Disco
    disco": Montaje y Exportar avisan si el análisis no lo tiene.
    SIN_PROYECTO (clips que no están en ningún bin) obliga a mirar el disco
    entero.
-4. Pulsa "Analizar disco" (el botón naranja). En el recuadro de abajo irá
+   ANÁLISIS INICIAL AL RECIBIR UN DISCO: deja "Elegir proyectos: todos" y
+   pulsa "Analizar todo el disco". Analiza y enlaza todo una vez; luego
+   cada proyecto se abre en Montaje directamente, sin volver a analizar.
+4. Pulsa "Analizar todo el disco" (o "Analizar N proyectos" si has
+   elegido algunos; el botón naranja). En el recuadro de abajo irá
    apareciendo lo que hace. De minutos a una hora según el número de
    ficheros. El programa impide que el ordenador se suspenda mientras
    trabaja, pero si es un portátil déjalo enchufado.

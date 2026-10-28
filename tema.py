@@ -95,6 +95,11 @@ def aplicar(raiz):
                 font=letras["negrita"], padding=(18, 6))
     e.map("Elegido.TButton", background=[("disabled", BOTON), ("active", ACENTO_ENCIMA)], foreground=[("disabled", "#6b6f75")],
           bordercolor=[("disabled", BORDE_CLARO)], lightcolor=[("disabled", BOTON)], darkcolor=[("disabled", BOTON)])
+    # Botón que tiene que verse sin ser el principal (Elegir proyectos): borde naranja, letra en negrita y algo más grande
+    e.configure("Destacado.TButton", background=BOTON, foreground=TEXTO, bordercolor=ACENTO, lightcolor=BOTON, darkcolor=BOTON,
+                font=letras["grande"], padding=(18, 8), borderwidth=2)
+    e.map("Destacado.TButton", background=[("disabled", PANEL), ("pressed", BOTON_ENCIMA), ("active", BOTON_ENCIMA)],
+          foreground=[("disabled", "#6b6f75")])
     e.configure("Accion.TButton", padding=(9, 4), width=-6)  # cada uno lo que mide su texto (el tema pide 11 letras)
     # botones de acción en una pantalla pequeña: sin el ancho mínimo del tema (11 letras), cada uno lo que mide su texto
     e.configure("Compacta.TButton", padding=(6, 3), font=letras["pequena"], width=-4)

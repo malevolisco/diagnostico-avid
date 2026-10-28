@@ -230,6 +230,7 @@ class PantallaMontaje:
             self.tv["displaycolumns"] = ("n", "clip", "fecha", "dur", "origen")
         self.tv.tag_configure("movido", foreground=tema.ACENTO)
         self.tv.tag_configure("audio", foreground=tema.SUAVE)
+        self.tv.tag_configure("sinaudio", foreground=tema.ACENTO)  # clip con vídeo y sin ninguna pista de sonido
         sb = ttk.Scrollbar(tabla, orient="vertical", command=self.tv.yview)
         self.tv.configure(yscrollcommand=sb.set)
         self.tv.pack(side="left", fill="both", expand=True)
@@ -346,9 +347,11 @@ class PantallaMontaje:
         movidos = self.m.movidos(self.p)
         for n, (c, _, d) in enumerate(self.tramos()):
             f = self.m.fecha(c)
-            tags = ("movido",) if c.get("clave") in movidos else ("audio",) if not c.get("fichero_video") else ()
+            sin_audio = bool(c.get("fichero_video")) and not c.get("num_audio")
+            tags = (("movido",) if c.get("clave") in movidos else ("audio",) if not c.get("fichero_video") else
+                    ("sinaudio",) if sin_audio else ())
             self.tv.insert("", "end", iid=str(n), tags=tags, values=(
-                n + 1, c["nombre"] + ("" if c.get("fichero_video") else "  (solo audio: no se exporta)"),
+                n + 1, c["nombre"] + ("" if c.get("fichero_video") else "  (solo audio: no se exporta)") + ("  (SIN AUDIO)" if sin_audio else ""),
                 f.strftime("%d/%m/%Y %H:%M:%S") if f else "sin fecha", fmt_h(d), c.get("origen_texto") or c.get("origen") or "",
                 "movido a mano" if c.get("clave") in movidos else "automático"))
             self.claves_tv.append(c.get("clave"))
@@ -471,11 +474,12 @@ class PantallaMontaje:
         valores = {"fecha": f.strftime("%d/%m/%Y %H:%M:%S") if f else "sin fecha", "tc": c.get("timecode") or "—",
                    "dur": fmt_h(duracion_visible(c)),
                    "formato": " · ".join(str(x) for x in (c.get("codec_video"), c.get("resolucion")) if x) or "—",
-                   "audio": "%s pistas" % (c.get("num_audio") or 0), "origen": (c.get("origen_texto") or c.get("origen") or "—") + ("\n" + c["origen_motivo"] if c.get("origen_motivo") else ""),
+                   "audio": "%s pistas" % c["num_audio"] if c.get("num_audio") else "SIN AUDIO" if c.get("fichero_video") else "—", "origen": (c.get("origen_texto") or c.get("origen") or "—") + ("\n" + c["origen_motivo"] if c.get("origen_motivo") else ""),
                    "montaje": "movido a mano" if movido else "automático"}
         self.lbl_nombre.configure(text="%d. %s" % (n + 1, c["nombre"]))
         for k, w in self.ficha.items():
-            w.configure(text=valores[k], style="Panel.Acento.TLabel" if k == "montaje" and movido else "Panel.TLabel")
+            w.configure(text=valores[k], style="Panel.Acento.TLabel" if (k == "montaje" and movido) or (k == "audio" and valores[k] == "SIN AUDIO")
+                        else "Panel.TLabel")
         ruta = self.listos.get(c.get("clave"))
         self.pedir_fotogramas()  # si se ha cambiado de clip, lo suyo pasa delante
         if not ruta or not PIL_OK:

@@ -53,16 +53,17 @@ Página 1 · Disco
      carpeta. Nunca el propio disco de Avid.
    - Carpeta de brutos (solo si quieres los brutos): la carpeta del disco
      con espacio donde dejarlos.
-   - Más media (opcional): si parte de la media está en otro disco o en
-     otra carpeta (por ejemplo, un segundo disco con su propia carpeta
-     "Avid MediaFiles"), pulsa "Añadir…" y elígela. También se lee sin
-     modificarla. Si el informe dice que hay clips enlazados a ficheros que
+   - Otros orígenes (opcional): si hay un segundo disco o carpeta de Avid
+     (con sus propios proyectos, o con parte de la media, por ejemplo su
+     propia carpeta "Avid MediaFiles"), pulsa "+ Añadir origen" y elígela.
+     Sus proyectos salen en "Elegir proyectos" junto a los del primero y
+     su media se usa para los dos. También se lee sin modificarla. Si el informe dice que hay clips enlazados a ficheros que
      no están en el disco, es aquí donde se añade la carpeta donde estén.
 3. Al elegir el disco, el programa lee solo qué proyectos tiene (en unos
    segundos, sin abrir nada) y lo dice debajo de las carpetas, por ejemplo
    "7 proyectos · 11 bins · último cambio 15/09/2021". Sirve para ver de un
    vistazo si es el disco que esperabas.
-   "Proyectos: todos..." sirve para no hacerlos todos de una vez: sale la
+   "Elegir proyectos" (el botón con borde naranja) sirve para no hacerlos todos de una vez: sale la
    lista de proyectos del disco y marcas los que quieres ahora. Los que ya tienen brutos en esa carpeta salen con
    "✓ ya tiene brutos"; el botón "Solo los que faltan" marca el resto.
    Otro día, misma carpeta de brutos y eliges los siguientes: los ya hechos
@@ -81,6 +82,15 @@ Página 1 · Disco
    vídeos que ya había leído y solo lee los nuevos o los cambiados. Lo
    guarda en la carpeta "cache_analisis", dentro de la carpeta del informe
    (solo datos técnicos, nunca imágenes). Se puede borrar sin problema.
+   LOS ANÁLISIS SE GUARDAN: cada análisis queda en la carpeta del informe
+   y el programa recuerda las carpetas para la próxima vez. Si analizas
+   unos proyectos y otro día otros del mismo disco, el nuevo análisis
+   SUMA los de antes (no se vuelven a leer, salvo que su media haya
+   cambiado en el disco: entonces lo avisa). En "Elegir proyectos" los ya
+   analizados salen con "✓ analizado"; si pides analizar solo proyectos
+   ya analizados, pregunta si quieres usar lo guardado e ir a Montaje.
+   Usa siempre la misma carpeta de informe (mejor una del ordenador, por
+   ejemplo Documentos\Analisis Avid) para que los encuentre.
 5. Al terminar se abre el informe en el navegador y aparece un mensaje con dos
    rutas. En la carpeta del informe habrá:
    - una carpeta  Diagnostico_<disco>_<fecha>  con el informe (informe.html)
@@ -96,8 +106,11 @@ Página 1 · Disco
    - "Poco material: ¿descartar?": uno o dos clips de cámara y menos de
      2 minutos en total.
    - "Sin material de cámara": ninguno.
+   Los clips de cámara SIN AUDIO (ninguna pista de sonido) salen marcados
+   en el listado, en el informe (con un aviso), en el shotlist ("Aviso
+   audio") y en Montaje: mira si el sonido está en otro fichero o disco.
    Es una propuesta: decide mirando las capturas. Luego, en
-   "Proyectos...", el botón "Solo los de material" marca los de
+   "Elegir proyectos", el botón "Solo los de material" marca los de
    "Restaurar" (puedes añadir o quitar a mano) y Montaje y Exportar
    trabajan solo con los marcados. No hace falta volver a analizar.
    Las capturas se hacen aunque no pidas miniaturas (una por clip de
@@ -217,7 +230,10 @@ clips en orden de fecha y de 2 horas como mucho:
    - No entran: agencias, descargas, vídeos de móvil y los fundidos,
      rótulos y efectos renderizados por Avid.
    - Sí entra el material de cámara propia aunque se copiara al ordenador
-     antes de importarlo.
+     antes de importarlo: P2, XDCAM, y las cámaras con tarjeta SD (DJI Osmo
+     y drones, Sony, Canon, Panasonic y AVCHD, GoPro, Nikon, Fujifilm,
+     Zoom...), por el nombre del fichero, la carpeta de la tarjeta (DCIM,
+     PRIVATE, MP_ROOT...) o los datos de la cámara.
    - Solo entra lo que es de cámara: clips de tarjeta P2 (0001AB...),
      carpetas de tarjeta, metadatos o nombres de fichero de cámara.
      Lo dudoso se queda fuera: un fichero importado sin ninguna pista
@@ -243,7 +259,7 @@ clips en orden de fecha y de 2 horas como mucho:
    Convertir a HD es lento: el programa convierte varios clips a la vez,
    pero cuenta con del orden de media hora de ordenador por cada hora de
    material (depende del PC). Con un disco grande, mejor por proyectos con
-   "Proyectos...", o usa "Detener" y vuelve a exportar con las mismas
+   "Elegir proyectos", o usa "Detener" y vuelve a exportar con las mismas
    carpetas para seguir donde se quedó.
    Los clips van en orden estricto de fecha y hora (al segundo): la de
    grabación si el bin la guarda (columnas como "Shoot Date" y "Shoot

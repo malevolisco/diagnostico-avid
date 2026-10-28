@@ -35,6 +35,21 @@ jobs:
           Remove-Item bin/PONER_AQUI_ffmpeg.txt -ErrorAction SilentlyContinue
           & bin/ffmpeg.exe -version | Select-Object -First 1
 
+      - name: bmx 1.6 de la BBC (build fijada; empaqueta los brutos en RDD 9)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/bbc/bmx/releases/download/v1.6/bmx-win64-binary-1.6.zip" -OutFile bmx.zip
+          $h = (Get-FileHash bmx.zip -Algorithm SHA256).Hash
+          if ($h -ne "E36096E8A02A5A767E27A4C9794B03F11DBD7AF3CCD9679104489B89DCA4F9CE") { throw "bmx.zip no coincide con la versión fijada: $h" }
+          Expand-Archive bmx.zip -DestinationPath bmx
+          Get-ChildItem bmx -Recurse -File | ForEach-Object { $_.FullName.Substring($PWD.Path.Length + 1) }
+          # al programa solo va bmxtranswrap (y sus .dll, si los hay); mxf2raw queda en bmx/ para las pruebas
+          Get-ChildItem bmx -Recurse -Include bmxtranswrap.exe, *.dll | Copy-Item -Destination bin
+          $v = (& bin/bmxtranswrap.exe -v 2>&1) -join " "
+          Write-Host $v
+          if ($v -notmatch "bmx v1\.6") { throw "bin/bmxtranswrap.exe no arranca: $v" }
+          $global:LASTEXITCODE = 0
+
       - name: Pruebas unitarias (con el ffmpeg fijado en el PATH)
         shell: pwsh
         run: |
@@ -67,29 +82,24 @@ jobs:
           Get-Content salida/*/diagnostico.log | Select-Object -Last 15
 
       - name: Comprobar resultado
-        run: python tests/comprobar_resultado.py salida brutos --ffprobe bin/ffprobe.exe
+        run: python tests/comprobar_resultado.py salida brutos --ffprobe bin/ffprobe.exe --rdd9
 
-      - name: Prueba de viabilidad RDD 9 (bmx de la BBC reempaqueta los brutos; no bloquea)
-        continue-on-error: true
+      - name: RDD 9 no cambia el vídeo ni el audio (brutos de ffmpeg sin RDD 9, reempaquetados con bmx y comparados)
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view v1.6 --repo bbc/bmx --json assets --jq '.assets[] | .name + "  " + (.size|tostring)'
-          $zip = gh release view v1.6 --repo bbc/bmx --json assets --jq '.assets[].name' | Where-Object { $_ -match 'win' -and $_ -match '\.zip$' } | Select-Object -First 1
-          if (-not $zip) { throw "No hay binarios de Windows en la release v1.6 de bbc/bmx" }
-          gh release download v1.6 --repo bbc/bmx --pattern $zip --dir bmxdl
-          Write-Host "bmx: $zip  SHA256 $((Get-FileHash bmxdl/$zip -Algorithm SHA256).Hash)"
-          Expand-Archive bmxdl/$zip -DestinationPath bmx
-          Get-ChildItem bmx -Recurse -Include *.exe | ForEach-Object { $_.FullName }
-          python tests/probar_rdd9.py brutos brutos_rdd9 --bmx bmx --ffmpeg bin/ffmpeg.exe --ffprobe bin/ffprobe.exe
+          $a = (Get-ChildItem -Directory salida/Diagnostico_* | Select-Object -First 1).FullName
+          '{"solo_material_de_camara": false, "rdd9": false}' | Set-Content dist/DiagnosticoAvid/config_brutos.json -Encoding utf8NoBOM
+          $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--usar-analisis `"$a`" --brutos brutos_ffmpeg --proyectos `"ABORTO;NTSC`"" -PassThru -Wait -NoNewWindow
+          '{"solo_material_de_camara": false}' | Set-Content dist/DiagnosticoAvid/config_brutos.json -Encoding utf8NoBOM
+          if ($p.ExitCode -ne 0) { Get-Content brutos_ffmpeg/exportacion.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
+          python tests/probar_rdd9.py brutos_ffmpeg brutos_ffmpeg_rdd9 --bmx bmx --ffmpeg bin/ffmpeg.exe --ffprobe bin/ffprobe.exe
 
       - name: Segunda ejecución sobre los mismos brutos (debe reanudar, no repetir)
         shell: pwsh
         run: |
           $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--origen disco_prueba --destino salida2 --brutos brutos --sin-gui --no-abrir --zip-sin-miniaturas --media-extra disco_prueba_media2" -PassThru -Wait -NoNewWindow
           if ($p.ExitCode -ne 0) { Get-Content salida2/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
-          python tests/comprobar_resultado.py salida2 brutos --ffprobe bin/ffprobe.exe --reanudado
+          python tests/comprobar_resultado.py salida2 brutos --ffprobe bin/ffprobe.exe --reanudado --rdd9
 
       - name: Análisis y brutos solo de algunos proyectos (selector)
         shell: pwsh
@@ -204,6 +214,7 @@ jobs:
         run: |
           Remove-Item dist/DiagnosticoAvid/config_*.json -ErrorAction SilentlyContinue  # los crea la prueba; no van en el portable
           Copy-Item INSTRUCCIONES.txt dist/DiagnosticoAvid/
+          Copy-Item licencias dist/DiagnosticoAvid/ -Recurse
           Compress-Archive -Path dist/DiagnosticoAvid -DestinationPath DiagnosticoAvid_portable.zip -CompressionLevel Optimal
           Compress-Archive -Path salida/* -DestinationPath informe_prueba.zip -CompressionLevel Optimal
 

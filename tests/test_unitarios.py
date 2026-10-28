@@ -1096,6 +1096,24 @@ class DiscosDeChina(unittest.TestCase):
         for f in ["IMG_1234.MOV", "CCTV 新闻 0916.mp4", "Reuters_xi.mp4", "descarga.mp4", "", None]:
             self.assertFalse(eb.es_fichero_de_camara(f, self.cfg), f)
 
+    def test_camaras_con_tarjeta_sd_y_osmo(self):
+        # 28/10/2026: "a lo mejor hay cámaras Osmo o cámaras con una SD". Con un config_brutos.json viejo (escrito al
+        # primer uso, sin los patrones nuevos) también se reconocen: van en el código
+        viejo = dict(self.cfg, camara_propia_regex=r"^(DJI_\d{3,5}|C\d{4})(\D|$)")
+        for f in [r"C:\Users\a\Desktop\osmo\DJI_20231015123456_0001_D.MP4", "DJI_0012.MP4", "DSCF1234.MOV", "ZOOM0001.WAV",
+                  "MAQ00012.MP4", "MVI_1234.MOV", r"D:\copia SD\00001.MTS", "P1000123.MOV", "GX010045.MP4"]:
+            self.assertTrue(eb.es_fichero_de_camara(f, viejo), f)
+        for f in ["IMG_1234.MOV", "VID_20210915_101500.mp4", "00001.mp4", "DJI_X.mp4", "descarga.mp4", "Reuters_xi.mp4"]:
+            self.assertFalse(eb.es_fichero_de_camara(f, viejo), f)
+        # Osmo copiada al PC: material; y si el bin no guarda la ruta, por el nombre del clip
+        c = {"origen": "Fichero importado", "fichero_origen": r"C:\Users\a\Desktop\osmo\DJI_20231015123456_0001_D.MP4", "bins": ["b.avb"]}
+        self.assertEqual(eb.clasificar(c, viejo)[0], "propio")
+        c = {"nombre": "DJI_20231015123456_0001_D", "origen": "Sin determinar", "bins": ["b.avb"]}
+        self.assertEqual(eb.clasificar(c, viejo)[:2], ("propio", "nombre de clip de cámara"))
+        # Tarjeta SD montada (DCIM, PRIVATE/AVCHD, MP_ROOT)
+        for r in [r"F:\DCIM\100MEDIA\DJI_0001.MP4", r"F:\PRIVATE\AVCHD\BDMV\STREAM\00001.MTS", r"F:\MP_ROOT\100ANV01\MAH00001.MP4"]:
+            self.assertEqual(eb.clasificar({"origen": "Fichero importado", "fichero_origen": r, "bins": ["b.avb"]}, viejo)[0], "propio", r)
+
     def test_camara_propia_importada_de_una_carpeta_es_material(self):
         dji = {"origen": "Fichero importado", "fichero_origen": r"C:\Users\RTVE\Desktop\China\DJI_0012.MP4"}
         movil = {"origen": "Fichero importado", "fichero_origen": r"C:\Users\RTVE\Desktop\China\IMG_1234.MOV"}
@@ -1429,7 +1447,7 @@ class QueProyectosRestaurar(unittest.TestCase):
             self.assertNotIn("REUTERS SISMO", html.split("<table>")[1].split("</table>")[1])  # sin captura de la agencia
             self.assertIn("1 de agencia", html)
             filas = (d / "proyectos.csv").read_text(encoding="utf-8-sig").splitlines()
-            self.assertEqual(filas[0], "Proyecto;Propuesta;Clips de cámara;Duración;El más largo;Otros clips")
+            self.assertEqual(filas[0], "Proyecto;Propuesta;Clips de cámara;Duración;El más largo;Sin audio;Otros clips")
             self.assertTrue(filas[1].startswith("DOS;Restaurar;2;"))
             datos = {t["proyecto"]: t for t in json.loads((d / "triaje.json").read_text(encoding="utf-8"))}
             self.assertEqual((datos["CORTO"]["veredicto"], datos["CORTO"]["clips"], datos["CORTO"]["segundos"]), ("poco", 2, 60))
@@ -1437,8 +1455,98 @@ class QueProyectosRestaurar(unittest.TestCase):
             self.assertEqual(da.texto_triaje(datos["CORTO"]), "   · Poco material: ¿descartar?: 2 clips de cámara, %s" % da.fmt_duracion(60))
             self.assertEqual(da.texto_triaje(datos["AGENCIAS"]), "   · Sin material de cámara")
             self.assertEqual(da.texto_triaje(None), "")
+            self.assertEqual(da.texto_triaje(dict(datos["CORTO"], sin_audio=1)),
+                             "   · Poco material: ¿descartar?: 2 clips de cámara, %s, 1 SIN AUDIO" % da.fmt_duracion(60))
         finally:
             shutil.rmtree(d)
+
+    def test_aviso_de_clips_sin_audio(self):
+        # Adrián, 28/10/2026: "que detecte que algo no tenga audio asociado, que me avise"
+        cs = self.clips()
+        cs[1]["num_audio"] = 0
+        t = {x["proyecto"]: x for x in eb.triaje_proyectos(cs, self.cfg)}
+        self.assertEqual([c["nombre"] for c in t["GRANDE"]["sin_audio"]], ["0002AB"])
+        self.assertEqual(t["CORTO"]["sin_audio"], [])
+        fila = lambda c: eb._fila_clip(1, "GRANDE", dict(c, ficheros=[c["fichero_video"]]), {})
+        self.assertEqual(fila(cs[1])["aviso_audio"], "SIN AUDIO")
+        self.assertIsNone(fila(cs[0])["aviso_audio"])
+        if da:
+            self.assertIn("SIN AUDIO", da.tarjeta_clip(dict(cs[1], duracion=300)))
+            self.assertNotIn("SIN AUDIO", da.tarjeta_clip(dict(cs[0], duracion=600)))
+
+
+@unittest.skipIf(da is None, "sin pyavb")
+class AnalisisAcumulado(unittest.TestCase):
+    """Adrián, 28/10/2026: "que se guarde ese análisis, para no tener que volverlo a hacer cuando se hace otro proyecto".
+    Un análisis de algunos proyectos suma los de análisis anteriores del mismo disco que no se repiten."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.origen = self.d / "disco"
+        self.origen.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def analisis(self, nombre, fecha, proyectos, clips, mxf, origen=None):
+        a = self.d / "informes" / nombre
+        (a / "miniaturas").mkdir(parents=True)
+        for c in clips:
+            if c.get("miniatura"):
+                (a / c["miniatura"]).write_bytes(b"jpg")
+        datos = {"resumen.json": {"origen": str(origen or self.origen), "fecha": fecha, "parcial": {"proyectos": proyectos}},
+                 "proyectos.json": [{"nombre": p, "carpeta": p} for p in proyectos],
+                 "bins.json": [{"proyecto": p, "nombre": p + ".avb", "clips": []} for p in proyectos],
+                 "clips.json": clips, "mxf.json": mxf,
+                 "cruce.json": {"por_proyecto": [{"proyecto": p, "clips_fisicos": 1} for p in proyectos]}}
+        for n, v in datos.items():
+            (a / n).write_text(json.dumps(v), encoding="utf-8")
+        return a
+
+    def clip(self, nombre, proyectos, **kw):
+        return dict({"clave": "K" + nombre, "nombre": nombre, "proyectos": list(proyectos), "ficheros": ["MXF/%s.mxf" % nombre],
+                     "fichero_video": "MXF/%s.mxf" % nombre}, **kw)
+
+    def mxf(self, nombre, bytes_=100, fecha="2021-09-15 10:00:00"):
+        return {"ruta": "MXF/%s.mxf" % nombre, "bytes": bytes_, "modificado": fecha}
+
+    def test_suma_lo_de_antes_y_salta_lo_que_ha_cambiado(self):
+        self.analisis("Diagnostico_disco_1", "2026-10-27 10:00:00", ["A", "B"],
+                      [self.clip("a1", ["A"], miniatura="miniaturas/00000_a1.jpg"), self.clip("b1", ["B"]),
+                       self.clip("comun", ["A", "C"])],
+                      [self.mxf("a1"), self.mxf("b1"), self.mxf("comun")])
+        self.analisis("Diagnostico_disco_2", "2026-10-28 09:00:00", ["B"], [self.clip("b1", ["B"])], [self.mxf("b1", fecha="2021-09-16 10:00:00")])
+        self.analisis("Diagnostico_otro", "2026-10-28 11:00:00", ["Z"], [self.clip("z1", ["Z"])], [self.mxf("z1")], origen=self.d / "otro")
+        destino = self.d / "informes" / "Diagnostico_disco_3"
+        destino.mkdir()
+        # Ahora se analiza C. En el disco: a1 y comun igual que antes; b1 ha cambiado después del análisis 2
+        ficheros = [{"ruta": "MXF/a1.mxf", "bytes": 100, "modificado": "2021-09-15 10:00:00"},
+                    {"ruta": "MXF/comun.mxf", "bytes": 100, "modificado": "2021-09-15 10:00:00"},
+                    {"ruta": "MXF/b1.mxf", "bytes": 999, "modificado": "2021-09-16 10:00:00"},
+                    {"ruta": "MXF/c1.mxf", "bytes": 100, "modificado": "2021-09-17 10:00:00"}]
+        proyectos, bins = [{"nombre": "C"}], [{"proyecto": "C", "nombre": "C.avb"}]
+        mxf, clips = [self.mxf("c1"), self.mxf("comun")], [self.clip("c1", ["C"]), self.clip("comun", ["C"])]
+        cruce = {"por_proyecto": [{"proyecto": "C"}]}
+        sumados, cambiados = da.sumar_analisis_anteriores(self.d / "informes", self.origen, destino, ficheros, proyectos, bins, mxf, clips, cruce)
+        self.assertEqual(sumados, {"A": "2026-10-27 10:00:00"})  # B, del análisis 2 (el más reciente con B), ha cambiado
+        self.assertEqual(cambiados, ["B"])
+        self.assertEqual([p["nombre"] for p in proyectos], ["A", "C"])
+        self.assertEqual(sorted(b["nombre"] for b in bins), ["A.avb", "C.avb"])
+        self.assertEqual([x["proyecto"] for x in cruce["por_proyecto"]], ["A", "C"])
+        por = {c["nombre"]: c for c in clips}
+        self.assertEqual(sorted(por), ["a1", "c1", "comun"])
+        self.assertEqual(sorted(por["comun"]["proyectos"]), ["A", "C"])  # compartido: los dos proyectos
+        self.assertEqual(sorted(m["ruta"] for m in mxf), ["MXF/a1.mxf", "MXF/c1.mxf", "MXF/comun.mxf"])
+        self.assertEqual(por["a1"]["miniatura"], "miniaturas/ant_00000_a1.jpg")
+        self.assertTrue((destino / "miniaturas" / "ant_00000_a1.jpg").exists())
+        self.assertNotIn("Z", [p["nombre"] for p in proyectos])  # otro disco: nada
+
+    def test_mas_reciente_primero(self):
+        self.analisis("Diagnostico_disco_1", "2026-10-27 10:00:00", ["A"], [], [])
+        self.analisis("Diagnostico_disco_2", "2026-10-28 10:00:00", ["B"], [], [])
+        self.assertEqual([d.name for d, _ in da.analisis_del_disco(self.d / "informes", self.origen)],
+                         ["Diagnostico_disco_2", "Diagnostico_disco_1"])
+        self.assertEqual(da.buscar_analisis(self.d / "informes", self.origen).name, "Diagnostico_disco_2")
 
 
 class AnalisisParcial(unittest.TestCase):

@@ -82,7 +82,7 @@ CONFIG_DEFECTO = {
     "importados_aparte": True,
     "_importados_aparte": "Con excluir_importados = false, lo importado de fuera (descargas, móvil...) va al bruto _IMPORTADOS del proyecto. Lo dudoso va con el material",
     "camara_propia_regex": r"^(DJI_\d{3,5}|C\d{4}|MAH\d{5}|MVI_\d{4}|GH\d{6}|GX\d{6}|GOPR\d{4}|GP\d{6}|DSC_?\d{4}|P\d{7}|A\d{3}C\d{3}|\d{8}_C\d{3,4})(\D|$)",
-    "_camara_propia_regex": "Ficheros de cámara propia importados desde una carpeta del PC (no desde la tarjeta): son material aunque el bin no guarde una ruta de tarjeta. Se mira el nombre del fichero que guarda el bin. Por defecto: dron DJI, Sony (C0001), Canon (MVI_), GoPro, Panasonic (P1000123), Nikon (DSC_), Zoom (MAH), ARRI/Blackmagic (A001C002). Los del móvil (IMG_) siguen siendo importados",
+    "_camara_propia_regex": "Ficheros de cámara propia importados desde una carpeta del PC (no desde la tarjeta): son material aunque el bin no guarde una ruta de tarjeta. Se mira el nombre del fichero que guarda el bin (y el del clip). Además de estos, el programa reconoce siempre los de cámaras con tarjeta SD y DJI Osmo (CAMARAS_SD_REGEX, AVCHD 00001.MTS); aquí se añaden otros. Por defecto: dron DJI, Sony (C0001), Canon (MVI_), GoPro, Panasonic (P1000123), Nikon (DSC_), Zoom (MAH), ARRI/Blackmagic (A001C002). Los del móvil (IMG_) siguen siendo importados",
     "bins_agencia_regex": r"agencia|reuters|\bafp\b|\befe\b|\bap\b|eurovisi|\bebu\b|xinhua|\bcctv\b|\bcgtn\b",
     "_bins_agencia_regex": "Bins cuyo nombre indica material de agencia (p. ej. '20260916 agencias.avb'): lo que hay en ellos y no es de cámara cuenta como agencia",
     "triaje_max_clips": 2,
@@ -326,7 +326,16 @@ def duracion_ffprobe(ffprobe, ruta):
 # Carpetas que cuelgan de la raíz de una tarjeta de cámara (P2, XDCAM/XAVC, AVCHD, foto/vídeo genérico).
 # El nombre de un clip P2 (0016Q3) NO sirve para saber la tarjeta: en el disco real de México, clips
 # grabados con segundos de diferencia se llaman 00016R, 0002CI, 000328.
-MARCAS_TARJETA = {"CONTENTS", "PRIVATE", "DCIM", "XDROOT", "BPAV", "AVCHD", "M4ROOT", "CLIPR"}
+MARCAS_TARJETA = {"CONTENTS", "PRIVATE", "DCIM", "XDROOT", "BPAV", "AVCHD", "M4ROOT", "CLIPR", "MP_ROOT"}
+# Nombres de fichero de cámaras que graban en tarjeta SD (28/10/2026: "cámaras Osmo o cámaras con una SD"). Van en el
+# código y no solo en config_brutos.json → camara_propia_regex porque ese fichero se escribe al primer uso y no se
+# actualiza: así los reconocen también los programas ya instalados. DJI (dron, Osmo Pocket/Action/360: DJI_0001 y
+# DJI_20231015123456_0001_D), Sony (C0001, MAH/MAQ00001), Canon (MVI_1234), GoPro, Panasonic (P1000123), Nikon (DSC_),
+# Fujifilm (DSCF), Zoom (ZOOM0001), ARRI/Blackmagic/Canon XF (A001C002), Sony con fecha (20231015_C0001)
+CAMARAS_SD_REGEX = (r"^(DJI_\d+|C\d{4}|MA[HQ]\d{5}|MVI_\d{4}|GH\d{6}|GX\d{6}|GOPR\d{4}|GP\d{6}|DSC_?\d{4}|DSCF\d{4}|"
+                    r"P\d{7}|A\d{3}C\d{3}|\d{8}_C\d{3,4}|ZOOM\d{4})(\D|$)")
+# AVCHD (Sony, Panasonic, Canon de consumo): 00000.MTS en PRIVATE/AVCHD/BDMV/STREAM
+AVCHD_REGEX = r"^\d{5}\.(mts|m2ts)$"
 
 
 def carpeta_tarjeta(ruta):
@@ -474,11 +483,15 @@ def es_pieza(c, secuencias, rx=None):
 def es_fichero_de_camara(fichero, cfg):
     """¿El fichero que guarda el bin se llama como los de una cámara (DJI_0012.MP4, C0380.MP4...)? Para el material
     propio importado desde una carpeta del PC en vez de desde la tarjeta (camara_propia_regex)."""
-    base = re.split(r"[\\/]+", str(fichero or ""))[-1]
-    base = re.sub(r"\.[A-Za-z0-9]{2,4}$", "", base)
+    nombre = re.split(r"[\\/]+", str(fichero or ""))[-1]
+    base = re.sub(r"\.[A-Za-z0-9]{2,4}$", "", nombre)
+    if not base:
+        return False
+    if re.search(CAMARAS_SD_REGEX, base, re.IGNORECASE) or re.search(AVCHD_REGEX, nombre, re.IGNORECASE):
+        return True
     rx = cfg.get("camara_propia_regex", CONFIG_DEFECTO["camara_propia_regex"])
     try:
-        return bool(base and rx and re.search(rx, base, re.IGNORECASE))
+        return bool(rx and re.search(rx, base, re.IGNORECASE))
     except re.error as e:
         LOG.error("camara_propia_regex no válida (%s); no se aplica", e)
         return False
@@ -615,8 +628,12 @@ def senales_de_origen(c, cfg):
         s.append((3, "propio", "carpeta de tarjeta (%s)" % marca))
     if es_fichero_de_camara(fichero, cfg) or (origen.startswith("Cámara") and not tarjeta):
         s.append((2, "propio", "nombre de fichero de cámara" if fichero else origen))
-    elif not tarjeta and any(re.match(NOMBRE_P2, str(n or "").strip(), re.IGNORECASE) for n in [c.get("nombre"), *(c.get("nombres_bin") or ())]):
-        s.append((2, "propio", "nombre de clip P2"))
+    else:
+        nombres = [str(n or "").strip() for n in [c.get("nombre"), *(c.get("nombres_bin") or ())]]
+        if not tarjeta and any(re.match(NOMBRE_P2, n, re.IGNORECASE) for n in nombres):
+            s.append((2, "propio", "nombre de clip P2"))
+        elif not tarjeta and any(es_fichero_de_camara(n, cfg) for n in nombres if n):  # Osmo, SD... con el nombre del fichero
+            s.append((2, "propio", "nombre de clip de cámara"))
     if fichero and re.search(MOVIL_REGEX, _base_fichero(fichero), re.IGNORECASE):
         s.append((2, "importado", "nombre de fichero de móvil"))
     m = re.search(CARPETAS_DE_FUERA, str(fichero or ""), re.IGNORECASE)
@@ -667,7 +684,8 @@ def triaje_proyectos(clips, cfg, proyectos=()):
     triaje_max_clips y menos de triaje_max_minutos en total) o restaurar. Un clip en varios proyectos cuenta en todos;
     uno sin bin, en SIN_PROYECTO. proyectos: los del disco, para que salgan también los que no tienen ningún clip.
     Devuelve una lista ordenada (restaurar, poco, sin; dentro, por nombre) de dicts con proyecto, veredicto, camara
-    (clips, por nombre), segundos, mas_largo y otros (Counter de las demás clases)."""
+    (clips, por nombre), sin_audio (los de cámara sin ninguna pista de sonido), segundos, mas_largo y otros (Counter
+    de las demás clases)."""
     max_clips = int(cfg.get("triaje_max_clips", CONFIG_DEFECTO["triaje_max_clips"]))
     max_seg = float(cfg.get("triaje_max_minutos", CONFIG_DEFECTO["triaje_max_minutos"])) * 60
     por = {p: {"proyecto": p, "camara": [], "otros": Counter()} for p in proyectos}
@@ -684,6 +702,7 @@ def triaje_proyectos(clips, cfg, proyectos=()):
     orden = list(TRIAJE)
     for t in por.values():
         t["camara"].sort(key=lambda c: c["nombre"])
+        t["sin_audio"] = [c for c in t["camara"] if not c.get("num_audio")]
         duraciones = [c.get("duracion") or 0 for c in t["camara"]]
         t["segundos"], t["mas_largo"] = sum(duraciones), max(duraciones, default=0)
         t["veredicto"] = ("sin" if not t["camara"] else
@@ -1483,6 +1502,8 @@ def hacer_segmento(clip, idx, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, nomb
     # Con el enrutado por defecto, que al clip le falten pistas es lo normal (se rellenan con silencio): solo se avisa
     # si el enrutado elegido a mano pide una pista que el clip no tiene, o si se pierden pistas del clip.
     avisos = ["pista %d del clip no existe (silencio)" % r for r in sorted({r for r in fuentes if r > len(audios)})] if enrutado else []
+    if not audios:  # el clip no trae sonido: se avisa (Adrián, 28/10/2026), aunque en el bruto vaya en silencio
+        avisos.insert(0, "SIN AUDIO")
     perdidas = [r for r in range(1, len(audios) + 1) if r not in fuentes]
     if perdidas:
         avisos.append("no entran las pistas %s del clip" % ", ".join(map(str, perdidas)))
@@ -1681,6 +1702,7 @@ def _fila_clip(i, proyecto, c, mxf_por_ruta):
     return {"n": i, "proyecto": texto, "proyecto_principal": proyecto_principal(c) or "SIN_PROYECTO", "clip": c["nombre"], "tc_original": c.get("timecode"),
             "fecha": mxf_por_ruta.get(c.get("fichero_video") or c["ficheros"][0], {}).get("modificado"),
             "fecha_grabacion": c.get("fecha_grabacion"), "aviso_fecha": c.get("aviso_fecha"),
+            "aviso_audio": "SIN AUDIO" if c.get("fichero_video") and not c.get("num_audio") else None,
             "codec": c.get("codec_video"), "resolucion": c.get("resolucion"), "pistas": c.get("num_audio"),
             "ficheros": "; ".join(c["ficheros"]), "miniatura": c.get("miniatura"), "tc_in": None, "tc_out": None, "duracion": None,
             "fichero_origen": c.get("fichero_origen"), "volumenes": ", ".join(c.get("volumenes") or []),

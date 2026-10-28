@@ -123,7 +123,7 @@ def disco_leido():
     llamadas = []
     listar, dialogo = d.listar_proyectos, d.dialogo_proyectos
 
-    def selector(raiz, lista, elegidos, hechos, triaje=None):  # en vez del diálogo: apunta lo que se le ofrece y cancela
+    def selector(raiz, lista, elegidos, hechos, triaje=None, analizados=None):  # en vez del diálogo: apunta lo que se le ofrece y cancela
         r["selector"] = [p["nombre"] for p in lista]
         return None
 

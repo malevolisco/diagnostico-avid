@@ -16,3 +16,4 @@ __pycache__/
 config_brutos.json
 config_origen.json
 config_aprendizaje_origen.json
+config_ventana.json

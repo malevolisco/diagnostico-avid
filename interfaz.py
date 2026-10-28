@@ -95,22 +95,25 @@ class App:
                 pass
         self.letras = tema.aplicar(raiz)
 
-        self.origen = tk.StringVar()
-        self.destino = tk.StringVar(value=str(Path.home() / "Desktop"))
-        self.brutos = tk.StringVar()
+        # Las carpetas de la última vez (config_ventana.json): así se encuentran los análisis guardados sin elegirlas otra vez
+        guardadas = self.carpetas_guardadas()
+        self.origen = tk.StringVar(value=guardadas.get("origen") if Path(guardadas.get("origen") or "\0").exists() else "")
+        self.destino = tk.StringVar(value=guardadas.get("destino") or str(Path.home() / "Desktop"))
+        self.brutos = tk.StringVar(value=guardadas.get("brutos") or "")
         self.minis = tk.BooleanVar(value=True)
         self.zip_minis = tk.BooleanVar(value=True)
         self.capturas = tk.BooleanVar(value=True)
         self.seguido = tk.BooleanVar(value=False)
         self.cola = queue.Queue()
-        self.estado = {"ocupado": None, "cerrar": False, "proyectos": None, "media_extra": []}  # ocupado: None | "analisis" | "exportacion" | "actualizacion"
+        self.estado = {"ocupado": None, "cerrar": False, "proyectos": None,
+                       "media_extra": [x for x in guardadas.get("otros_origenes") or [] if Path(x).exists()]}  # ocupado: None | "analisis" | "exportacion" | "actualizacion"
         self.pagina = None
         self.montaje = None  # PantallaMontaje
         self.pantalla_origen = None  # PantallaOrigen (pestaña "Origen del material" del montaje)
         self.pestana_montaje = "brutos"
         self.clave_montaje = None
         self.exp = None  # datos de la página Exportar: clave, resumen, cfg, marcados, estados, resultados
-        # Proyectos del disco elegido, leídos solos al elegirlo (listar_proyectos): el botón "Proyectos…" los reutiliza
+        # Proyectos del disco elegido, leídos solos al elegirlo (listar_proyectos): el botón "Elegir proyectos" los reutiliza
         self.vista_disco = {"origen": None, "lista": None, "turno": 0}
         self.espera_disco = None
         self.cronometro = None
@@ -222,7 +225,25 @@ class App:
             return
         var.set(filedialog.askdirectory(title=titulo, parent=self.raiz) or var.get())
 
+    def carpetas_guardadas(self):
+        try:
+            datos = json.loads((self.da.carpeta_base() / "config_ventana.json").read_text(encoding="utf-8"))
+            return datos if isinstance(datos, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def guardar_carpetas(self):
+        """Recuerda las tres carpetas para la próxima vez (config_ventana.json junto al programa; el actualizador lo conserva)."""
+        try:
+            (self.da.carpeta_base() / "config_ventana.json").write_text(json.dumps(
+                {"origen": self.origen.get(), "destino": self.destino.get(), "brutos": self.brutos.get(),
+                 "otros_origenes": list(self.estado["media_extra"])},
+                ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError as e:  # una carpeta sin permiso de escritura: no pasa nada, se eligen otra vez
+            self.da.LOG.warning("No se han podido recordar las carpetas: %s", e)
+
     def cambio_carpetas(self, proyectos=False):
+        self.guardar_carpetas()
         if proyectos:
             self.estado["proyectos"] = None
             self.pintar_proyectos()
@@ -253,12 +274,12 @@ class App:
             if not self.compacto:  # en una pantalla pequeña no caben; lo mismo lo dice el título del diálogo
                 ttk.Label(t, text=ayuda, style="Tarjeta.Suave.TLabel").grid(row=fila + 1, column=3, sticky="w", padx=(10, 0))
         fila_extra = len(("Disco de Avid", "Informe", "Carpeta de brutos")) + 1
-        ttk.Label(t, text="Más media", style="Tarjeta.TLabel", width=18).grid(row=fila_extra, column=0, sticky="w", pady=4)
+        ttk.Label(t, text="Otros orígenes", style="Tarjeta.TLabel", width=16 if self.compacto else 18).grid(row=fila_extra, column=0, sticky="w", pady=4)
         self.lbl_extra = ttk.Label(t, text="", style="Tarjeta.Suave.TLabel")
         self.lbl_extra.grid(row=fila_extra, column=1, sticky="w", pady=4)
         caja = ttk.Frame(t, style="Cabecera.TFrame")  # mismo fondo que la tarjeta, sin borde
         caja.grid(row=fila_extra, column=2, columnspan=2, sticky="w", padx=(8, 0))
-        ttk.Button(caja, text="Añadir…", command=self.anadir_media).pack(side="left")
+        ttk.Button(caja, text="＋ Añadir origen", command=self.anadir_media).pack(side="left")
         self.bt_quitar_extra = ttk.Button(caja, text="Quitar", style="Fantasma.TButton", command=self.quitar_media)
         self.bt_quitar_extra.pack(side="left", padx=(6, 0))
         self.pintar_media_extra()
@@ -269,7 +290,7 @@ class App:
 
         fila = ttk.Frame(izq, style="Fondo.TFrame")
         fila.pack(fill="x", pady=(10, 0))
-        self.bt_proy = ttk.Button(fila, text="Proyectos: todos…", command=self.elegir_proyectos)
+        self.bt_proy = ttk.Button(fila, text="☰  Elegir proyectos: todos", style="Destacado.TButton", command=self.elegir_proyectos)
         self.bt_proy.pack(side="left")
         self.lbl_proy = ttk.Label(fila, text="", style="Suave.TLabel")
         self.lbl_proy.pack(side="left", padx=12)
@@ -313,22 +334,24 @@ class App:
 
     def pintar_media_extra(self):
         extra = self.estado["media_extra"]
-        self.lbl_extra.configure(text="; ".join(extra) if extra else "opcional" if self.compacto else "opcional: media en otros discos")
+        self.lbl_extra.configure(text="; ".join(extra) if extra else "opcional" if self.compacto else "opcional: otro disco o carpeta de Avid")
         self.bt_quitar_extra.state(["!disabled"] if extra else ["disabled"])
 
     def anadir_media(self):
         from tkinter import filedialog
         if self.estado["ocupado"]:
             return
-        carpeta = filedialog.askdirectory(title="Otra carpeta con media (solo se lee)", parent=self.raiz)
-        if carpeta and carpeta not in self.estado["media_extra"]:
+        carpeta = filedialog.askdirectory(title="Otro disco o carpeta de Avid: sus proyectos y su media (solo se lee)", parent=self.raiz)
+        if carpeta and carpeta not in self.estado["media_extra"] and carpeta != self.origen.get():
             self.estado["media_extra"].append(carpeta)
             self.pintar_media_extra()
+            self.cambio_carpetas(proyectos=True)  # sus proyectos salen en la lista
 
     def quitar_media(self):
         if not self.estado["ocupado"] and self.estado["media_extra"]:
             self.estado["media_extra"].pop()
             self.pintar_media_extra()
+            self.cambio_carpetas(proyectos=True)
 
     def plegar(self):
         if self.avanzadas.winfo_ismapped():
@@ -358,9 +381,11 @@ class App:
         self.lbl_disco.configure(text="Leyendo los proyectos del disco…", style="Suave.TLabel")
         turno, da = self.vista_disco["turno"], self.da
 
+        extras = list(self.estado["media_extra"])
+
         def leer():
             try:
-                self.cola.put(("vista_disco", (turno, origen, da.listar_proyectos(origen), None)))
+                self.cola.put(("vista_disco", (turno, origen, listar_todos(da, origen, extras), None)))
             except Exception as e:
                 self.cola.put(("vista_disco", (turno, origen, None, str(e))))
         threading.Thread(target=leer, daemon=True).start()
@@ -377,10 +402,10 @@ class App:
     def pintar_proyectos(self):
         p = self.estado["proyectos"]
         if p is None:
-            self.bt_proy.configure(text="Proyectos: todos…")
+            self.bt_proy.configure(text="☰  Elegir proyectos: todos")
             self.lbl_proy.configure(text="Se analizan todos los proyectos del disco.")
         else:
-            self.bt_proy.configure(text="Proyectos: %d de %d…" % (len(p), self.estado.get("total_proyectos", len(p))))
+            self.bt_proy.configure(text="☰  Elegir proyectos: %d de %d" % (len(p), self.estado.get("total_proyectos", len(p))))
             texto = "Solo " + ", ".join(p)
             self.lbl_proy.configure(text=texto[:90] + ("…" if len(texto) > 90 else ""))
 
@@ -422,7 +447,7 @@ class App:
         self.bt_informe.state(["!disabled"])
         self.bt_triaje.state(["!disabled"] if (carpeta / "proyectos.html").exists() else ["disabled"])
         if self.brutos.get():
-            self.lbl_siguiente.configure(text="Mira \"Qué proyectos restaurar\" y marca en Proyectos… los que sí. Luego, "
+            self.lbl_siguiente.configure(text="Mira \"Qué proyectos restaurar\" y marca en \"Elegir proyectos\" los que sí. Luego, "
                                       "revisa los brutos en Montaje (opcional) y expórtalos en Exportar."
                                       if (carpeta / "proyectos.html").exists() else
                                       "Revisa los brutos en Montaje (opcional) y expórtalos en Exportar.")
@@ -447,6 +472,21 @@ class App:
         except (OSError, ValueError, KeyError, TypeError):
             return {}
 
+    def analizados(self, todos):
+        """Proyectos que ya están en el último análisis de este disco (con los sumados de análisis anteriores): {nombre: fecha}."""
+        carpeta = self.analisis_actual()
+        try:
+            r = json.loads((carpeta / "resumen.json").read_text(encoding="utf-8")) if carpeta else None
+        except (OSError, ValueError):
+            r = None
+        if not r:
+            return {}
+        parcial = r.get("parcial")
+        if not parcial:
+            return {p: r.get("fecha") for p in todos}
+        de_antes = parcial.get("de_antes") or {}
+        return {p: de_antes.get(p) or r.get("fecha") for p in parcial.get("proyectos") or []}
+
     def elegir_proyectos(self):
         from tkinter import messagebox
         da = self.da
@@ -459,11 +499,12 @@ class App:
             self.raiz.configure(cursor="watch")
             self.raiz.update()
             try:
-                lista = da.listar_proyectos(self.origen.get())
+                lista = listar_todos(da, self.origen.get(), self.estado["media_extra"])
             finally:
                 self.raiz.configure(cursor="")
         hechos = da.brutos_hechos(self.brutos.get()) if self.brutos.get() else set()
-        elegidos = da.dialogo_proyectos(self.raiz, lista, self.estado["proyectos"], hechos, self.triaje_actual())
+        elegidos = da.dialogo_proyectos(self.raiz, lista, self.estado["proyectos"], hechos, self.triaje_actual(),
+                                        self.analizados([p["nombre"] for p in lista] + ["SIN_PROYECTO"]))
         if elegidos is None:
             return
         todos = [p["nombre"] for p in lista] + ["SIN_PROYECTO"]
@@ -483,7 +524,7 @@ class App:
             return messagebox.showwarning("Falta el informe", "Elige dónde guardar el informe.", parent=self.raiz)
         seguido = self.seguido.get()
         if self.estado["proyectos"] == []:
-            return messagebox.showwarning("Ningún proyecto", "No has elegido ningún proyecto. Pulsa \"Proyectos…\" y marca al menos uno.",
+            return messagebox.showwarning("Ningún proyecto", "No has elegido ningún proyecto. Pulsa \"Elegir proyectos\" y marca al menos uno.",
                                           parent=self.raiz)
         if seguido and not self.brutos.get():
             return messagebox.showwarning("Falta la carpeta de brutos", "Has marcado \"Analizar y exportar seguido\": elige la carpeta de brutos.",
@@ -494,6 +535,17 @@ class App:
         if not ff and not messagebox.askyesno("Sin ffmpeg", "No se encuentra ffmpeg/ffprobe (carpeta bin o PATH).\nSe analizarán los bins pero "
                                               "no los ficheros de vídeo.\n¿Continuar igualmente?", parent=self.raiz):
             return
+        if self.estado["proyectos"] and not seguido and self.analisis_actual():
+            ya = self.analizados(self.estado["proyectos"])
+            if all(p in ya for p in self.estado["proyectos"]):
+                r = messagebox.askyesnocancel("Ya están analizados", "%s ya %s en el análisis guardado de este disco (%s).\n\n"
+                                              "Sí: analizarlos otra vez (si el disco ha cambiado).\nNo: usar lo guardado e ir a Montaje."
+                                              % (", ".join(self.estado["proyectos"]), "está" if len(self.estado["proyectos"]) == 1 else "están",
+                                                 ", ".join(sorted({str(f or "")[:10] for f in ya.values()}))), parent=self.raiz)
+                if r is None:
+                    return
+                if not r:
+                    return self.ir("montaje")
         da.PARAR.clear()
         self.ocupar("analisis")
         self.escribe("— %s —" % da.ahora_txt())
@@ -564,7 +616,7 @@ class App:
         if not faltan:
             return None
         return ("El último análisis de este disco es solo de %s. Para %s, ve a 1 · Disco y pulsa \"Analizar disco\" "
-                "(o elige en \"Proyectos…\" los que ya están analizados)." % (", ".join(r["parcial"]["proyectos"]), ", ".join(faltan)))
+                "(o elige en \"Elegir proyectos\" los que ya están analizados)." % (", ".join(r["parcial"]["proyectos"]), ", ".join(faltan)))
 
     def preparar_montaje(self):
         from tkinter import messagebox
@@ -770,7 +822,7 @@ class App:
         elif not self.brutos.get():
             falta = ("Falta la carpeta de brutos", "Elige en 1 · Disco dónde guardar los brutos (un disco con espacio).")
         elif self.estado["proyectos"] == []:
-            falta = ("Ningún proyecto elegido", "En 1 · Disco, pulsa \"Proyectos…\" y marca al menos uno.")
+            falta = ("Ningún proyecto elegido", "En 1 · Disco, pulsa \"Elegir proyectos\" y marca al menos uno.")
         elif self.faltan_en_analisis(carpeta):
             falta = ("El análisis no tiene esos proyectos", self.faltan_en_analisis(carpeta))
         if falta:
@@ -1138,6 +1190,16 @@ class App:
         self.escribe("Buscando versión nueva en GitHub...")
         threading.Thread(target=lambda: self.cola.put(("actualizacion", da.actualizar.actualizar(
             da.BUILD, da.carpeta_base(), progreso=lambda m: self.cola.put(("log", m))))), daemon=True).start()
+
+
+def listar_todos(da, origen, extras=()):
+    """Proyectos del disco y de los otros orígenes (los que se añaden con "＋ Añadir origen"), sin repetir nombres."""
+    lista = list(da.listar_proyectos(origen))
+    for extra in extras:
+        if Path(extra).is_dir():
+            vistos = {p["nombre"] for p in lista}
+            lista += [p for p in da.listar_proyectos(extra) if p["nombre"] not in vistos]
+    return sorted(lista, key=lambda x: x["nombre"].lower())
 
 
 def lanzar(da):

@@ -1518,6 +1518,8 @@ def tarjeta_clip(c):
     extra = " &middot; <span title='%s'>en %d proyectos</span>" % (esc(", ".join(c["proyectos"])), len(c["proyectos"])) if len(c.get("proyectos", [])) > 1 else ""
     if c.get("coincidencia") == "aproximada":
         extra += " &middot; <span class='tag' style='background:#fffaeb' title='Emparejado con el bin por nombre y duración, no por identificador'>cruce aproximado</span>"
+    if c["num_video"] and not c["num_audio"]:
+        extra += " &middot; <span class='tag' style='background:#fef3f2' title='El clip no tiene ninguna pista de sonido'>SIN AUDIO</span>"
     return ("<div class='clip'>%s<div class='t'><b title='%s'>%s</b><span>%s &middot; %s &middot; %dV/%dA%s</span></div></div>"
             % (img, esc(c["nombre"]), esc(c["nombre"]), fmt_duracion(c["duracion"]), esc(c["timecode"] or "sin TC"), c["num_video"], c["num_audio"], extra))
 
@@ -1655,14 +1657,15 @@ def escribir_triaje(triaje, resumen, destino, cfg):
     otros = lambda t: ", ".join("%d %s" % (n, OTROS_TRIAJE.get(k, (k, k))[n != 1]) for k, n in sorted(t["otros"].items()))
     cuenta = Counter(t["veredicto"] for t in triaje)
     guardar_json(destino, "triaje.json", [{"proyecto": t["proyecto"], "veredicto": t["veredicto"], "clips": len(t["camara"]),
+                                           "sin_audio": len(t.get("sin_audio") or []),
                                            "segundos": round(t["segundos"], 1), "mas_largo": round(t["mas_largo"], 1),
                                            "otros": dict(t["otros"])} for t in triaje])
     with open(destino / "proyectos.csv", "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f, delimiter=";")
-        w.writerow(["Proyecto", "Propuesta", "Clips de cámara", "Duración", "El más largo", "Otros clips"])
+        w.writerow(["Proyecto", "Propuesta", "Clips de cámara", "Duración", "El más largo", "Sin audio", "Otros clips"])
         for t in triaje:
             w.writerow([t["proyecto"], exportar_brutos.TRIAJE[t["veredicto"]], len(t["camara"]), fmt_duracion(t["segundos"]),
-                        fmt_duracion(t["mas_largo"]) if t["camara"] else "", otros(t)])
+                        fmt_duracion(t["mas_largo"]) if t["camara"] else "", len(t.get("sin_audio") or []) or "", otros(t)])
     color = {"restaurar": "#e7f6ec", "poco": "#fffaeb", "sin": "#eef1f5"}
     marca = lambda v: "<span class='tag' style='background:%s'>%s</span>" % (color[v], esc(exportar_brutos.TRIAJE[v]))
     h = ["<!doctype html><html lang='es'><head><meta charset='utf-8'><title>Qué proyectos restaurar</title><style>%s</style></head><body>" % CSS,
@@ -1673,22 +1676,26 @@ def escribir_triaje(triaje, resumen, destino, cfg):
     h.append("</div><p class='muted'>Clips de cámara: los de tarjeta P2 y los de otras cámaras que reconoce el programa. No cuentan las "
              "agencias, lo importado de fuera, lo dudoso ni los efectos hechos en Avid. Poco material: hasta %d clips de cámara y menos de "
              "%d min en total (triaje_max_clips y triaje_max_minutos en config_brutos.json). Es una propuesta: decide mirando las "
-             "capturas. En el programa, 1 &middot; Disco &rarr; Proyectos&hellip; deja marcar solo los que se restauran.</p>"
+             "capturas. En el programa, 1 &middot; Disco &rarr; Elegir proyectos deja marcar solo los que se restauran.</p>"
              % (int(cfg.get("triaje_max_clips", 2)), int(cfg.get("triaje_max_minutos", 2))))
     h.append("<table><tr><th>Proyecto</th><th>Propuesta</th><th class='n'>Clips de cámara</th><th class='n'>Duración</th>"
-             "<th class='n'>El más largo</th><th>Otros clips</th></tr>")
+             "<th class='n'>El más largo</th><th class='n'>Sin audio</th><th>Otros clips</th></tr>")
     for i, t in enumerate(triaje):
-        h.append("<tr><td><a href='#p%d'>%s</a></td><td>%s</td><td class='n'>%d</td><td class='n'>%s</td><td class='n'>%s</td><td>%s</td></tr>"
+        sin = len(t.get("sin_audio") or [])
+        h.append("<tr><td><a href='#p%d'>%s</a></td><td>%s</td><td class='n'>%d</td><td class='n'>%s</td><td class='n'>%s</td>"
+                 "<td class='n'>%s</td><td>%s</td></tr>"
                  % (i, esc(t["proyecto"]), marca(t["veredicto"]), len(t["camara"]), fmt_duracion(t["segundos"]),
-                    fmt_duracion(t["mas_largo"]) if t["camara"] else "", esc(otros(t))))
+                    fmt_duracion(t["mas_largo"]) if t["camara"] else "",
+                    "<span class='tag' style='background:#fef3f2'>%d</span>" % sin if sin else "", esc(otros(t))))
     h.append("</table>")
     for i, t in enumerate(triaje):
         h.append("<h2 id='p%d'>%s %s</h2>" % (i, esc(t["proyecto"]), marca(t["veredicto"])))
         if not t["camara"]:
             h.append("<p class='muted'>Ningún clip de cámara%s.</p>" % (": " + esc(otros(t)) if t["otros"] else ""))
             continue
-        h.append("<details%s><summary>%d clip%s de cámara &middot; %s%s</summary><div class='grid'>"
+        h.append("<details%s><summary>%d clip%s de cámara &middot; %s%s%s</summary><div class='grid'>"
                  % (" open" if len(t["camara"]) <= 24 else "", len(t["camara"]), "s" if len(t["camara"]) != 1 else "", fmt_duracion(t["segundos"]),
+                    " &middot; <span style='color:var(--err)'>%d sin audio</span>" % len(t["sin_audio"]) if t.get("sin_audio") else "",
                     " &middot; también " + esc(otros(t)) if t["otros"] else ""))
         h.extend(tarjeta_clip(c) for c in t["camara"])
         h.append("</div></details>")
@@ -1720,14 +1727,17 @@ def guardar_json(destino, nombre, datos):
 
 
 def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_miniaturas=0, abrir=True, brutos=None,
-             zip_miniaturas=True, proyectos_brutos=None, carpetas_media=(), solo_proyectos=None, usar_cache=True, capturas_camara=True):
+             zip_miniaturas=True, proyectos_brutos=None, carpetas_media=(), solo_proyectos=None, usar_cache=True, capturas_camara=True,
+             acumular=True):
     """proyectos_brutos: nombres de los proyectos de los que hacer brutos (None = todos; "SIN_PROYECTO" = clips sin bin);
     las miniaturas, solo de sus clips.
     solo_proyectos: analizar solo estos proyectos (None = el disco entero): se leen solo sus bins y, de los MXF, solo los
     suyos (se reconocen por la cabecera, sin ffprobe). Con SIN_PROYECTO, o sin pyavb, se analiza el disco entero: para
     saber qué clips no están en ningún bin hay que mirarlos todos.
     usar_cache: lo ya leído con ffprobe en un análisis anterior del mismo disco no se repite (CacheMXF).
-    capturas_camara: sin hacer_miniaturas, una captura de cada clip de cámara para proyectos.html (qué proyectos restaurar)."""
+    capturas_camara: sin hacer_miniaturas, una captura de cada clip de cámara para proyectos.html (qué proyectos restaurar).
+    acumular: con solo_proyectos, el análisis lleva también los proyectos de análisis anteriores de este disco en
+    destino_base que no se vuelven a analizar (sumar_analisis_anteriores)."""
     origen = Path(origen)
     if not origen.exists():
         raise FileNotFoundError("No existe la carpeta de origen: %s" % origen)
@@ -1815,17 +1825,29 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
         cruce = cruzar(proyectos, bins, clips, mxf, enlaces)
         cruce["enlazados"] = {"encontrados": len(enlaces), "faltan": len(faltan), "ejemplos_faltan": faltan[:50],
                               "de_mac": sum(1 for x in faltan if es_ruta_de_mac(x)), "carpetas_media": [str(x) for x in carpetas_media or ()]}
+        sumados, cambiados = {}, []
         if solo:  # los MXF que entraron solo por el nombre y no son de estos proyectos son de otros: fuera
             clips = [c for c in clips if c["proyectos"] or c.get("proyectos_render")]
             cruce["huerfanos"] = []
+            if acumular:  # y los proyectos de análisis anteriores de este disco, para no repetirlos
+                sumados, cambiados = sumar_analisis_anteriores(destino_base, origen, destino, ficheros, proyectos, bins, mxf, clips, cruce)
+                if sumados:
+                    progreso("4/6 Se suman %d proyectos ya analizados antes (no se vuelven a leer): %s"
+                             % (len(sumados), "; ".join(sorted(sumados))))
+                    guardar_json(destino, "proyectos.json", proyectos)
+                    guardar_json(destino, "bins.json", bins)
+                    guardar_json(destino, "mxf.json", mxf)
+                if cambiados:
+                    progreso("4/6 Han cambiado en el disco desde su análisis (hay que volver a analizarlos): %s" % "; ".join(cambiados))
 
         cfg_origen = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json") if EXPORT_OK else None
         if hacer_miniaturas and ffmpeg_ok:
             progreso("5/6 Generando miniaturas...")
             elegidos = clips if proyectos_brutos is None or not EXPORT_OK else [c for c in clips if exportar_brutos.de_proyectos(c, proyectos_brutos)]
-            miniaturas(elegidos, origen, ffmpeg, destino, progreso, max_miniaturas)
+            miniaturas([c for c in elegidos if not c.get("miniatura")], origen, ffmpeg, destino, progreso, max_miniaturas)
         elif capturas_camara and ffmpeg_ok and EXPORT_OK:  # para decidir qué proyectos restaurar: solo lo de cámara
-            de_camara = [c for c in clips if not c.get("render") and exportar_brutos.clasificar(c, cfg_origen)[0] == "propio"]
+            de_camara = [c for c in clips if not c.get("render") and not c.get("miniatura")  # las sumadas ya la traen
+                         and exportar_brutos.clasificar(c, cfg_origen)[0] == "propio"]
             progreso("5/6 Una captura de cada clip de cámara (%d) para decidir qué proyectos restaurar..." % len(de_camara))
             miniaturas(de_camara, origen, ffmpeg, destino, progreso, max_miniaturas)
         else:
@@ -1856,12 +1878,20 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
         resumen = construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmpeg_ok)
         if solo:
             resumen["parcial"] = {"proyectos": [p["nombre"] for p in proyectos], "proyectos_disco": del_disco,
-                                  "mxf_analizados": len(objetivo or []), "mxf_disco": mxf_disco, "gb_media_disco": resumen["gb_media"]}
+                                  "mxf_analizados": len(objetivo or []), "mxf_disco": mxf_disco, "gb_media_disco": resumen["gb_media"],
+                                  "de_antes": sumados, "cambiados": cambiados}
             resumen["gb_media"] = gb(sum(c["bytes"] for c in clips))  # la media de estos proyectos, no la del disco
             resumen["avisos"].insert(0, {"nivel": "info", "texto": "Análisis solo de %d de %d proyectos (%s): %d de los %d MXF del disco. "
                                          "Los demás proyectos y los clips que no están en ningún bin no salen en este informe."
                                          % (len(proyectos), del_disco, "; ".join(resumen["parcial"]["proyectos"]),
                                             len(objetivo or []), mxf_disco)})
+            if sumados:
+                resumen["avisos"].insert(1, {"nivel": "info", "texto": "%d proyectos vienen de análisis anteriores de este disco, sin volver a "
+                                             "leerlos (su media no ha cambiado): %s." % (len(sumados), "; ".join(
+                                                 "%s (%s)" % (k, str(v or "")[:10]) for k, v in sorted(sumados.items())))})
+            if cambiados:
+                resumen["avisos"].insert(0, {"nivel": "aviso", "texto": "Estos proyectos se analizaron antes, pero su media ha cambiado en el "
+                                             "disco y no salen aquí: vuelve a analizarlos (elígelos en Elegir proyectos): %s." % "; ".join(cambiados)})
         if resultados_brutos is not None:
             resumen["brutos"] = resultados_brutos
             resumen["brutos_carpeta"] = str(brutos)
@@ -1874,7 +1904,13 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
                                          % (str(perdido) if perdido else "Exportación de brutos DETENIDA a mano: solo están los brutos de la tabla del final.")})
         if EXPORT_OK:  # qué proyectos restaurar, antes del montaje
             nombres = [p["nombre"] for p in proyectos] + ([] if solo else ["SIN_PROYECTO"] if cruce.get("huerfanos") else [])
-            resumen["triaje"] = escribir_triaje(exportar_brutos.triaje_proyectos(clips, cfg_origen, nombres), resumen, destino, cfg_origen)
+            triaje = exportar_brutos.triaje_proyectos(clips, cfg_origen, nombres)
+            resumen["triaje"] = escribir_triaje(triaje, resumen, destino, cfg_origen)
+            sin_audio = sorted({c["nombre"] for t in triaje for c in t["sin_audio"]})
+            if sin_audio:  # Adrián, 28/10/2026: "que detecte que algo no tenga audio asociado, que me avise"
+                resumen["avisos"].append({"nivel": "aviso", "texto": "%d clips de cámara no tienen audio (ninguna pista de sonido): %s%s. "
+                                          "En el bruto irían en silencio: mira si el sonido está en otro fichero o en otro disco."
+                                          % (len(sin_audio), ", ".join(sin_audio[:15]), "…" if len(sin_audio) > 15 else "")})
         guardar_json(destino, "resumen.json", resumen)
         informe_html(resumen, proyectos, bins, clips, cruce, destino)
 
@@ -1912,8 +1948,9 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
         fh.close()
 
 
-def buscar_analisis(destino_base, origen):
-    """El análisis más reciente de ese disco (carpeta Diagnostico_* de destino_base con resumen, clips, cruce y mxf)."""
+def analisis_del_disco(destino_base, origen):
+    """Los análisis de ese disco (carpetas Diagnostico_* de destino_base con resumen, clips, cruce y mxf), del más
+    reciente al más antiguo: [(carpeta, resumen)]."""
     mismo = lambda a, b: os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(os.path.abspath(str(b)))
     candidatas = []
     for d in Path(destino_base).glob("Diagnostico_*"):
@@ -1924,8 +1961,98 @@ def buscar_analisis(destino_base, origen):
         except Exception:
             continue
         if r.get("origen") and mismo(r["origen"], origen):
-            candidatas.append((r.get("fecha", ""), d.stat().st_mtime, d))
-    return max(candidatas)[2] if candidatas else None
+            candidatas.append((r.get("fecha", ""), d.stat().st_mtime, d, r))
+    return [(d, r) for _, _, d, r in sorted(candidatas, key=lambda x: x[:2], reverse=True)]
+
+
+def buscar_analisis(destino_base, origen):
+    """El análisis más reciente de ese disco (carpeta Diagnostico_* de destino_base con resumen, clips, cruce y mxf)."""
+    todos = analisis_del_disco(destino_base, origen)
+    return todos[0][0] if todos else None
+
+
+def sumar_analisis_anteriores(destino_base, origen, destino, ficheros, proyectos, bins, mxf, clips, cruce):
+    """Análisis de solo algunos proyectos: se le suman los proyectos de los análisis anteriores de este disco que no se
+    han vuelto a analizar (Adrián, 28/10/2026: "que se guarde ese análisis, para no tener que volverlo a hacer cuando se
+    hace otro proyecto"). Cada proyecto sale del análisis más reciente que lo tiene, y solo si sus MXF siguen en el disco
+    con el mismo tamaño y fecha; si han cambiado, no se suma y hay que volver a analizarlo. Cambia las listas en su sitio
+    y copia las miniaturas. Devuelve ({proyecto: fecha del análisis del que sale}, [proyectos que han cambiado])."""
+    inventario = {f["ruta"]: f for f in ficheros}
+    hechos = {p["nombre"] for p in proyectos}
+    por_clave = {c["clave"]: c for c in clips}
+    rutas_mxf = {m["ruta"] for m in mxf}
+    sumados, cambiados, nuevos = {}, [], set()
+    (destino / "miniaturas").mkdir(exist_ok=True)
+    for carpeta, r in analisis_del_disco(destino_base, origen):
+        if carpeta.resolve() == destino.resolve():
+            continue
+        try:
+            leer = lambda n: json.loads((carpeta / n).read_text(encoding="utf-8"))
+            a_proy, a_bins, a_clips, a_cruce, a_mxf = (leer("proyectos.json"), leer("bins.json"), leer("clips.json"),
+                                                       leer("cruce.json"), leer("mxf.json"))
+        except Exception as e:  # un análisis a medias o de una versión antigua: se salta
+            LOG.warning("Análisis anterior %s ilegible (%s): no se suma", carpeta.name, e)
+            continue
+        a_mxf = {m["ruta"]: m for m in a_mxf}
+        for p in a_proy:
+            nombre = p["nombre"]
+            if nombre in hechos:
+                continue
+            hechos.add(nombre)  # manda el análisis más reciente que lo tiene, aunque haya cambiado
+            cs = [c for c in a_clips if nombre in (c.get("proyectos") or []) or nombre in (c.get("proyectos_render") or [])]
+            rutas = {x for c in cs for x in c.get("ficheros") or []}
+            if any(x not in inventario or (x in a_mxf and (inventario[x]["bytes"], inventario[x]["modificado"])
+                                           != (a_mxf[x].get("bytes"), a_mxf[x].get("modificado"))) for x in rutas):
+                cambiados.append(nombre)
+                LOG.warning("Proyecto %s (análisis del %s): su media ha cambiado en el disco; no se suma, hay que volver a analizarlo",
+                            nombre, r.get("fecha"))
+                continue
+            proyectos.append(p)
+            bins.extend(b for b in a_bins if b.get("proyecto") == nombre)
+            for x in sorted(rutas - rutas_mxf):
+                if x in a_mxf:
+                    mxf.append(a_mxf[x])
+                    rutas_mxf.add(x)
+            for c in cs:
+                actual = por_clave.get(c["clave"])
+                if actual is None:
+                    actual = dict(c)
+                    if actual.get("miniatura"):  # la de aquel análisis, copiada a este
+                        orig, dest = carpeta / actual["miniatura"], destino / "miniaturas" / ("ant_" + Path(actual["miniatura"]).name)
+                        try:
+                            shutil.copy2(orig, dest)
+                            actual["miniatura"] = "miniaturas/" + dest.name
+                        except OSError:
+                            actual["miniatura"] = None
+                    clips.append(actual)
+                    por_clave[c["clave"]] = actual
+                    nuevos.add(c["clave"])
+                else:  # un clip que ya estaba (compartido con otro proyecto): suma sus proyectos y bins
+                    for k in ("proyectos", "proyectos_render", "bins", "nombres_bin"):
+                        for v in c.get(k) or []:
+                            if v not in actual.setdefault(k, []):
+                                actual[k].append(v)
+                    for k in ("fichero_origen", "volumenes", "columnas"):
+                        if c.get(k) and not actual.get(k):
+                            actual[k] = c[k]
+                    if c.get("origen") and actual.get("origen") in (None, "Sin determinar"):
+                        actual["origen"], actual["origen_detalle"] = c["origen"], c.get("origen_detalle", {})
+            pp = next((x for x in a_cruce.get("por_proyecto", []) if x.get("proyecto") == nombre), None)
+            if pp:
+                cruce.setdefault("por_proyecto", []).append(pp)
+            sumados[nombre] = r.get("fecha")
+    if sumados:
+        validos = {p["nombre"] for p in proyectos}
+        for c in clips:  # un clip de un análisis anterior no puede apuntar a un proyecto que no está en este
+            for k in ("proyectos", "proyectos_render"):
+                if c.get(k):
+                    c[k] = [x for x in c[k] if x in validos]
+        proyectos.sort(key=lambda p: p["nombre"].lower())
+        cruce["por_proyecto"].sort(key=lambda x: str(x.get("proyecto", "")).lower())
+        clips.sort(key=lambda c: c["nombre"])
+        mxf.sort(key=lambda m: m["ruta"])
+        LOG.info("Sumados %d proyectos de análisis anteriores: %s", len(sumados), "; ".join("%s (%s)" % kv for kv in sumados.items()))
+    return sumados, cambiados
 
 
 def cargar_analisis(carpeta):
@@ -2064,32 +2191,35 @@ def texto_triaje(t):
         return ""
     if not t.get("clips"):
         return "   · " + exportar_brutos.TRIAJE["sin"]
-    return "   · %s: %d clip%s de cámara, %s" % (exportar_brutos.TRIAJE.get(t.get("veredicto"), "?"), t["clips"], "s" if t["clips"] != 1 else "",
-                                           fmt_duracion(t.get("segundos")))
+    return "   · %s: %d clip%s de cámara, %s%s" % (exportar_brutos.TRIAJE.get(t.get("veredicto"), "?"), t["clips"], "s" if t["clips"] != 1 else "",
+                                             fmt_duracion(t.get("segundos")), ", %d SIN AUDIO" % t["sin_audio"] if t.get("sin_audio") else "")
 
 
-def dialogo_proyectos(raiz, lista, marcados, hechos=(), triaje=None):
+def dialogo_proyectos(raiz, lista, marcados, hechos=(), triaje=None, analizados=None):
     """Ventana con la lista de proyectos para marcar los que se quieren hacer. Devuelve los nombres elegidos
     (en el orden de la lista) o None si se cancela. marcados: los elegidos antes (None = todos). triaje: {proyecto: fila
-    de triaje.json} del último análisis (qué proyectos restaurar): sale en cada fila y da el botón "Solo los de material"."""
+    de triaje.json} del último análisis (qué proyectos restaurar): sale en cada fila y da el botón "Solo los de material".
+    analizados: {proyecto: fecha} de los que ya están en el análisis guardado ("✓ analizado": no hace falta repetirlo)."""
     import tkinter as tk
     from tkinter import ttk
     import tema
-    triaje = triaje or {}
+    triaje, analizados = triaje or {}, analizados or {}
+    ya = lambda n: ("   ✓ analizado el %s" % str(analizados[n])[:10] if n in analizados else "") + ("   ✓ ya tiene brutos" if n in hechos else "")
     filas = [(p["nombre"], "%s   (%d bins%s)%s%s" % (p["nombre"], p["bins"], ", último cambio " + p["modificado"][:10] if p["modificado"] else "",
-                                                       texto_triaje(triaje.get(p["nombre"])), "   ✓ ya tiene brutos" if p["nombre"] in hechos else ""))
+                                                       texto_triaje(triaje.get(p["nombre"])), ya(p["nombre"])))
              for p in lista]
-    filas.append(("SIN_PROYECTO", "SIN_PROYECTO   (clips que no están en ningún bin)%s%s"
-                  % (texto_triaje(triaje.get("SIN_PROYECTO")), "   ✓ ya tiene brutos" if "SIN_PROYECTO" in hechos else "")))
+    filas.append(("SIN_PROYECTO", "SIN_PROYECTO   (clips que no están en ningún bin)%s%s" % (texto_triaje(triaje.get("SIN_PROYECTO")), ya("SIN_PROYECTO"))))
     v = tk.Toplevel(raiz)
     v.title("Elegir proyectos")
-    v.geometry("880x540" if triaje else "720x540")
+    v.geometry("980x540" if triaje or analizados else "720x540")
     v.configure(bg=tema.FONDO)
     v.transient(raiz)
     ttk.Label(v, text="%d proyectos en el disco. Marca los que quieres hacer ahora (clic para marcar o desmarcar): se analizan\n"
                       "y exportan solo esos. Los demás se pueden hacer otro día con la misma carpeta de brutos." % len(lista)
                       + ("\nAl lado, lo que propone el último análisis (Qué proyectos restaurar): \"Solo los de material\" marca los de restaurar."
-                         if triaje else ""),
+                         if triaje else "")
+                      + ("\nLos \"✓ analizado\" están guardados: no hace falta volver a analizarlos, y al analizar otros se suman a ellos."
+                         if analizados else ""),
               padding=12).pack(anchor="w")
     caja = ttk.Frame(v, padding=(12, 0))
     caja.pack(fill="both", expand=True)

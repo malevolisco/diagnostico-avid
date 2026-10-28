@@ -96,6 +96,14 @@ jobs:
           $linea.Line
           Get-ChildItem salida4/cache_analisis
 
+      - name: Analizar otro proyecto suma los ya analizados (no se repiten)
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 61  # otro minuto: otra carpeta Diagnostico_
+          $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList '--origen disco_prueba --destino salida4 --sin-gui --no-abrir --sin-miniaturas --proyectos "APROX"' -PassThru -Wait -NoNewWindow
+          if ($p.ExitCode -ne 0) { throw "El ejecutable ha fallado con código $($p.ExitCode)" }
+          python -c "import json, glob, os; d = max(glob.glob('salida4/Diagnostico_*/'), key=os.path.getmtime); r = json.load(open(d + 'resumen.json', encoding='utf-8'))['parcial']; print(r['proyectos'], sorted(r['de_antes'])); assert r['proyectos'] == ['ABORTO', 'APROX', 'NTSC'] and sorted(r['de_antes']) == ['ABORTO', 'NTSC'] and not r['cambiados'], r"
+
       - name: Exportar con un análisis ya hecho y un montaje hecho a mano (cortar, reordenar, renombrar, quitar)
         shell: pwsh
         run: |

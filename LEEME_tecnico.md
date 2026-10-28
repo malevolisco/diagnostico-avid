@@ -1,12 +1,26 @@
 # Diagnóstico y exportación de discos Avid — notas técnicas
 
-Autor: Adrián Merinero Sánchez (Archivo de RTVE).
+Autor: Adrián Merinero Sánchez. Visión general y garantías: [`README.md`](README.md).
+
+**Índice:**
+[Qué hay en el paquete](#qué-hay-en-el-paquete) ·
+[Construir el portable](#construir-el-portable-en-un-pc-con-windows) ·
+[Línea de comandos](#modo-línea-de-comandos) ·
+[Fase 1: análisis](#fase-1-qué-hace-el-análisis) ·
+[Fase 2: brutos](#fase-2-cómo-se-construye-cada-bruto) ·
+[Actualización](#actualización-actualizarpy) ·
+[Configuración](#config-de-exportación-config_brutosjson) ·
+[Verificado con discos reales](#verificado-con-el-disco-real-de-la-corresponsalía-de-méxico-oct-2026-build-7) ·
+[Media enlazada](#media-enlazada-ama-y-media-repartida-en-varios-discos-oct-2026) ·
+[Discos de China](#discos-de-china-corresponsalía-de-pekín-oct-2026) ·
+[Qué sigue sin verificar](#qué-sigue-sin-verificar) ·
+[Primer zip de un disco real](#lista-de-comprobación-del-primer-zip-de-un-disco-real)
 
 ## Qué hay en el paquete
 
 | Fichero | Para qué |
 |---|---|
-| `construir_exe.bat` | **Lo que ejecutas tú, una vez.** Descarga ffmpeg, construye el `.exe` y deja `DiagnosticoAvid_portable.zip` listo para enviar |
+| `construir_exe.bat` | **Para construir el portable en local, una vez** (GitHub Actions lo hace en cada cambio). Descarga ffmpeg, construye el `.exe` y deja `DiagnosticoAvid_portable.zip` listo para enviar |
 | `diagnostico_avid.py` | Programa principal: línea de comandos, análisis (fase 1) e informe |
 | `interfaz.py` | La ventana: una sola, oscura, con tres páginas (1 · Disco, 2 · Montaje, 3 · Exportar) y la cola de exportación con el avance de cada bruto |
 | `tema.py` | Colores, letras y estilos del tema oscuro (ttk `clam`) y componentes: tarjeta, botones de elección 4 \| 8, pestañas de las páginas, `Desplazable` (página que se desplaza si no cabe) |
@@ -22,7 +36,7 @@ Autor: Adrián Merinero Sánchez (Archivo de RTVE).
 | `requirements.txt` | Dependencias Python (`pyavb`, `openpyxl`, `pillow`) |
 | `bin/` | Aquí deja `construir_exe.bat` los `ffmpeg.exe` y `ffprobe.exe` |
 
-## Construir el portable (en tu PC con Windows)
+## Construir el portable (en un PC con Windows)
 
 1. Descomprime `diagnostico_avid.zip`.
 2. Doble clic en `construir_exe.bat`. Pasos que anuncia: comprueba Python, instala `pyinstaller`, `pyavb` y `openpyxl` (versiones precompiladas), descarga ffmpeg de GitHub (~100 MB) a la carpeta temporal y copia solo `ffmpeg.exe` y `ffprobe.exe` a `bin\`, construye el ejecutable y comprime `dist\DiagnosticoAvid` en `DiagnosticoAvid_portable.zip`.
@@ -35,7 +49,7 @@ Autor: Adrián Merinero Sánchez (Archivo de RTVE).
 
 Si el antivirus corporativo bloquea el `.exe` (pasa con PyInstaller), la alternativa es `ejecutar.bat` + Python instalado en el PC de destino.
 
-## Modo línea de comandos (para ti)
+## Modo línea de comandos
 
 ```
 python diagnostico_avid.py --origen F:\ --destino C:\Users\TU_USUARIO\Desktop --sin-gui
@@ -55,12 +69,12 @@ Opciones: `--sin-miniaturas` (análisis mucho más rápido), `--max-miniaturas 2
 7. **Miniaturas**: un fotograma al 10 % de cada clip con vídeo, 320 px. Sin miniaturas, igualmente uno de cada clip de cámara (`capturas_camara`, `--sin-capturas` para no hacerlo) para el listado de qué restaurar.
 8. **Informe**: `informe.html` + JSON por capa + ZIP.
 10. **Análisis acumulado** (28/10/2026): con proyectos elegidos, `sumar_analisis_anteriores` añade los proyectos de análisis anteriores del mismo disco (misma carpeta de informe) que no se vuelven a analizar, si sus MXF no han cambiado (tamaño y fecha); el resultado es un análisis completo de todo lo analizado hasta ahora (`resumen.parcial.de_antes`, `cambiados`).
-9. **Qué proyectos restaurar** (28/10/2026, antes del montaje): `triaje_proyectos` cuenta los clips de cámara de cada proyecto (`clasificar` = propio y con vídeo; sin agencias, importados, dudosos ni efectos) y propone restaurar, poco material (hasta `triaje_max_clips` = 2 y menos de `triaje_max_minutos` = 2 min) o sin material de cámara. `escribir_triaje` deja `proyectos.html` (tabla y una captura por clip de cámara, enlazado desde el informe), `proyectos.csv` y `triaje.json` (lo lee el selector de proyectos: propuesta en cada fila y botón "Solo los de material").
+9. **Qué proyectos restaurar** (28/10/2026, antes del montaje): `triaje_proyectos` cuenta los clips de cámara de cada proyecto (`clasificar` = propio y con vídeo; sin agencias, importados, dudosos ni efectos) y propone restaurar, poco material (hasta `triaje_max_clips` = 2 y menos de `triaje_max_minutos` = 2 min), revisar (vídeos dudosos, típicamente MP4/MOV sin pistas de cámara, y ningún clip de cámara o poco y lo dudoso dura más: se enseñan con captura para decidir en Origen del material) o sin material de cámara. `escribir_triaje` deja `proyectos.html` (tabla y una captura por clip de cámara, enlazado desde el informe), `proyectos.csv` y `triaje.json` (lo lee el selector de proyectos: propuesta en cada fila y botón "Solo los de material").
 
 ## Fase 2: cómo se construye cada bruto
 
 1. **Reparto** (`grupos_de_exportacion`), según `agrupar` en el config:
-   - **`proyecto_mes`** (por defecto desde el correo del Archivo de Informativos del 21/10/2026, tras ver un bruto por días):
+   - **`proyecto_mes`** (por defecto desde el correo del Archivo del 21/10/2026, tras ver un bruto por días):
      1. **Fuera lo que viene de fuera, por señales** (`clasificar`, `excluir_importados`; diseño en `docs/diseno_cualquier_disco.md`, apartado 4). Cada clip acaba en una clase: material propio, agencia, importado de fuera, efecto de Avid o dudoso. Pistas (`senales_de_origen`), de más a menos fuertes:
         - **4, el indicativo de agencia en el nombre** (`nombre_de_agencia`, `nombres_agencia_regex`): Reuters o `RTR…` (RTRMADV, RTRWNEV), AFP, EFE, APTN, Associated Press, Europa Press, Eurovisión/EVN, EBU, Xinhua, CCTV o CGTN como palabra suelta en el nombre del clip (el del MXF o el que tiene en el bin) o del fichero importado. Manda sobre los metadatos (Reuters graba con cámaras Sony y el MP4 trae su XAVC). Disco real, 26/10/2026: un Reuters con espacios en vez de guiones (`2019 09 29T150951Z_1_…_RTRWNEV_D_7121 YEMEN.mp4`) no cumplía la regla de `config_origen.json`, quedaba dudoso y entraba en el bruto.
         - **3, el fichero o la tarjeta**: la marca de los metadatos (`marca_de_metadatos`: make/model, iPhone y Android, GoPro, DJI, XAVC de Sony, compañía de un MXF que no sea Avid; las de móvil y las descargas de YouTube cuentan como de fuera), la estructura de tarjeta en la ruta (`CONTENTS`, `PRIVATE`, `DCIM`, `XDROOT`…) y un origen de agencia por el nombre (Reuters, `config_origen.json`).
@@ -196,9 +210,9 @@ Por un disco real de la corresponsalía de Pekín (carpetas de proyecto `AAAAMMD
 
 - **Disco real de China**: todo lo anterior se ha probado con el disco simulado. Sin verificar: cómo guarda Avid los nombres en chino en los bins (se aceptan UTF-8 y Mac Roman), los nombres reales de fichero de todas las cámaras que usan en Pekín (se amplía `camara_propia_regex`), qué otros nombres de bin de agencias usan, y el comportamiento con un disco con sectores dañados de verdad (se ha probado con errores de lectura simulados).
 - **XDCAM HD 50**: comprobado con ffprobe y la ficha técnica (MPEG-2 4:2:2, 1920×1080, `field_order=tt`, 25, 16:9, 50 Mb/s, BT.709), con MediaInfo ("XDCAM HD422") y con un clip real DVCPRO50 16:9 de la Corresponsalía (sale a cuadro entero). Sin comprobar: que el sistema del Archivo lo ingeste sin problemas (ffmpeg escribe un OP1a correcto, pero no se ha validado contra la norma RDD 9 completa ni con la norma técnica de ingesta del Archivo, que aún no tenemos) y la calidad del paso de NTSC a 25 con material real en movimiento. Hacer un bruto corto y probarlo en el Archivo antes de lanzar un disco entero.
-- **Montaje con material real**: la pantalla se ha probado con el disco simulado (pantalla virtual en Linux con Python 3.12 y Pillow). Sin probar: en Windows con un bruto real de 2 h (cientos de clips) y el tiempo de los fotogramas del visor en el PC de la jefa; en Linux, ~1 s por minuto de DV.
+- **Montaje con material real**: la pantalla se ha probado con el disco simulado (pantalla virtual en Linux con Python 3.12 y Pillow). Sin probar: en Windows con un bruto real de 2 h (cientos de clips) y el tiempo de los fotogramas del visor en el PC donde se usa; en Linux, ~1 s por minuto de DV.
 - **Aspecto de la ventana en Windows**: `tests/probar_interfaz.py` recorre las tres páginas en cada build de GitHub (analizar, montar, exportar) y guarda capturas en el artefacto `capturas_ventana`; con Segoe UI las medidas cambian algo respecto a Linux. Sin probar en una pantalla con escalado (125 %, 150 %) como la de muchos portátiles.
-- **Velocidad de la conversión en el PC de la jefa**: solo medida en Linux.
+- **Velocidad de la conversión en el PC donde se usa**: solo medida en Linux.
 - **Qué fecha es "la fecha de creación del fichero original"**: se usa la del fichero de media (la columna "Fecha fichero" del shotlist, la de la foto del correo). Si el disco se copió sin conservar las fechas, el orden sería el de la copia.
 
 - Que el códec real de los MXF sea copiable (DNxHD, DV, IMX/MPEG-2 lo son).

@@ -1,6 +1,6 @@
 # Diseño: pantalla de montaje y panel de exportación
 
-Aprobado por Adrián el 22/10/2026, parte por parte. Va antes del visto bueno de Ingeniería de RTVE, así que el resultado tiene que ser comprobable y presentable.
+Aprobado por Adrián el 22/10/2026, parte por parte. Va antes del visto bueno de Ingeniería, así que el resultado tiene que ser comprobable y presentable.
 
 ## Objetivo
 
@@ -96,7 +96,7 @@ Por defecto: proyecto (en mayúsculas, como esté en Avid) y mes y año de los c
 - Junto al bruto, el shotlist, la hoja de contactos, el `.md5` y la ficha técnica llevan el mismo nombre base.
 - Se puede editar en el panel (prefijo) y por bruto en el montaje.
 
-Esto sustituye al `PROYECTO_AAAA-MM` actual. Sigue cumpliendo el punto 2 del correo del Archivo (proyecto + año y mes), pero con otra forma. Adrián se lo comunica a su jefa.
+Esto sustituye al `PROYECTO_AAAA-MM` actual. Sigue cumpliendo el punto 2 del correo del Archivo (proyecto + año y mes), pero con otra forma. Adrián se lo comunica al Archivo.
 
 ## Panel de opciones de exportación
 
@@ -153,7 +153,7 @@ Todo activado por defecto y desactivable en el panel.
   - `comprobar_resultado.py` comprueba orden exacto, TC de fichero y de GOP, fecha de creación, pistas, nombres, ficha conforme y MD5.
 - **Ventana real** en pantalla virtual (xvfb): montaje, visor y panel.
 - **Windows**: el workflow `construir.yml` ejecuta lo mismo con el `.exe`.
-- **No verificable aquí**: material real de RTVE, velocidad en el PC de la jefa de Adrián, importación en Avid y en el sistema del Archivo. Se anota en `LEEME_tecnico.md`.
+- **No verificable aquí**: material real, velocidad en el PC donde se usa, importación en Avid y en el sistema del Archivo. Se anota en `LEEME_tecnico.md`.
 
 ## Fuera de alcance
 

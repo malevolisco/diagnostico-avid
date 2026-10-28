@@ -1,6 +1,6 @@
 DIAGNÓSTICO Y EXPORTACIÓN DE DISCOS AVID — Instrucciones de uso
 ================================================================
-Autor: Adrián Merinero Sánchez (Archivo de RTVE)
+Autor: Adrián Merinero Sánchez
 
 Qué hace
 --------
@@ -109,6 +109,11 @@ Página 1 · Disco
    - "Restaurar": tiene material de verdad.
    - "Poco material: ¿descartar?": uno o dos clips de cámara y menos de
      2 minutos en total.
+   - "Revisar: vídeos sin pistas de cámara": el proyecto tiene vídeos
+     (MP4, MOV...) sin nombre ni datos de cámara que pueden ser el
+     material (por ejemplo, de una cámara que el programa no reconoce).
+     Salen con su captura. Si son material: Montaje > "Origen del
+     material" > "Entra", y pasan a los brutos.
    - "Sin material de cámara": ninguno.
    Los clips de cámara SIN AUDIO (ninguna pista de sonido) salen marcados
    en el listado, en el informe (con un aviso), en el shotlist ("Aviso

@@ -4,13 +4,13 @@ Pedido por Adrián el 22/10/2026: "más vistosa y más user friendly, más parec
 
 ## Objetivo
 
-Quien usa el programa es la jefa de Adrián: sin conocimientos técnicos, en Windows, sin Adrián delante.
+Quien usa el programa es personal del Archivo: sin conocimientos técnicos, en Windows, sin Adrián delante.
 
 - **Vistoso**: tema oscuro profesional, como un programa de edición.
 - **Fácil**: se ve qué toca hacer y en qué orden; el programa da los valores ya elegidos y solo se cambian si hace falta.
 - Sin perder nada de lo que hace hoy: análisis, montaje, exportación, Detener, reanudar y actualización a mano.
 
-Criterio de éxito: tu jefa abre el programa y, sin instrucciones, sabe que tiene que ir de **Disco** a **Montaje** a **Exportar**.
+Criterio de éxito: quien lo usa abre el programa y, sin instrucciones, sabe que tiene que ir de **Disco** a **Montaje** a **Exportar**.
 
 ## Decisiones
 

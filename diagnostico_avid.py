@@ -1648,7 +1648,8 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
 
 OTROS_TRIAJE = {"agencia": ("de agencia", "de agencia"), "importado": ("importado", "importados"), "dudoso": ("dudoso", "dudosos"),
                 "sin vídeo": ("sin vídeo", "sin vídeo")}
-CUENTA_TRIAJE = {"restaurar": "para restaurar", "poco": "con poco material", "sin": "sin material de cámara"}
+CUENTA_TRIAJE = {"restaurar": "para restaurar", "poco": "con poco material", "revisar": "para revisar (vídeos sin pistas de cámara)",
+                 "sin": "sin material de cámara"}
 
 
 def escribir_triaje(triaje, resumen, destino, cfg):
@@ -1657,7 +1658,7 @@ def escribir_triaje(triaje, resumen, destino, cfg):
     otros = lambda t: ", ".join("%d %s" % (n, OTROS_TRIAJE.get(k, (k, k))[n != 1]) for k, n in sorted(t["otros"].items()))
     cuenta = Counter(t["veredicto"] for t in triaje)
     guardar_json(destino, "triaje.json", [{"proyecto": t["proyecto"], "veredicto": t["veredicto"], "clips": len(t["camara"]),
-                                           "sin_audio": len(t.get("sin_audio") or []),
+                                           "sin_audio": len(t.get("sin_audio") or []), "dudosos": len(t.get("dudosos") or []),
                                            "segundos": round(t["segundos"], 1), "mas_largo": round(t["mas_largo"], 1),
                                            "otros": dict(t["otros"])} for t in triaje])
     with open(destino / "proyectos.csv", "w", newline="", encoding="utf-8-sig") as f:
@@ -1666,7 +1667,7 @@ def escribir_triaje(triaje, resumen, destino, cfg):
         for t in triaje:
             w.writerow([t["proyecto"], exportar_brutos.TRIAJE[t["veredicto"]], len(t["camara"]), fmt_duracion(t["segundos"]),
                         fmt_duracion(t["mas_largo"]) if t["camara"] else "", len(t.get("sin_audio") or []) or "", otros(t)])
-    color = {"restaurar": "#e7f6ec", "poco": "#fffaeb", "sin": "#eef1f5"}
+    color = {"restaurar": "#e7f6ec", "poco": "#fffaeb", "revisar": "#fdebd3", "sin": "#eef1f5"}
     marca = lambda v: "<span class='tag' style='background:%s'>%s</span>" % (color[v], esc(exportar_brutos.TRIAJE[v]))
     h = ["<!doctype html><html lang='es'><head><meta charset='utf-8'><title>Qué proyectos restaurar</title><style>%s</style></head><body>" % CSS,
          "<header><h1>Qué proyectos restaurar</h1><p>%s &middot; analizado el %s</p></header><main>" % (esc(resumen["origen"]), esc(resumen["fecha"])),
@@ -1675,7 +1676,9 @@ def escribir_triaje(triaje, resumen, destino, cfg):
         h.append("<div class='kpi'><b>%d</b><span>%s</span></div>" % (cuenta.get(v, 0), esc(exportar_brutos.TRIAJE[v])))
     h.append("</div><p class='muted'>Clips de cámara: los de tarjeta P2 y los de otras cámaras que reconoce el programa. No cuentan las "
              "agencias, lo importado de fuera, lo dudoso ni los efectos hechos en Avid. Poco material: hasta %d clips de cámara y menos de "
-             "%d min en total (triaje_max_clips y triaje_max_minutos en config_brutos.json). Es una propuesta: decide mirando las "
+             "%d min en total (triaje_max_clips y triaje_max_minutos en config_brutos.json). Revisar: hay vídeos (MP4, MOV…) sin nombre "
+             "ni datos de cámara que pueden ser el material; si lo son, en Montaje &rarr; Origen del material elige &laquo;Entra&raquo; "
+             "y pasan a los brutos. Es una propuesta: decide mirando las "
              "capturas. En el programa, 1 &middot; Disco &rarr; Elegir proyectos deja marcar solo los que se restauran.</p>"
              % (int(cfg.get("triaje_max_clips", 2)), int(cfg.get("triaje_max_minutos", 2))))
     h.append("<table><tr><th>Proyecto</th><th>Propuesta</th><th class='n'>Clips de cámara</th><th class='n'>Duración</th>"
@@ -1690,6 +1693,14 @@ def escribir_triaje(triaje, resumen, destino, cfg):
     h.append("</table>")
     for i, t in enumerate(triaje):
         h.append("<h2 id='p%d'>%s %s</h2>" % (i, esc(t["proyecto"]), marca(t["veredicto"])))
+        if t.get("dudosos"):  # MP4/MOV sin pistas: se enseñan para decidir (Origen del material → Entra)
+            seg = sum(c.get("duracion") or 0 for c in t["dudosos"])
+            h.append("<details%s><summary>%d vídeo%s sin pistas de cámara &middot; %s &middot; <span class='muted'>si son material: "
+                     "Montaje &rarr; Origen del material &rarr; Entra</span></summary><div class='grid'>"
+                     % (" open" if t["veredicto"] == "revisar" and len(t["dudosos"]) <= 24 else "", len(t["dudosos"]),
+                        "s" if len(t["dudosos"]) != 1 else "", fmt_duracion(seg)))
+            h.extend(tarjeta_clip(c) for c in t["dudosos"])
+            h.append("</div></details>")
         if not t["camara"]:
             h.append("<p class='muted'>Ningún clip de cámara%s.</p>" % (": " + esc(otros(t)) if t["otros"] else ""))
             continue
@@ -1847,8 +1858,8 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
             miniaturas([c for c in elegidos if not c.get("miniatura")], origen, ffmpeg, destino, progreso, max_miniaturas)
         elif capturas_camara and ffmpeg_ok and EXPORT_OK:  # para decidir qué proyectos restaurar: solo lo de cámara
             de_camara = [c for c in clips if not c.get("render") and not c.get("miniatura")  # las sumadas ya la traen
-                         and exportar_brutos.clasificar(c, cfg_origen)[0] == "propio"]
-            progreso("5/6 Una captura de cada clip de cámara (%d) para decidir qué proyectos restaurar..." % len(de_camara))
+                         and exportar_brutos.clasificar(c, cfg_origen)[0] in ("propio", "dudoso")]  # lo dudoso, para revisarlo
+            progreso("5/6 Una captura de cada clip de cámara o dudoso (%d) para decidir qué proyectos restaurar..." % len(de_camara))
             miniaturas(de_camara, origen, ffmpeg, destino, progreso, max_miniaturas)
         else:
             progreso("5/6 Miniaturas omitidas.")
@@ -2190,7 +2201,7 @@ def texto_triaje(t):
     if not t or not EXPORT_OK:
         return ""
     if not t.get("clips"):
-        return "   · " + exportar_brutos.TRIAJE["sin"]
+        return "   · " + (exportar_brutos.TRIAJE["revisar"] + ": %d" % t["dudosos"] if t.get("dudosos") else exportar_brutos.TRIAJE["sin"])
     return "   · %s: %d clip%s de cámara, %s%s" % (exportar_brutos.TRIAJE.get(t.get("veredicto"), "?"), t["clips"], "s" if t["clips"] != 1 else "",
                                              fmt_duracion(t.get("segundos")), ", %d SIN AUDIO" % t["sin_audio"] if t.get("sin_audio") else "")
 

@@ -31,6 +31,7 @@ def main():
     ap.add_argument("brutos")
     ap.add_argument("--ffprobe", default=shutil.which("ffprobe"))
     ap.add_argument("--reanudado", action="store_true")
+    ap.add_argument("--rdd9", action="store_true", help="los brutos tienen que estar empaquetados en RDD 9 (con bmx junto al programa)")
     ap.add_argument("--agrupar", choices=["proyecto_mes", "proyecto"], default="proyecto_mes",
                     help="proyecto_mes = config por defecto (XDCAM HD 50, sin importados) | proyecto = agrupar proyecto, formato auto, con importados")
     a = ap.parse_args()
@@ -192,6 +193,11 @@ def acabado_profesional(proy, b, mxf, tc, a):
     import mxf_util
     if b.get("conforme") is not True or not (Path(a.brutos) / str(b.get("ficha"))).exists():
         fallo("bruto %s: ficha técnica %r, conforme %r" % (proy, b.get("ficha"), b.get("conforme")))
+    if a.rdd9:
+        ficha = (Path(a.brutos) / str(b.get("ficha"))).read_text(encoding="utf-8")
+        if b.get("rdd9") is not True or "OK     Envoltura SMPTE RDD 9 (BBC bmx" not in ficha:
+            fallo("bruto %s: no está en RDD 9 (rdd9 %r; ficha: %s)" % (proy, b.get("rdd9"),
+                                                                     [l for l in ficha.splitlines() if "RDD 9" in l]))
     md5 = mxf.with_suffix(".md5")
     if not md5.exists() or md5.read_text(encoding="utf-8") != "%s *%s\n" % (hashlib.md5(mxf.read_bytes()).hexdigest(), mxf.name):
         fallo("bruto %s: el .md5 falta o no cuadra" % proy)

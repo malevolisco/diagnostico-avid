@@ -611,6 +611,7 @@ class OrdenYParalelo(unittest.TestCase):
         cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
         cfg["clips_a_la_vez"] = 3
         cfg["ficha_tecnica"] = False  # ffmpeg simulado: no hay MXF de verdad que comprobar (eso se prueba en test_mxf.py)
+        cfg["rdd9"] = False  # ni que reempaquetar (eso se prueba en EmpaquetarRDD9 y en el CI con bmx)
         destino = self.tmp / "brutos"
         destino.mkdir()
         unidos = []
@@ -1692,6 +1693,61 @@ class CacheDelAnalisis(unittest.TestCase):
             "alto", "ancho", "bits", "canales", "codec", "color_matriz", "color_primarias", "color_rango", "color_transfer", "duracion",
             "field_order", "file_package_name", "file_package_umid", "fps", "fps_medio", "muestreo", "perfil", "pix_fmt", "rotacion",
             "tipo"]), "Ha cambiado lo que guarda resumir_mxf: sube VERSION_CACHE y actualiza esta lista")
+
+
+class EmpaquetarRDD9(unittest.TestCase):
+    """bmxtranswrap -t rdd9 sobre el bruto, con nombres ASCII en una carpeta de trabajo (bmx en Windows no abre "北京").
+    bmx se sustituye por un script que copia la entrada y añade una marca."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.bruto = self.tmp / "20260916_CHINA 北京 SEPTIEMBRE DE 2021.mxf"
+        self.bruto.write_bytes(b"MXF" * 1000)
+        self.falso = self.tmp / "falso_bmx.py"
+        eb.PARAR.clear()
+
+    def tearDown(self):
+        eb.PARAR.clear()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def bmx(self, cuerpo):
+        self.falso.write_text("import sys, time\nargs = sys.argv[1:]\n" + cuerpo, encoding="utf-8")
+        return [sys.executable, str(self.falso)]
+
+    def test_reempaqueta_y_conserva_el_nombre(self):
+        bmx = self.bmx("assert args[:4] == ['-t', 'rdd9', '-o', 'salida.mxf'] and args[4] == 'entrada.mxf'\n"
+                       "open('salida.mxf', 'wb').write(open('entrada.mxf', 'rb').read() + b'RDD9')\n")
+        eb.empaquetar_rdd9(bmx, self.bruto)
+        self.assertEqual(self.bruto.read_bytes(), b"MXF" * 1000 + b"RDD9")
+        self.assertEqual(sorted(x.name for x in self.tmp.iterdir()), sorted([self.bruto.name, self.falso.name]))
+
+    def test_si_falla_el_bruto_queda_como_estaba(self):
+        bmx = self.bmx("print('Failed to open input'); sys.exit(1)\n")
+        with self.assertRaises(RuntimeError) as cm:
+            eb.empaquetar_rdd9(bmx, self.bruto)
+        self.assertIn("Failed to open input", str(cm.exception))
+        self.assertEqual(self.bruto.read_bytes(), b"MXF" * 1000)
+        self.assertEqual(sorted(x.name for x in self.tmp.iterdir()), sorted([self.bruto.name, self.falso.name]))
+
+    def test_salida_corta_no_sustituye(self):
+        bmx = self.bmx("open('salida.mxf', 'wb').write(b'x')\n")
+        with self.assertRaises(RuntimeError):
+            eb.empaquetar_rdd9(bmx, self.bruto)
+        self.assertEqual(self.bruto.read_bytes(), b"MXF" * 1000)
+
+    def test_detener(self):
+        bmx = self.bmx("time.sleep(30)\n")
+        threading.Timer(0.5, eb.PARAR.set).start()
+        t = time.time()
+        with self.assertRaises(eb.Detenido):
+            eb.empaquetar_rdd9(bmx, self.bruto, parar=True)
+        self.assertLess(time.time() - t, 10)
+        self.assertEqual(self.bruto.read_bytes(), b"MXF" * 1000)
+
+    def test_buscar_bmx_junto_a_ffprobe(self):
+        exe = "bmxtranswrap.exe" if os.name == "nt" else "bmxtranswrap"
+        (self.tmp / exe).write_bytes(b"")
+        self.assertEqual(eb.buscar_bmx(str(self.tmp / "ffprobe")), str(self.tmp / exe))
 
 
 @unittest.skipIf(da is None, "sin pyavb")

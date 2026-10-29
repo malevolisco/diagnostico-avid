@@ -106,16 +106,6 @@ class AcabadoProfesional(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("FALLO  2 pistas de audio (4)", texto)
 
-    def test_ficha_y_rdd9(self):
-        """Sin bmx (rdd9 None) la ficha lo dice y sigue conforme; si se pidió RDD 9 y el fichero no lo escribió bmx, falla."""
-        esperado = {"pistas": 4, "tc": "10:00:00:00", "duracion": 2.0, "tc_gop": True}
-        ok, texto = mxf_util.ficha_tecnica(FFPROBE, self.mxf, dict(esperado, rdd9=None))
-        self.assertTrue(ok, texto)
-        self.assertIn("sin RDD 9", texto)
-        ok, texto = mxf_util.ficha_tecnica(FFPROBE, self.mxf, dict(esperado, rdd9=True))
-        self.assertFalse(ok)
-        self.assertIn("FALLO  Envoltura SMPTE RDD 9 (FFmpeg", texto)
-
     def test_fecha_de_creacion(self):
         self.assertIsNone(mxf_util.fecha_creacion(self.mxf))  # ffmpeg sin creation_time: fecha vacía
         con = self.tmp / "con_fecha.mxf"

@@ -1765,6 +1765,26 @@ class CarpetasSinAvid(unittest.TestCase):
         t = eb.triaje_proyectos([anonimo], cfg)
         self.assertEqual(t[0]["veredicto"], "revisar")
 
+    def test_proxies_de_camara_no_son_material(self):
+        """Una tarjeta copiada trae copias de baja calidad (P2: CONTENTS/PROXY; Sony: XDROOT/Sub, M4ROOT/SUB): fuera, o
+        cada toma saldría dos veces en el bruto. El material de verdad sí cuenta."""
+        for ruta in [r"T\CONTENTS\PROXY\0001AB.MP4", "T/PRIVATE/M4ROOT/SUB/C0001S03.MP4", "T/XDROOT/Sub/C0001S01.MXF", "Proxies/x.mov"]:
+            self.assertTrue(da.es_proxy(ruta), ruta)
+        for ruta in [r"T\CONTENTS\VIDEO\0001AB.MXF", "T/XDROOT/Clip/C0001.MXF", "T/PRIVATE/M4ROOT/CLIP/C0001.MP4", "T/sub/plano.mp4"]:
+            self.assertFalse(da.es_proxy(ruta), ruta)
+        fich = self.inventario(["TARJETA/CONTENTS/VIDEO/0001AB.MXF", "TARJETA/CONTENTS/AUDIO/0001AB00.MXF",
+                                "TARJETA/CONTENTS/PROXY/0001AB.MP4", "TARJETA/CONTENTS/CLIP/0001AB.XML"])
+        _, videos = da.carpetas_sin_avid(fich, [])
+        self.assertEqual(sorted(videos), ["TARJETA/CONTENTS/AUDIO/0001AB00.MXF", "TARJETA/CONTENTS/VIDEO/0001AB.MXF"])
+
+    def test_clip_p2_enlazado_es_del_proyecto_de_avid(self):
+        """En P2 el bin enlaza el .MXF de vídeo; el sonido va en otros .MXF del mismo clip (CONTENTS/AUDIO). El clip es del
+        proyecto que lo enlaza, no también de la carpeta de la tarjeta."""
+        v, a0 = "TARJETA/CONTENTS/VIDEO/0001AB.MXF", "TARJETA/CONTENTS/AUDIO/0001AB00.MXF"
+        clips = [{"nombre": "0001AB", "ficheros": [a0, v]}]
+        da.asignar_sueltos(clips, {v: "TARJETA", a0: "TARJETA"}, {r"E:\TARJETA\CONTENTS\VIDEO\0001AB.MXF": v}, "/disco")
+        self.assertNotIn("proyectos", clips[0])
+
     def test_lista_rapida_con_carpetas(self):
         tmp = Path(tempfile.mkdtemp())
         try:

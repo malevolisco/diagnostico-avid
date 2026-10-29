@@ -36,6 +36,50 @@ def audio_mxf(ruta):
 
 
 @unittest.skipUnless(FFMPEG and FFPROBE, "sin ffmpeg/ffprobe")
+class SubcodigoDV(unittest.TestCase):
+    """Fecha, hora y timecode de cinta de los fotogramas DV, y su huella, para detectar trozos repetidos."""
+
+    def setUp(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import dv_prueba
+        self.tmp = Path(tempfile.mkdtemp())
+        self.largo = self.tmp / "largo.mxf"
+        subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=720x480:r=30000/1001:d=6", "-vf", "setfield=bff",
+                        "-c:v", "dvvideo", "-pix_fmt", "yuv422p", "-f", "mxf_opatom", str(self.largo)], check=True, capture_output=True)
+        dv_prueba.poner_subcodigo(self.largo, "17:35:48:11", __import__("datetime").datetime(2002, 11, 13, 23, 27, 26))
+        self.corto = self.tmp / "corto.mxf"  # 40 fotogramas copiados desde el 60, como un trozo consolidado en Avid
+        subprocess.run([FFMPEG, "-v", "error", "-y", "-ss", "2.0", "-i", str(self.largo), "-frames:v", "40", "-c", "copy",
+                        "-f", "mxf_opatom", str(self.corto)], check=True, capture_output=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_subcodigo(self):
+        largo, corto = mxf_util.subcodigo_dv(self.largo), mxf_util.subcodigo_dv(self.corto)
+        self.assertEqual(largo["inicio"], {"tc": "17:35:48:11", "fecha": "2002-11-13", "hora": "23:27:26"})
+        self.assertEqual(largo["fin"]["tc"], "17:35:54:10")
+        self.assertEqual(largo["fotograma"], 240000)  # DVCPRO50 NTSC: dos canales de 10 secuencias
+        self.assertEqual((corto["inicio"]["tc"], corto["fin"]["tc"], corto["inicio"]["hora"]), ("17:35:50:11", "17:35:51:20", "23:27:28"))
+
+    def test_huella_de_fotograma(self):
+        h = mxf_util.huella_fotograma_dv
+        self.assertEqual(h(self.corto, 0), h(self.largo, 60))
+        self.assertEqual(h(self.corto, 39), h(self.largo, 99))
+        self.assertNotEqual(h(self.corto, 0), h(self.largo, 61))
+        self.assertIsNone(h(self.largo, 180))  # fuera del clip
+
+    def test_un_bloque_por_fotograma_y_no_dv(self):
+        pal = self.tmp / "pal.mxf"  # DV25 PAL en OP1a: un elemento por fotograma; sin subcódigo (ffmpeg no lo escribe)
+        subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=720x576:r=25:d=3", "-c:v", "dvvideo",
+                        "-pix_fmt", "yuv420p", "-f", "mxf", str(pal)], check=True, capture_output=True)
+        r = mxf_util.subcodigo_dv(pal)
+        self.assertEqual((r["fotograma"], r["inicio"]["tc"], r["fin"] is not None), (144000, None, True))
+        self.assertIsNotNone(mxf_util.huella_fotograma_dv(pal, 74))
+        self.assertIsNone(mxf_util.huella_fotograma_dv(pal, 75))
+        self.assertIsNone(mxf_util.subcodigo_dv(self.tmp / "nada.mxf") if (self.tmp / "nada.mxf").write_bytes(b"x" * 100) else None)
+
+
+@unittest.skipUnless(FFMPEG and FFPROBE, "sin ffmpeg/ffprobe")
 class AcabadoProfesional(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

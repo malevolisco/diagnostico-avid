@@ -50,8 +50,9 @@ def main():
     # ENLACES: 2 ficheros enlazados (AMA) fuera de Avid MediaFiles y 1 clip con la media en otra carpeta (--media-extra).
     # ORIGEN: 2 bins (uno "compras"), un MOV enlazado de una Panasonic y 2 clips importados sin pistas de origen.
     # offline: CLIP OFFLINE, los 2 "APROX B" ambiguos y VIEJO OMF (su media es OMF, que no se lee)
-    esperado = {"proyectos": 7, "bins": 11, "bins_ilegibles": 1, "offline": 4, "renders_en_bins": 1, "clips_compartidos": 1, "clips_fisicos": 28,
-                "huerfanos": 5}
+    # DUPLICADO: una entrevista DV y un trozo suyo copiado a otro fichero (mismo subcódigo de cámara y mismos fotogramas)
+    esperado = {"proyectos": 8, "bins": 12, "bins_ilegibles": 1, "offline": 4, "renders_en_bins": 1, "clips_compartidos": 1, "clips_fisicos": 30,
+                "huerfanos": 5, "trozos_repetidos": 1}
     for k, v in esperado.items():
         if r.get(k) != v:
             fallo("resumen.%s = %r, esperado %r" % (k, r.get(k), v))
@@ -108,7 +109,9 @@ def main():
                            # ORIGEN: la Panasonic (propio por los metadatos) y los dos dudosos, que entran marcados
                            "ORIGEN SEPTIEMBRE DE 2021": ("convertir", 3, 6.0),
                            "ABORTO SEPTIEMBRE DE 2021": ("convertir", 2, 4.0), "APROX SEPTIEMBRE DE 2021": ("convertir", 1, 2.0),
-                           "NTSC SEPTIEMBRE DE 2021": ("convertir", 2, 4.0), "SIN PROYECTO SEPTIEMBRE DE 2021": ("convertir", 4, 7.0)}
+                           "NTSC SEPTIEMBRE DE 2021": ("convertir", 2, 4.0), "SIN PROYECTO SEPTIEMBRE DE 2021": ("convertir", 4, 7.0),
+                           # DUPLICADO: solo la entrevista; el trozo repetido, fuera (en la papelera del montaje)
+                           "DUPLICADO SEPTIEMBRE DE 2021": ("convertir", 1, 6.0)}
     else:
         # Un bruto por tarjeta (_Tnn_fecha), y aparte agencias, importados y piezas. 15 SEPT: el clip "2017 07 13" es del día 10
         # (otra tarjeta); el de Reuters lo dice la ruta del bin; la pieza se llama como la secuencia. El vídeo de móvil
@@ -128,7 +131,9 @@ def main():
                            "ORIGEN_T01_2021-09-15": ("convertir", 3, 6.0),
                            "ABORTO_T01_2021-09-15": ("convertir", 2, 4.0), "APROX_T01_2021-09-15": ("copia", 1, 2.0),
                            "NTSC_T01_2021-09-15": ("copia", 1, 2.0), "NTSC_T02_2021-09-15": ("copia", 1, 2.0),
-                           "SIN_PROYECTO_T01_2021-09-15": ("copia", 4, 7.0)}
+                           "SIN_PROYECTO_T01_2021-09-15": ("copia", 4, 7.0),
+                           # DUPLICADO: la entrevista DV, copiada sin recomprimir; el trozo repetido, fuera
+                           "DUPLICADO_T01_2021-09-15": ("copia", 1, 6.0)}
     if sorted(por) != sorted(esperado_brutos):
         fallo("brutos %s, esperados %s" % (sorted(por), sorted(esperado_brutos)))
     for proy, (modo, incl, seg) in esperado_brutos.items():
@@ -147,7 +152,7 @@ def main():
                 fallo("bruto %s: pistas %s, esperadas 1 vídeo + %d audio" % (proy, out, b["pistas_audio"]))
             tc = subprocess.run([a.ffprobe, "-v", "error", "-show_entries", "format_tags=timecode", "-of", "default=nw=1:nk=1", str(mxf)],
                                 capture_output=True, text=True).stdout.strip()
-            sep = ";" if proy.startswith("NTSC") and a.agrupar == "proyecto" else ":"  # drop-frame solo si sale a 29,97
+            sep = ";" if proy.startswith(("NTSC", "DUPLICADO")) and a.agrupar == "proyecto" else ":"  # drop-frame solo si sale a 29,97
             if len(tc) != 11 or tc[8] != sep:
                 fallo("bruto %s: timecode %r, esperado con '%s' antes de los frames" % (proy, tc, sep))
             if a.agrupar == "proyecto_mes":
@@ -175,7 +180,7 @@ def main():
                 enlaces(proy, Path(a.brutos) / b["shotlist"], mxf, clips, a)
             if proy.startswith("ORIGEN"):
                 origen_por_senales(proy, Path(a.brutos) / b["shotlist"])
-        sep = ";" if proy.startswith("NTSC") and a.agrupar == "proyecto" else ":"
+        sep = ";" if proy.startswith(("NTSC", "DUPLICADO")) and a.agrupar == "proyecto" else ":"
         if not tcs or any(len(t) != 11 or t[8] != sep for t in tcs):
             fallo("shotlist %s: timecodes %r, esperado '%s' antes de los frames" % (proy, tcs, sep))
     if a.reanudado:

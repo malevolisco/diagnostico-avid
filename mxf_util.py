@@ -87,6 +87,158 @@ def parchear_tc_gop(ruta, frames_inicio, fps=25):
     return len(cambios)
 
 
+# Vídeo DV (DV25, DVCPRO50, DVCPRO HD). Cada fotograma son secuencias DIF de 150 bloques de 80 bytes (12.000 bytes):
+# 10 por canal en 525/60 (NTSC) y 12 en 625/50 (PAL); DV25 lleva un canal, DVCPRO50 dos y DVCPRO HD cuatro. Los bloques
+# 1-2 de cada secuencia son de subcódigo (timecode de cinta, pack 0x13) y los 3-5 de VAUX (fecha y hora de grabación,
+# packs 0x62 y 0x63): la cámara los escribe en cada fotograma y Avid los conserva al importar, consolidar o copiar un
+# trozo a otro fichero. Ojo: el formato "dv" de ffmpeg los reescribe al reempaquetar (fecha 2070-01-01); aquí se leen
+# del MXF tal cual.
+SECUENCIA_DIF = 12000
+TIPOS_DV = (0x15, 0x18)  # elemento de imagen o compuesto (DV con el audio dentro) del contenedor genérico
+
+
+def _bcd(b):
+    return (b >> 4) * 10 + (b & 0x0F)
+
+
+def _packs_dv(fotograma, nseq):
+    """Packs de subcódigo y VAUX del primer canal de un fotograma DV."""
+    packs = []
+    for s in range(nseq):
+        base = s * SECUENCIA_DIF
+        for blk in range(1, 6):
+            o = base + blk * 80
+            if o + 80 > len(fotograma):
+                return packs
+            sct = fotograma[o] >> 5
+            if sct == 1:  # subcódigo: 6 bloques de sincronismo de 8 bytes (2 de identificación, 1 de reserva, el pack)
+                packs += [fotograma[o + 3 + i * 8 + 3:o + 3 + i * 8 + 8] for i in range(6)]
+            elif sct == 2:  # VAUX: 15 packs de 5 bytes
+                packs += [fotograma[o + 3 + i * 5:o + 3 + i * 5 + 5] for i in range(15)]
+    return packs
+
+
+def _datos_dv(fotograma, nseq):
+    """{"tc", "fecha", "hora"} del fotograma: el valor que más se repite en sus packs (la cámara los escribe varias
+    veces); None en lo que no lleve."""
+    from collections import Counter
+    tc, fecha, hora = Counter(), Counter(), Counter()
+    for p in _packs_dv(fotograma, nseq):
+        if len(p) < 5 or p[1:5] == b"\xff\xff\xff\xff":
+            continue
+        if p[0] == 0x13:  # el bit 6 del primer byte dice si el timecode es drop-frame (entonces se escribe con ;)
+            tc["%02d:%02d:%02d%s%02d" % (_bcd(p[4] & 0x3F), _bcd(p[3] & 0x7F), _bcd(p[2] & 0x7F), ";" if p[1] & 0x40 else ":",
+                                          _bcd(p[1] & 0x3F))] += 1
+        elif p[0] == 0x62:
+            aa, mm, dd = _bcd(p[4]), _bcd(p[3] & 0x1F), _bcd(p[2] & 0x3F)
+            if 1 <= mm <= 12 and 1 <= dd <= 31:
+                fecha["%04d-%02d-%02d" % (aa + (1900 if aa >= 70 else 2000), mm, dd)] += 1
+        elif p[0] == 0x63:
+            h, m, s = _bcd(p[4] & 0x3F), _bcd(p[3] & 0x7F), _bcd(p[2] & 0x7F)
+            if h < 24 and m < 60 and s < 60:
+                hora["%02d:%02d:%02d" % (h, m, s)] += 1
+    mas = lambda c: c.most_common(1)[0][0] if c else None
+    return {"tc": mas(tc), "fecha": mas(fecha), "hora": mas(hora)}
+
+
+def _es_inicio_dv(cab):
+    """¿Empieza aquí un fotograma DV? Bloque de cabecera (SCT 0) de la secuencia 0, canal 0, bloque 0."""
+    return len(cab) >= 3 and cab[0] >> 5 == 0 and cab[1] >> 3 == 0 and cab[2] == 0
+
+
+def _esencia_dv(f):
+    """(posición, clave, longitud, secuencias por canal, tamaño del fotograma) del primer elemento DV, o None."""
+    for pos, clave, n in _klv(f):
+        if clave[:12] == CLAVE_ESENCIA and clave[12] in TIPOS_DV:
+            break
+    else:
+        return None
+    f.seek(pos)
+    cab = f.read(4)
+    if not _es_inicio_dv(cab):
+        return None
+    nseq = 12 if cab[3] & 0x80 else 10
+    canal = nseq * SECUENCIA_DIF
+    for k in (1, 2, 4):  # DV25, DVCPRO50, DVCPRO HD: el fotograma siguiente empieza tras k canales
+        if n == k * canal:
+            return pos, clave, n, nseq, n
+        if n > k * canal:
+            f.seek(pos + k * canal)
+            if _es_inicio_dv(f.read(3)):
+                return pos, clave, n, nseq, k * canal
+    return None
+
+
+def _posicion_fotograma(f, esencia, indice):
+    """Dónde empieza el fotograma número indice (desde 0), o None. En un solo bloque, a tamaño fijo; con un bloque por
+    fotograma se cuentan los bloques de imagen (entre ellos puede haber relleno o particiones)."""
+    pos, clave, n, nseq, tam = esencia
+    if n > tam:
+        return pos + indice * tam if (indice + 1) * tam <= n else None
+    f.seek(0)
+    cuenta = 0
+    for p, c, largo in _klv(f):
+        if c == clave:
+            if cuenta == indice:
+                return p
+            cuenta += 1
+    return None
+
+
+def subcodigo_dv(ruta, cola=8 * 1024 * 1024):
+    """Timecode de cinta y fecha y hora de grabación del primer y del último fotograma DV de un MXF, leyendo solo esos
+    dos fotogramas (unos 100 KB aunque el clip dure una hora). {"inicio": {...}, "fin": {...}, "fotograma": bytes,
+    "fotogramas": cuántos o None} o
+    None si no es DV. Vale para la esencia en un solo bloque (OP-Atom de Avid) y para un bloque por fotograma: entonces
+    el último se busca en la cola del fichero."""
+    with open(ruta, "rb") as f:
+        esencia = _esencia_dv(f)
+        if esencia is None:
+            return None
+        pos, clave, n, nseq, tam = esencia
+        canal = nseq * SECUENCIA_DIF
+        f.seek(pos)
+        inicio = _datos_dv(f.read(canal), nseq)
+        ultimo = None
+        if n > tam:  # un solo bloque con todos los fotogramas
+            ultimo = pos + n - tam
+        else:  # un bloque por fotograma: el último elemento de imagen, cerca del final (antes del índice y del pie)
+            f.seek(0, 2)
+            final = f.tell()
+            desde = max(pos, final - cola - tam)
+            f.seek(desde)
+            trozo = f.read(final - desde)
+            i = trozo.rfind(clave)
+            if i >= 0 and i + 17 <= len(trozo):
+                extra = (trozo[i + 16] & 0x7F) if trozo[i + 16] & 0x80 else 0
+                ultimo = desde + i + 17 + extra
+        fin = None
+        if ultimo is not None:
+            f.seek(ultimo)
+            dato = f.read(canal)
+            if _es_inicio_dv(dato):
+                fin = _datos_dv(dato, nseq)
+        # fotogramas: exacto con la esencia en un bloque; con un bloque por fotograma no se cuentan (None)
+        return {"inicio": inicio, "fin": fin, "fotograma": tam, "fotogramas": n // tam if n > tam else None}
+
+
+def huella_fotograma_dv(ruta, indice):
+    """MD5 del fotograma DV número indice (desde 0) de un MXF, o None si no se encuentra. Dos copias del mismo
+    fotograma (un trozo consolidado en Avid) dan la misma huella; dos cámaras distintas, no."""
+    with open(ruta, "rb") as f:
+        esencia = _esencia_dv(f)
+        if esencia is None or indice < 0:
+            return None
+        sitio = _posicion_fotograma(f, esencia, indice)
+        if sitio is None:
+            return None
+        f.seek(sitio)
+        dato = f.read(esencia[4])
+        if len(dato) < esencia[4] or not _es_inicio_dv(dato):
+            return None
+        return hashlib.md5(dato).hexdigest()
+
+
 def leer_tc_gop(ruta, maximo=3):
     """TC de las primeras cabeceras GOP del vídeo."""
     salida = []

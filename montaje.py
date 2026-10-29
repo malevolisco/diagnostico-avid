@@ -66,8 +66,9 @@ class Montaje:
 
     def _automatico(self, p):
         trozos = eb.trozos_proyecto(self.listas[p], self.fecha, self.tope)
+        # los trozos repetidos de otro clip (exportar_brutos.es_duplicado) empiezan en la papelera: se pueden recuperar
         return {"brutos": [{"nombre": None, "tipo": f, "clips": [c.get("clave") for c in t]} for f, t in trozos],
-                "papelera": [], "movidos": []}
+                "papelera": [c.get("clave") for c in self.listas[p].get("duplicados") or []], "movidos": []}
 
     def _segundos(self, claves):
         return sum((self.por_clave[k].get("duracion") or 0) for k in claves if self.por_clave[k].get("fichero_video"))
@@ -266,6 +267,9 @@ class Montaje:
         if perdidas:
             self.avisos.append("%s: %d clips del montaje ya no están en el análisis; se quitan" % (p, len(perdidas)))
         colocadas = {k for b in brutos for k in b["clips"]} | set(papelera)
+        duplicados = [c.get("clave") for c in self.listas[p].get("duplicados") or [] if c.get("clave") not in colocadas]
+        papelera += duplicados  # un montaje de antes de detectarlos: a la papelera, no a "sin colocar"
+        colocadas |= set(duplicados)
         nuevas = [k for f in ("material", "piezas") for k in (c.get("clave") for c in self.listas[p].get(f) or []) if k not in colocadas]
         if nuevas:
             self.avisos.append("%s: %d clips nuevos sin colocar; no se exportan hasta colocarlos" % (p, len(nuevas)))

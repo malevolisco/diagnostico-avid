@@ -11,6 +11,7 @@ Pruebas unitarias (solo biblioteca estándar; no hace falta ffmpeg).
 Uso:  python -m unittest discover -s tests -v
 """
 
+import datetime as dt
 import json
 import os
 import shutil
@@ -1704,7 +1705,7 @@ class CacheDelAnalisis(unittest.TestCase):
 
     def test_si_cambia_lo_que_se_guarda_hay_que_subir_la_version(self):
         r = self.da.resumir_mxf({"format": {"tags": {}}, "streams": [{"codec_type": "video"}]})
-        self.assertEqual((self.da.VERSION_CACHE, sorted(r), sorted(r["pistas"][0])), (1, [
+        self.assertEqual((self.da.VERSION_CACHE, sorted(r), sorted(r["pistas"][0])), (2, [
             "comentarios", "duracion", "formato", "marca", "marca_tipo", "nombre_clip", "op", "pistas", "producto", "timecode", "umid"], [
             "alto", "ancho", "bits", "canales", "codec", "color_matriz", "color_primarias", "color_rango", "color_transfer", "duracion",
             "field_order", "file_package_name", "file_package_umid", "fps", "fps_medio", "muestreo", "perfil", "pix_fmt", "rotacion",
@@ -1813,6 +1814,72 @@ class CarpetasSinAvid(unittest.TestCase):
             self.assertEqual([(p["nombre"], bool(p.get("sin_avid"))) for p in lista], [("MEXICO", False), ("VACIA", True), ("VIAJE", True)])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TrozosRepetidos(unittest.TestCase):
+    """Un trozo de una entrevista copiado por Avid a otro fichero (otra identidad, mismos fotogramas) salía dos veces en
+    el bruto (29/10/2026). Se detecta por el subcódigo DV: fecha, hora y timecode de cinta que graba la cámara."""
+
+    def clip(self, clave, tc0, tc1, h0, h1, fecha="2002-11-13", proyectos=("P",), dur=None, fps="30000/1001"):
+        return {"clave": clave, "nombre": clave, "fichero_video": clave + ".mxf", "fps": fps, "proyectos": list(proyectos),
+                "duracion": dur, "dv": {"inicio": {"tc": tc0, "fecha": fecha, "hora": h0}, "fin": {"tc": tc1, "fecha": fecha, "hora": h1}}}
+
+    def test_trozo_dentro_de_otro(self):
+        largo = self.clip("LARGO", "17:35:48:11", "17:45:41:20", "23:27:26", "23:37:20")
+        corto = self.clip("CORTO", "17:38:25:25", "17:38:39:13", "23:30:04", "23:30:17")
+        otro_dia = self.clip("OTRO DIA", "17:38:25:25", "17:38:39:13", "23:30:04", "23:30:17", fecha="2002-11-14")
+        candidatos, solapes = eb.duplicados_dv([corto, largo, otro_dia])
+        self.assertEqual([(d["corto"]["clave"], d["largo"]["clave"], d["desde"]) for d in candidatos], [("CORTO", "LARGO", 4724)])
+        self.assertEqual(solapes, [])
+
+    def test_otra_cinta_no_cuadra(self):
+        """Misma hora pero timecode de cinta fuera del tramo del largo: otra cinta, no un trozo copiado."""
+        largo = self.clip("LARGO", "17:35:48:11", "17:45:41:20", "23:27:26", "23:37:20")
+        otra = self.clip("OTRA CINTA", "01:00:00:00", "01:00:13:18", "23:30:04", "23:30:17")
+        self.assertEqual(eb.duplicados_dv([largo, otra])[0], [])
+
+    def test_solape_parcial_solo_avisa(self):
+        a = self.clip("A", "10:00:00:00", "10:01:00:00", "12:00:00", "12:01:00")
+        b = self.clip("B", "10:00:30:00", "10:01:30:00", "12:00:30", "12:01:30")
+        candidatos, solapes = eb.duplicados_dv([a, b])
+        self.assertEqual(candidatos, [])
+        self.assertEqual([(x["clave"], y["clave"]) for x, y in solapes], [("A", "B")])
+
+    def test_sin_subcodigo_o_fecha_imposible(self):
+        a = self.clip("A", None, None, None, None)
+        b = self.clip("B", "10:00:00:00", "10:01:00:00", "00:00:00", "00:01:00", fecha="2070-01-01")  # el formato dv de ffmpeg
+        self.assertIsNone(eb.tramo_dv(a))
+        self.assertIsNone(eb.tramo_dv(b))
+        self.assertEqual(eb.duplicados_dv([a, b]), ([], []))
+
+    def test_drop_frame(self):
+        self.assertEqual(eb.tc_cinta("00:01:00;02", "30000/1001"), 1800)  # en drop-frame, del 00:00:59;29 se pasa al 00:01:00;02
+        self.assertEqual(eb.tc_cinta("00:01:00:02", "30000/1001"), 1802)  # sin drop-frame, se cuentan todos
+
+    def test_fuera_del_bruto_y_en_la_papelera(self):
+        import montaje
+        cfg = dict(eb.CONFIG_DEFECTO, solo_material_de_camara=False)
+        largo = dict(self.clip("LARGO", None, None, None, None), duracion=600, fichero_origen=r"E:\CONTENTS\VIDEO\L.MXF")
+        corto = dict(self.clip("CORTO", None, None, None, None), duracion=14, fichero_origen=r"E:\CONTENTS\VIDEO\C.MXF",
+                     contenido_en={"clave": "LARGO", "nombre": "LARGO", "desde": 157.6, "hasta": 171.3, "mismo_proyecto": True})
+        self.assertTrue(eb.es_duplicado(corto, cfg))
+        self.assertFalse(eb.es_duplicado(corto, dict(cfg, quitar_duplicados=False)))
+        self.assertFalse(eb.es_duplicado(dict(corto, contenido_en=dict(corto["contenido_en"], mismo_proyecto=False)), cfg))
+        self.assertEqual(eb.texto_duplicado(corto), "parte de LARGO, del 2:37,6 al 2:51,3")
+        listas = eb.listas_por_proyecto([largo, corto], {}, {}, cfg)
+        fecha = lambda c: dt.datetime(2002, 11, 13)
+        trozos = eb.trozos_proyecto(listas["P"], fecha, 7200)
+        self.assertEqual([[c["clave"] for c in t] for _, t in trozos], [["LARGO"]])
+        m = montaje.Montaje(listas, fecha, 7200)
+        self.assertEqual([c["clave"] for c in m.papelera("P")], ["CORTO"])
+        m.recuperar("P", ["CORTO"])  # se puede volver a meter a mano
+        self.assertEqual(m.papelera("P"), [])
+        self.assertEqual(sorted(k["clave"] for b in m.brutos("P") for k in b["clips"]), ["CORTO", "LARGO"])
+        # un montaje guardado antes de detectarlos: el trozo va a la papelera, no a "sin colocar"
+        m2 = montaje.Montaje(listas, fecha, 7200, {"P": {"brutos": [{"nombre": None, "tipo": "material", "clips": ["LARGO"]}],
+                                                       "papelera": [], "movidos": []}})
+        self.assertEqual([c["clave"] for c in m2.papelera("P")], ["CORTO"])
+        self.assertEqual(m2.nuevos("P"), [])
 
 
 class MediaEnlazada(unittest.TestCase):

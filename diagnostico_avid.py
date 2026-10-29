@@ -312,6 +312,15 @@ def es_ruta_media(partes):
     return any(p.lower() in CARPETAS_MEDIA for p in partes)
 
 
+def es_proxy(ruta):
+    """¿Es una copia de baja calidad que la cámara graba junto al material? P2 (CONTENTS/PROXY), Sony XDCAM y XAVC
+    (XDROOT/Sub, M4ROOT/SUB) y las carpetas de proxies de edición (Proxy, Proxies). No son material: si entraran, cada
+    toma saldría dos veces en el bruto, la segunda ampliada desde 480x270 (29/10/2026, tarjeta P2 copiada)."""
+    carpetas = [p.lower() for p in re.split(r"[\\/]+", str(ruta or ""))[:-1]]
+    return any(p in ("proxy", "proxies") or (p == "sub" and i and carpetas[i - 1] in ("xdroot", "m4root"))
+               for i, p in enumerate(carpetas))
+
+
 def listar_proyectos(origen):
     """Lectura rápida para el selector de proyectos: recorre el disco sin entrar en las carpetas de media
     (Avid MediaFiles) y devuelve [{nombre, carpeta, bins, modificado}] con los mismos nombres que usa el análisis
@@ -463,7 +472,7 @@ def carpetas_sin_avid(ficheros, proyectos, raices=()):
     for (raiz, top), fs in sorted(carpetas.items(), key=lambda kv: kv[0][1].lower()):
         nombre = top if top not in nombres else top + " (carpeta)"
         nombres.add(nombre)
-        vid = [f for f in fs if f["ext"] in VIDEO_SUELTO and not es_ruta_media(Path(f["ruta"]).parts)]
+        vid = [f for f in fs if f["ext"] in VIDEO_SUELTO and not es_ruta_media(Path(f["ruta"]).parts) and not es_proxy(f["ruta"])]
         nuevos.append({"nombre": nombre, "carpeta": str(Path(raiz) / top) if raiz else top, "ficheros_avp": [], "bins": [],
                        "num_bins": 0, "sin_avid": True, "videos": len(vid)})
         for f in vid:
@@ -479,7 +488,9 @@ def asignar_sueltos(clips, videos_sueltos, enlaces, origen):
     es de ese proyecto, no de la carpeta."""
     enlazados = set((enlaces or {}).values())
     for c in clips:
-        ruta = next((r for r in c["ficheros"] if r in videos_sueltos and r not in enlazados), None)
+        if any(r in enlazados for r in c["ficheros"]):  # en P2 el bin enlaza el vídeo; el sonido va en otros .MXF del clip
+            continue
+        ruta = next((r for r in c["ficheros"] if r in videos_sueltos), None)
         if ruta and not c.get("proyectos"):
             c["proyectos"] = [videos_sueltos[ruta]]
             c["fichero_origen"] = str(ruta) if Path(str(ruta)).is_absolute() else str(Path(origen) / ruta)
@@ -948,7 +959,7 @@ def nombre_cache(origen, etiqueta):
 def analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=None, enlazado=False, cache=None):
     """ffprobe de los MXF del inventario, o de los ficheros de objetivo (la media enlazada: enlazado=True).
     cache (CacheMXF): los que ya se leyeron otra vez y no han cambiado no se vuelven a abrir."""
-    objetivo = [f for f in ficheros if f["ext"] == ".mxf"] if objetivo is None else objetivo
+    objetivo = [f for f in ficheros if f["ext"] == ".mxf" and not es_proxy(f["ruta"])] if objetivo is None else objetivo
     resultados = []
     if cache is not None:
         pendientes = []
@@ -1022,7 +1033,7 @@ def mxf_de_proyectos(ficheros, origen, bins, progreso):
                 ids.update(material(mob[k]).upper() for k in ("le", "be") if mob.get(k))
             if clip.get("nombre"):
                 nombres.add(nombre_normal(clip["nombre"]))
-    todos = [f for f in ficheros if f["ext"] == ".mxf"]
+    todos = [f for f in ficheros if f["ext"] == ".mxf" and not es_proxy(f["ruta"])]
 
     def es_suyo(f):
         try:
@@ -1961,6 +1972,17 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
         progreso("4/6 Reconstruyendo clips y cruzando con los bins...")
         clips = agrupar_clips(mxf)
         asignar_sueltos(clips, videos_sueltos, enlaces, origen)
+        # Una carpeta que se queda sin clips propios porque todos los enlaza un bin (una tarjeta P2: el bin apunta al .MXF
+        # de vídeo y no a los de sonido, así que la comprobación de antes no la ve) también es media de ese proyecto
+        con_clips = {p for c in clips if c.get("sin_avid") for p in c.get("proyectos") or ()}
+        enlazadas = {videos_sueltos[r] for c in clips if any(x in de_bins for x in c["ficheros"])
+                     for r in c["ficheros"] if r in videos_sueltos}
+        vacias = enlazadas - con_clips - media_de_otros
+        if vacias:
+            media_de_otros |= vacias
+            proyectos = [p for p in proyectos if p["nombre"] not in vacias]
+            guardar_json(destino, "proyectos.json", proyectos)
+            LOG.info("Carpetas que son media enlazada de otros proyectos (no son proyectos): %s", "; ".join(sorted(vacias)))
         cruce = cruzar(proyectos, bins, clips, mxf, enlaces)
         cruce["enlazados"] = {"encontrados": len(enlaces), "faltan": len(faltan), "ejemplos_faltan": faltan[:50],
                               "de_mac": sum(1 for x in faltan if es_ruta_de_mac(x)), "carpetas_media": [str(x) for x in carpetas_media or ()]}

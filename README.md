@@ -84,6 +84,8 @@ Los análisis se guardan. Si otro día se analizan otros proyectos del mismo dis
 | **Orden cronológico**: por la fecha de grabación si consta, si no por la del fichero; con la misma fecha, por timecode. | Así el bruto respeta el orden en que se grabó. |
 | **XDCAM HD422 50 Mb/s 1080i50** (25 imágenes entrelazadas = 50 campos, campo superior primero) **16:9**. Si todo el bruto ya está en ese formato, se copia sin recomprimir. | Es el formato de ingesta del Archivo. Copiar evita pérdida de calidad y tiempo. |
 | El **vídeo vertical** se encaja sin deformar (pillarbox) y el **NTSC** se pasa a 25. Se conservan los **canales de audio** por separado. | Cualquier cámara tiene que acabar en el mismo formato sin estropear la imagen. |
+| Si un clip trae **más canales de audio que pistas** tiene el bruto (p. ej. 12 y el bruto 8), entran primero los que tienen sonido. | Si no, un clip con el sonido en los canales 9 a 12 quedaría mudo en el bruto. |
+| **Envoltura SMPTE RDD 9** (el MXF de XDCAM HD422 de Sony): los clips del bruto los une **bmx** de la BBC en lugar de ffmpeg, en la misma pasada. Si bmx falla, une ffmpeg y la ficha lo marca. | Los sistemas de emisión y archivo esperan XDCAM HD422 "conforme a RDD 9". Unir con bmx no añade tiempo (reempaquetar después duplicaba la escritura, por eso se retiró la primera versión). Se comprueba en cada versión que el vídeo y el audio son idénticos bit a bit a los de la unión con ffmpeg. |
 
 ### Antes de exportar
 
@@ -107,7 +109,7 @@ Python 3.12 con tkinter. Las lecturas pesadas se hacen con [pyavb](https://githu
 |---|---|
 | `diagnostico_avid.py` | Programa principal y línea de comandos. Análisis en 6 pasos: inventario, proyectos y bins, ffprobe de los MXF, cruce clip ↔ bin, capturas e informe. También el análisis acumulado y "Qué proyectos restaurar". |
 | `exportar_brutos.py` | Clasificación del origen, reparto en brutos, conversión y copia con ffmpeg, shotlist y contactos. |
-| `mxf_util.py` | Lectura de cabeceras MXF sin ffprobe, timecode, ficha técnica XDCAM HD422 y MD5. |
+| `mxf_util.py` | Lectura de cabeceras MXF sin ffprobe, timecode, ficha técnica XDCAM HD422 (con la envoltura RDD 9) y MD5. |
 | `montaje.py` | Modelo del montaje (quitar, mover, cortar, renombrar, deshacer) y fotogramas del visor. No tiene ventana, así que se puede probar solo. |
 | `interfaz.py`, `ventana_montaje.py`, `ventana_origen.py`, `tema.py` | La ventana: páginas, montaje, origen del material y tema. Se adapta a pantallas pequeñas. |
 | `aprendizaje.py` | Sugerencias de origen aprendidas de decisiones anteriores (Bayes ingenuo sobre palabras y formas de nombre; nunca imágenes). |
@@ -180,6 +182,7 @@ Cada cambio en `main` publica una release.
 | [Pillow](https://python-pillow.org) | Visor del montaje | MIT-CMU |
 | [ffmpeg](https://ffmpeg.org) 7.1.1 ("essentials" de gyan.dev) | ffprobe, conversión y copia | GPL v3 en esa compilación |
 | [PyInstaller](https://pyinstaller.org) | Construir el `.exe` | GPL con excepción para lo que empaqueta |
+| [bmx](https://github.com/bbc/bmx) 1.6 (BBC, binario oficial de Windows) | Unir los clips del bruto en RDD 9 (`bmxtranswrap`) | BSD 3 cláusulas (`licencias/bmx_COPYING.txt`, va en el portable) |
 
 El repositorio todavía no declara una licencia propia.
 
@@ -187,7 +190,7 @@ El repositorio todavía no declara una licencia propia.
 
 Todo lo descrito se ha probado con el disco simulado y con datos reales parciales: los bins y fechas de un disco de la Corresponsalía de México. Queda por verificar con discos completos de verdad:
 
-- la ingesta de los brutos en el sistema del Archivo (no se ha validado contra la norma RDD 9 completa);
+- la ingesta de los brutos en el sistema del Archivo: los brutos salen en RDD 9 por bmx, pero no se han pasado por un validador independiente ni por el sistema del Archivo;
 - los tiempos con miles de ficheros en el PC donde se use;
 - cómo nombra Avid los mixdowns;
 - la pantalla con escalado del 125 % o 150 %.

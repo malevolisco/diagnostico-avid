@@ -357,7 +357,8 @@ def escribir_md5(ruta, parar=None):
 
 def ficha_tecnica(ffprobe, ruta, esperado, flags=None):
     """Comprueba el bruto exportado contra el perfil XDCAM HD422 50 Mb/s 1080i50 16:9 (25 imágenes/s, 50 campos/s). esperado: {"pistas": n,
-    "tc": "hh:mm:ss:ff", "duracion": segundos, "tc_gop": True si se ha reescrito el TC interno}.
+    "tc": "hh:mm:ss:ff", "duracion": segundos, "tc_gop": True si se ha reescrito el TC interno, "rdd9": True si lo ha unido bmx en
+    RDD 9, False si bmx ha fallado, None si no se ha usado}.
     Devuelve (conforme, texto de la ficha)."""
     r = subprocess.run([ffprobe, "-v", "error", "-show_format", "-show_streams", "-of", "json", str(ruta)],
                        capture_output=True, timeout=300, **(flags or {}))
@@ -406,6 +407,11 @@ def ficha_tecnica(ffprobe, ruta, esperado, flags=None):
         ver(gop[:1] == [esperado.get("tc")], "TC interno del vídeo igual al del fichero (%s)" % (gop[0] if gop else "sin GOP"))
     else:
         lineas.append("—      TC interno del vídeo: se conserva el del material copiado sin recomprimir")
+    if esperado.get("rdd9") is None:
+        lineas.append("—      Envoltura MXF OP1a de ffmpeg, sin RDD 9 (no se ha encontrado bmxtranswrap o está desactivado)")
+    else:
+        bmx = tags.get("company_name") == "BBC" and str(tags.get("product_name", "")).startswith("bmx")
+        ver(bool(esperado["rdd9"]) and bmx, "Envoltura SMPTE RDD 9 (%s)" % (" ".join(str(tags.get(k)) for k in ("company_name", "product_name", "product_version") if tags.get(k)) or "sin identificar"))
     lineas.append("Creado: %s" % (fecha_creacion(ruta) or "sin fecha"))
     cab = "Ficha técnica de %s\nPerfil: XDCAM HD422 50 Mb/s 1080i50 16:9 (25 imágenes/s entrelazadas = 50 campos/s, campo superior primero)\nVeredicto: %s\n\n" % (Path(ruta).name, "CONFORME" if conforme else "NO CONFORME")
     return conforme, cab + "\n".join(lineas) + "\n"

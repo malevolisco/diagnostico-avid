@@ -150,6 +150,16 @@ class AcabadoProfesional(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("FALLO  2 pistas de audio (4)", texto)
 
+    def test_ficha_y_rdd9(self):
+        """Sin bmx (rdd9 None) la ficha lo dice y sigue conforme; si se pidió RDD 9 y el fichero no lo escribió bmx, falla."""
+        esperado = {"pistas": 4, "tc": "10:00:00:00", "duracion": 2.0, "tc_gop": True}
+        ok, texto = mxf_util.ficha_tecnica(FFPROBE, self.mxf, dict(esperado, rdd9=None))
+        self.assertTrue(ok, texto)
+        self.assertIn("sin RDD 9", texto)
+        ok, texto = mxf_util.ficha_tecnica(FFPROBE, self.mxf, dict(esperado, rdd9=True))
+        self.assertFalse(ok)
+        self.assertIn("FALLO  Envoltura SMPTE RDD 9 (FFmpeg", texto)
+
     def test_fecha_de_creacion(self):
         self.assertIsNone(mxf_util.fecha_creacion(self.mxf))  # ffmpeg sin creation_time: fecha vacía
         con = self.tmp / "con_fecha.mxf"
@@ -271,6 +281,23 @@ class AudioPorCanales(unittest.TestCase):
         self.assertGreater(vol[0], -40)
         self.assertLess(vol[1], -80)
         self.assertTrue(all(v > -40 for v in vol[2:]), vol)
+
+    def test_doce_canales_entran_los_que_suenan(self):
+        """Un audio de 12 canales con el sonido en el 9 al 12 y un bruto de 8 pistas: entran los que suenan, no los 8
+        primeros (que dejarían el bruto sin sonido)."""
+        self.ff("-f", "lavfi", "-i", "testsrc2=s=1280x720:r=25:d=2", "-c:v", "mpeg2video", str(self.tmp / "v.mxf"))
+        entradas = []
+        for k in range(12):
+            entradas += ["-f", "lavfi", "-i", ("sine=f=%d:r=48000:d=2" % (300 + 100 * k)) if k >= 8 else "anullsrc=r=48000:cl=mono:d=2"]
+        self.ff(*entradas, "-filter_complex", "".join("[%d:a]" % k for k in range(12)) + "amerge=inputs=12[a]", "-map", "[a]",
+                "-t", "2", "-c:a", "pcm_s24le", str(self.tmp / "doce.wav"))
+        seg, canales, info = self.segmento(["v.mxf", "doce.wav"], 8)
+        self.assertEqual(len(canales), 12)
+        vol = [self.volumen(seg, k) for k in range(8)]
+        self.assertTrue(all(v > -40 for v in vol[:4]), vol)  # los canales 9 a 12
+        self.assertTrue(all(v < -80 for v in vol[4:]), vol)
+        self.assertIn("entran los que tienen sonido (9, 10, 11, 12, 1, 2, 3, 4)", info["aviso_audio"])
+        self.assertIn("no entran las pistas 5, 6, 7, 8 del clip", info["aviso_audio"])
 
     def test_audio_mas_corto_que_el_video(self):
         self.ff("-f", "lavfi", "-i", "testsrc2=s=1280x720:r=25:d=2", "-c:v", "mpeg2video", str(self.tmp / "v.mxf"))

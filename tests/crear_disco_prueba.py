@@ -296,6 +296,24 @@ def main():
     (D / "OMFI MediaFiles" / "VIEJO OMFV01.5A1B2C.omf").write_bytes(b"OMF" * 100)
     bin_con(P / "compras.avb", [("VISTA AEREA", uc, 50, r"C:\material\compras\vista aerea.mp4")])
 
+    # Trozo repetido (29/10/2026): una entrevista DV con el subcódigo de la cámara (fecha, hora y timecode de cinta) y un
+    # trozo suyo copiado por Avid a otro fichero, con otra identidad y los mismos fotogramas. En el bruto, solo la
+    # entrevista; el trozo, en la papelera del montaje.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import dv_prueba
+    ue = clip("ENTREVISTA DV", "6D00F001", 6, audios=1, size="720x480", fps="30000/1001", codec="dvvideo")
+    v_ent = next(M.glob("ENTREVISTA DVV01.6D00F001.mxf"))
+    dv_prueba.poner_subcodigo(v_ent, "17:35:48:11", dt.datetime(2002, 11, 13, 23, 27, 26))
+    v_trozo = M / "ENTREVISTA DV TROZOV01.6D00F002.mxf"
+    subprocess.run([args.ffmpeg, "-loglevel", "error", "-y", "-ss", "2.0", "-i", str(v_ent), "-frames:v", "40", "-c", "copy",
+                    "-metadata", "material_package_name=ENTREVISTA DV TROZO", "-f", "mxf_opatom", str(v_trozo)], check=True)
+    ut = umid(v_trozo)
+    mka("ENTREVISTA DV TROZO", M / "ENTREVISTA DV TROZOA01.6D00F0020.mxf", 40 / (30000 / 1001), 440, ut)
+    P = D / "DUPLICADO"
+    P.mkdir()
+    (P / "DUPLICADO.avp").write_bytes(b"avp")
+    bin_con(P / "DUPLICADO Bin.avb", [("ENTREVISTA DV", ue), ("ENTREVISTA DV TROZO", ut)])
+
     # Huérfano con vídeo, solo-audio huérfano y fichero en cuarentena.
     clip("HUERFANO", "AAAA0001", 2, audios=1)
     mka("SOLOAUDIO", M / "SOLOAUDIOA01.BBBB.mxf", 2, 300, "060A2B340101010501010D0013000000000000000000000000000000000000AA")

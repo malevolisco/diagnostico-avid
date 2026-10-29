@@ -126,6 +126,8 @@ CONFIG_DEFECTO = {
     "_ganancia_db": "Con niveles_audio = ganancia: dB por pista del bruto, de -20 a 20 (p. ej. [3, 0] sube 3 dB la pista 1)",
     "md5": True,
     "_md5": "Un fichero .md5 por bruto (comprobación de integridad al copiarlo)",
+    "quitar_duplicados": True,
+    "_quitar_duplicados": "Clips DV que son un trozo de otro del mismo proyecto (misma fecha, hora y timecode de cinta de la cámara y los mismos fotogramas; un subclip o una consolidación de Avid): true = no entran en el bruto y quedan en la papelera del montaje, de donde se pueden recuperar | false = entran los dos",
     "ficha_tecnica": True,
     "_ficha_tecnica": "Una ficha .txt por bruto que dice si el fichero exportado es conforme a XDCAM HD422",
     "medidor_audio": True,
@@ -836,6 +838,91 @@ def excluido(c, cfg):
     return clase in ("agencia", "importado") or (clase == "dudoso" and bool(cfg.get("solo_material_de_camara", True)))
 
 
+def tc_cinta(texto, fps):
+    """Timecode de cinta de un subcódigo DV ('hh:mm:ss:ff', o 'hh:mm:ss;ff' si es drop-frame) -> fotogramas desde 0."""
+    return tc_a_frames(texto, 30000 / 1001 if ";" in str(texto) else int(round(fps_num(fps) or 25)))
+
+
+def tramo_dv(c):
+    """Tramo de grabación de un clip DV según el subcódigo que escribe la cámara en cada fotograma (c["dv"]):
+    (inicio, fin) como datetime de la fecha y hora de grabación y (tc_inicio, tc_fin) en fotogramas del timecode de
+    cinta, o None si no lo lleva. None si el clip no trae una fecha de grabación creíble."""
+    dv = c.get("dv") or {}
+    ini, fin = dv.get("inicio") or {}, dv.get("fin") or {}
+
+    def cuando(d):
+        try:
+            return dt.datetime.strptime("%s %s" % (d["fecha"], d["hora"]), "%Y-%m-%d %H:%M:%S")
+        except (KeyError, TypeError, ValueError):
+            return None
+    t0 = cuando(ini)
+    if t0 is None or not 1990 <= t0.year <= dt.date.today().year + 1:
+        return None
+    t1 = cuando(fin) or t0 + dt.timedelta(seconds=c.get("duracion") or 0)
+    if t1 < t0:
+        return None
+    tc = None
+    if ini.get("tc") and fin.get("tc"):
+        try:
+            tc = (tc_cinta(ini["tc"], c.get("fps")), tc_cinta(fin["tc"], c.get("fps")))
+        except ValueError:
+            tc = None
+        if tc and tc[1] < tc[0]:
+            tc = None
+    return t0, t1, tc
+
+
+def duplicados_dv(clips, margen=1.0):
+    """Clips DV cuyo tramo de grabación (fecha y hora de la cámara, y timecode de cinta si lo hay) cae entero dentro
+    del de otro: candidatos a ser un trozo copiado (un subclip o una consolidación de Avid crean otro fichero, con otra
+    identidad, con los mismos fotogramas). Devuelve ([{"corto", "largo", "desde"}], [(a, b)]): desde es el fotograma
+    del largo donde empezaría el corto; la segunda lista, los que solo se solapan en parte. Hay que confirmarlo con
+    los fotogramas (diagnostico_avid.marcar_duplicados): dos cámaras grabando a la vez dan tramos que se solapan."""
+    tramos = sorted(((t, c) for c in clips if c.get("fichero_video") for t in [tramo_dv(c)] if t),
+                    key=lambda x: (x[0][0], -(x[0][1] - x[0][0]).total_seconds(), str(x[1].get("clave"))))
+    holgura = dt.timedelta(seconds=margen)
+    candidatos, solapes = [], []
+    for i, (ta, a) in enumerate(tramos):
+        for tb, b in tramos[i + 1:]:
+            if tb[0] > ta[1] + holgura:
+                break  # ordenados por inicio: los siguientes empiezan aún después
+            if tb[1] <= ta[1] + holgura:  # b cae dentro de a (a empieza antes o a la vez y dura más o igual)
+                largo, tl, corto, tco = a, ta, b, tb
+            elif tb[0] <= ta[0] + holgura and ta[1] <= tb[1] + holgura:
+                largo, tl, corto, tco = b, tb, a, ta
+            else:
+                if min(ta[1], tb[1]) - max(ta[0], tb[0]) > dt.timedelta(seconds=2):
+                    solapes.append((a, b))
+                continue
+            fps = fps_num(largo.get("fps")) or 25
+            if tl[2] and tco[2]:  # con timecode de cinta: tiene que caer dentro y cuadrar con la hora
+                if not (tl[2][0] <= tco[2][0] and tco[2][1] <= tl[2][1]):
+                    continue
+                if abs((tco[2][0] - tl[2][0]) / fps - (tco[0] - tl[0]).total_seconds()) > 2:
+                    continue
+                desde = tco[2][0] - tl[2][0]
+            else:
+                desde = int(round((tco[0] - tl[0]).total_seconds() * fps))
+            candidatos.append({"corto": corto, "largo": largo, "desde": max(0, desde)})
+    return candidatos, solapes
+
+
+def es_duplicado(c, cfg):
+    """¿Es un trozo repetido de otro clip del mismo proyecto (marcar_duplicados)? Entonces no entra en el bruto: en el
+    montaje queda en la papelera, de donde se puede recuperar (quitar_duplicados en config_brutos.json)."""
+    d = c.get("contenido_en") or {}
+    return bool(cfg.get("quitar_duplicados", True) and d.get("mismo_proyecto"))
+
+
+def texto_duplicado(c):
+    """'parte de ENTREVISTA, del 2:37,6 al 2:51,3' para el montaje, el informe y el log."""
+    d = c.get("contenido_en") or {}
+    if not d:
+        return ""
+    t = lambda s: ("%d:%04.1f" % (s // 60, s % 60)).replace(".", ",")
+    return "parte de %s, del %s al %s" % (d.get("nombre"), t(d.get("desde") or 0), t(d.get("hasta") or 0))
+
+
 def motivo_descarte(c, cfg):
     """Por qué un clip no entra en ningún bruto ("efecto de Avid", "agencia", "importado", "dudoso"), o None si entra."""
     if c.get("render") and not cfg.get("renders_en_piezas", False):
@@ -893,7 +980,7 @@ def listas_por_proyecto(clips, cruce, mxf_por_ruta, cfg):
     politica = cfg.get("clips_compartidos", "primero")
     secuencias = {p["proyecto"]: {_normal(n) for n in p.get("secuencias_nombres", [])} for p in (cruce or {}).get("por_proyecto", [])}
     rx = re.compile(cfg["piezas_regex"]) if cfg.get("piezas_regex") else None
-    por_proyecto = defaultdict(lambda: {"material": [], "piezas": []})
+    por_proyecto = defaultdict(lambda: {"material": [], "piezas": [], "duplicados": []})
     for c in clips:
         render = bool(c.get("render"))
         if render and not cfg.get("renders_en_piezas", False):
@@ -910,6 +997,8 @@ def listas_por_proyecto(clips, cruce, mxf_por_ruta, cfg):
                 por_proyecto[p]["piezas"].append(c)
             elif not excluido(c, cfg):
                 por_proyecto[p]["material"].append(c)
+                if es_duplicado(c, cfg):  # en su sitio del orden, pero fuera del reparto (la papelera del montaje)
+                    por_proyecto[p]["duplicados"].append(c)
     for listas in por_proyecto.values():
         for familia in listas:
             listas[familia].sort(key=lambda c: orden_cronologico(c, mxf_por_ruta))
@@ -966,8 +1055,9 @@ def trozos_proyecto(listas_proyecto, fecha, tope, cortes=None):
     """Reparto automático de un proyecto: [(familia, clips)], material y luego piezas; en cada familia, lo que tiene
     fecha en brutos de hasta tope (o con los cortes elegidos, solo en material) y al final lo que no tiene fecha."""
     trozos = []
+    fuera = {c.get("clave") for c in listas_proyecto.get("duplicados") or []}
     for familia in ("material", "piezas"):
-        cs = listas_proyecto.get(familia) or []
+        cs = [c for c in listas_proyecto.get(familia) or [] if c.get("clave") not in fuera]
         con_fecha = [c for c in cs if fecha(c)]
         sin_fecha = [c for c in cs if not fecha(c)]
         elegidos = cortes if familia == "material" else None
@@ -1096,7 +1186,7 @@ def grupos_por_dias(clips, cruce, mxf_por_ruta, cfg):
         secs = set().union(*(secuencias.get(p, set()) for p in c.get("proyectos") or [])) if c.get("proyectos") else set()
         if cfg.get("piezas_aparte", True) and es_pieza(c, secs, rx):
             familias["piezas"].append(c)
-        elif excluido(c, cfg):
+        elif excluido(c, cfg) or es_duplicado(c, cfg):
             continue
         elif cfg.get("agencias_aparte", True) and clasificar(c, cfg)[0] == "agencia":
             familias["agencias"].append(c)
@@ -1150,7 +1240,7 @@ def grupos_por_proyecto(clips, cruce, mxf_por_ruta, cfg):
         normales, renders = por_proyecto[proyecto]["normales"], por_proyecto[proyecto]["renders"]
         base = nombre_seguro(proyecto, 50)
         piezas = [c for c in normales if cfg.get("piezas_aparte", True) and es_pieza(c, secuencias.get(proyecto, set()), rx)]
-        resto = [c for c in normales if c not in piezas and not excluido(c, cfg)]
+        resto = [c for c in normales if c not in piezas and not excluido(c, cfg) and not es_duplicado(c, cfg)]
         agencias = [c for c in resto if cfg.get("agencias_aparte", True) and clasificar(c, cfg)[0] == "agencia"]
         resto = [c for c in resto if c not in agencias]
         importados = [c for c in resto if cfg.get("importados_aparte", True) and es_importado(c, cfg)]

@@ -322,8 +322,8 @@ class PantallaMontaje:
         papelera = self.m.papelera(self.p)
         self.lbl_q.configure(text="PAPELERA · %d" % len(papelera))
         self.lb_q.delete(0, "end")
-        for c in papelera:
-            self.lb_q.insert("end", c["nombre"])
+        for c in papelera:  # un trozo repetido dice de qué clip es parte
+            self.lb_q.insert("end", c["nombre"] + ("  · " + eb.texto_duplicado(c) if c.get("contenido_en") else ""))
         nuevos = self.m.nuevos(self.p)
         self.lb_n.delete(0, "end")
         for c in nuevos:

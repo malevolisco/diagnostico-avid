@@ -878,7 +878,7 @@ def resumir_mxf(datos):
 
 # Sube este número si cambia lo que guarda resumir_mxf (o trabajo, en analizar_mxf): así no se usa una caché vieja que
 # no tenga los datos nuevos. tests/test_unitarios.py (CacheDelAnalisis) avisa si cambian sus claves y no se ha subido.
-VERSION_CACHE = 1
+VERSION_CACHE = 2
 
 
 class CacheMXF:
@@ -992,6 +992,13 @@ def analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=None, enlazado=Fa
                 LOG.warning("Datos inesperados de ffprobe en %s: %r", f["ruta"], e)
                 base["error"] = "datos inesperados de ffprobe: %s" % e
                 no_legible(f["ruta"], "MXF", base["error"])
+        if not base.get("error") and str(f["ruta"]).lower().endswith(".mxf") and \
+                any(p.get("codec") == "dvvideo" for p in base.get("pistas") or ()):
+            try:  # fecha, hora y timecode de cinta que la cámara graba en el fotograma (para ver trozos repetidos)
+                import mxf_util
+                base["dv"] = mxf_util.subcodigo_dv(ruta_larga(Path(origen) / f["ruta"]))
+            except Exception as e:
+                LOG.debug("Subcódigo DV de %s: %s", f["ruta"], e)
         return base
 
     try:
@@ -1086,6 +1093,52 @@ def resolucion_vista(pv):
     return "%sx%s" % (ancho, alto)
 
 
+def marcar_duplicados(clips, origen):
+    """Trozos repetidos (29/10/2026: una entrevista con un trozo de 13 s copiado en otro fichero por Avid, con otra
+    identidad, que salía dos veces en el bruto). Los candidatos salen del subcódigo DV (exportar_brutos.duplicados_dv) y
+    se confirman con los fotogramas: el primero y el último del trozo tienen que ser idénticos, bit a bit, a los del clip
+    largo (si no, son dos cámaras grabando a la vez). Marca el trozo: c["contenido_en"] = {clave, nombre, desde, hasta (s
+    dentro del largo), mismo_proyecto}. Devuelve los marcados."""
+    import mxf_util
+    for c in clips:
+        c.pop("contenido_en", None)
+    try:
+        candidatos, _ = exportar_brutos.duplicados_dv(clips)
+    except Exception as e:
+        LOG.warning("Trozos repetidos: no se pueden buscar (%s)", e)
+        return []
+    ruta = lambda c: ruta_larga(Path(origen) / c["fichero_video"])
+    marcados = []
+    for d in candidatos:
+        corto, largo = d["corto"], d["largo"]
+        if corto.get("contenido_en"):
+            continue
+        fps = exportar_brutos.fps_num(largo.get("fps")) or 25
+        # cuántos fotogramas tiene el trozo: los de su vídeo (la duración del clip puede venir del sonido, algo más largo)
+        n = (corto.get("dv") or {}).get("fotogramas") or int(round((corto.get("duracion") or 0) * fps))
+        try:
+            primero = mxf_util.huella_fotograma_dv(ruta(corto), 0)
+            sitio = next((d["desde"] + k for k in (0, -1, 1, -2, 2)
+                          if primero and mxf_util.huella_fotograma_dv(ruta(largo), d["desde"] + k) == primero), None)
+            ultimo, intentos = None, 5
+            while sitio is not None and n > 1 and ultimo is None and intentos:  # el último que exista (si n era de la duración)
+                ultimo = mxf_util.huella_fotograma_dv(ruta(corto), n - 1)
+                n, intentos = n - (ultimo is None), intentos - 1
+            if sitio is None or (n > 1 and (not ultimo or mxf_util.huella_fotograma_dv(ruta(largo), sitio + n - 1) != ultimo)):
+                LOG.info("Mismo tramo de grabación pero otros fotogramas (¿dos cámaras?): %s y %s", corto["nombre"], largo["nombre"])
+                continue
+        except OSError as e:
+            LOG.warning("Trozos repetidos: no se puede leer %s o %s (%s)", corto["nombre"], largo["nombre"], e)
+            continue
+        comun = set(corto.get("proyectos") or ()) & set(largo.get("proyectos") or ())
+        corto["contenido_en"] = {"clave": largo.get("clave"), "nombre": largo["nombre"], "desde": round(sitio / fps, 1),
+                                 "hasta": round((sitio + n) / fps, 1),
+                                 "mismo_proyecto": bool(comun) or not (corto.get("proyectos") or largo.get("proyectos"))}
+        marcados.append(corto)
+        LOG.info("Trozo repetido: %s es %s", corto["nombre"], exportar_brutos.texto_duplicado(corto))
+    return marcados
+
+
 def agrupar_clips(mxf):
     """Los MXF OP-Atom llevan una pista por fichero; los que comparten UMID
     son el mismo clip. Los que no tienen UMID se agrupan por nombre."""
@@ -1122,6 +1175,7 @@ def agrupar_clips(mxf):
             "origen_detalle": {},
             "marca": next((f["marca"] for f in fichs if f.get("marca")), None),
             "marca_tipo": next((f["marca_tipo"] for f in fichs if f.get("marca")), None),
+            "dv": next((f["dv"] for f in video if f.get("dv")), None),
         })
     clips.sort(key=lambda c: c["nombre"])
     LOG.info("Clips reconstruidos: %d", len(clips))
@@ -2004,6 +2058,7 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
                 if cambiados:
                     progreso("4/6 Han cambiado en el disco desde su análisis (hay que volver a analizarlos): %s" % "; ".join(cambiados))
 
+        repetidos = marcar_duplicados(clips, origen) if EXPORT_OK and ffmpeg_ok else []
         cfg_origen = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json") if EXPORT_OK else None
         if hacer_miniaturas and ffmpeg_ok:
             progreso("5/6 Generando miniaturas...")
@@ -2074,6 +2129,22 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
             resumen["detenido"] = True
             resumen["avisos"].insert(0, {"nivel": "error", "texto": "%s Para seguir, exportar con las mismas carpetas: los terminados no se repiten."
                                          % (str(perdido) if perdido else "Exportación de brutos DETENIDA a mano: solo están los brutos de la tabla del final.")})
+        mostrar = [c for c in repetidos if del_informe is None or set(c.get("proyectos") or ()) & del_informe]
+        if mostrar:  # trozos repetidos (29/10/2026)
+            fuera = [c for c in mostrar if c["contenido_en"].get("mismo_proyecto")]
+            otros = [c for c in mostrar if not c["contenido_en"].get("mismo_proyecto")]
+            if fuera:
+                resumen["avisos"].append({"nivel": "info", "texto": "%s un trozo repetido de otro del mismo proyecto (misma fecha, hora y "
+                                          "timecode de cinta de la cámara y los mismos fotogramas): no entra%s en el bruto y queda%s en la "
+                                          "papelera del montaje, por si hay que recuperarlo%s. %s%s"
+                                          % ("1 clip es" if len(fuera) == 1 else "%d clips son" % len(fuera), *(("", "", "") if len(fuera) == 1 else ("n", "n", "s")),
+                                             "; ".join("%s (%s)" % (c["nombre"], exportar_brutos.texto_duplicado(c)) for c in fuera[:10]),
+                                             "…" if len(fuera) > 10 else "")})
+            if otros:
+                resumen["avisos"].append({"nivel": "aviso", "texto": "%s un trozo repetido de un clip de otro proyecto: entra%s en su "
+                                          "bruto (el material puede salir dos veces, en brutos de proyectos distintos). %s"
+                                          % ("1 clip es" if len(otros) == 1 else "%d clips son" % len(otros), "" if len(otros) == 1 else "n", "; ".join("%s (%s)" % (c["nombre"], exportar_brutos.texto_duplicado(c)) for c in otros[:10]))})
+        resumen["trozos_repetidos"] = len(repetidos)
         if EXPORT_OK:  # qué proyectos restaurar, antes del montaje
             nombres = [p["nombre"] for p in proyectos] + ([] if solo else ["SIN_PROYECTO"] if cruce.get("huerfanos") else [])
             triaje = exportar_brutos.triaje_proyectos(clips, cfg_origen, nombres)

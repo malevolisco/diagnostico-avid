@@ -205,8 +205,6 @@ Página 3 · Exportar
   - Niveles de audio: "Sin tocar" es lo recomendado. La ganancia fija o la
     normalización a −23 LUFS cambian el sonido original.
   - Comprobaciones (ficha técnica, MD5, medidor de audio): marcadas.
-    Los brutos salen empaquetados según la norma RDD 9 (la de XDCAM
-    HD422 de Sony); la ficha técnica de cada bruto lo dice.
   - "Opciones avanzadas...": qué pista del clip va a cada pista del bruto,
     ganancia por pista, prefijo de los nombres, "Guardar como
     predeterminados" y "Restablecer recomendados".

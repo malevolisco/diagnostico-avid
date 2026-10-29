@@ -126,8 +126,6 @@ CONFIG_DEFECTO = {
     "_ganancia_db": "Con niveles_audio = ganancia: dB por pista del bruto, de -20 a 20 (p. ej. [3, 0] sube 3 dB la pista 1)",
     "md5": True,
     "_md5": "Un fichero .md5 por bruto (comprobación de integridad al copiarlo)",
-    "rdd9": True,
-    "_rdd9": "true = los brutos XDCAM se empaquetan según SMPTE RDD 9 (el MXF de XDCAM HD422 de Sony que piden los sistemas de emisión y archivo) con bmxtranswrap de la BBC, que va con el programa: no recodifica, el vídeo y el audio no cambian | false = MXF OP1a de ffmpeg",
     "ficha_tecnica": True,
     "_ficha_tecnica": "Una ficha .txt por bruto que dice si el fichero exportado es conforme a XDCAM HD422",
     "medidor_audio": True,
@@ -1926,48 +1924,8 @@ def comprobar_parar():
         raise Detenido()
 
 
-def buscar_bmx(ffprobe):
-    """bmxtranswrap (bmx de la BBC, licencia BSD): junto a ffprobe (bin/ del programa) o en el PATH; None si no está."""
-    exe = "bmxtranswrap.exe" if os.name == "nt" else "bmxtranswrap"
-    junto = Path(str(ffprobe or "")).parent / exe
-    return str(junto) if ffprobe and junto.exists() else shutil.which("bmxtranswrap")
-
-
-def empaquetar_rdd9(bmx, salida, parar=None):
-    """Reempaqueta el bruto según SMPTE RDD 9 (bmxtranswrap -t rdd9) sin recodificar: cambia la estructura del MXF
-    (particiones, índices, cabecera), no el vídeo ni el audio. bmx abre los ficheros con la página de códigos de Windows
-    ("北京" le llega como "??"): por eso trabaja con entrada.mxf y salida.mxf en una carpeta de trabajo que es su
-    directorio actual, y el resultado sustituye al bruto. bmx: lista con el ejecutable (y lo que vaya delante, para las
-    pruebas). Si falla, el bruto se queda como estaba y se lanza RuntimeError."""
-    salida = Path(salida)
-    trabajo = salida.parent / ("_rdd9_" + hashlib.md5(salida.name.encode("utf-8")).hexdigest()[:8])
-    shutil.rmtree(trabajo, ignore_errors=True)
-    trabajo.mkdir()
-    try:
-        try:
-            os.link(salida, trabajo / "entrada.mxf")  # sin copiar: el mismo fichero con otro nombre
-        except OSError:
-            shutil.copyfile(salida, trabajo / "entrada.mxf")
-        with open(trabajo / "bmx.log", "wb") as log:
-            p = subprocess.Popen([*bmx, "-t", "rdd9", "-o", "salida.mxf", "entrada.mxf"], cwd=trabajo, stdout=log,
-                                 stderr=subprocess.STDOUT, **flags_subproceso())
-            while p.poll() is None:
-                if parar and PARAR.is_set():
-                    p.kill()
-                    p.wait()
-                    raise Detenido()
-                time.sleep(0.2)
-        hecho = trabajo / "salida.mxf"
-        if p.returncode != 0 or not hecho.exists() or hecho.stat().st_size < 0.99 * salida.stat().st_size:
-            texto = (trabajo / "bmx.log").read_text(encoding="utf-8", errors="replace").strip()
-            raise RuntimeError("bmxtranswrap -t rdd9 (código %s): %s" % (p.returncode, texto[-500:] or "sin mensaje"))
-        os.replace(hecho, salida)
-    finally:
-        shutil.rmtree(trabajo, ignore_errors=True)
-
-
 def acabado_profesional(res, salida, plan, cfg, ffprobe, inicio, segundos, progreso, proyecto):
-    """Tras unir: TC interno del vídeo igual al del fichero (solo lo convertido), envoltura RDD 9, ficha técnica XDCAM y MD5.
+    """Tras unir: TC interno del vídeo igual al del fichero (solo lo convertido), ficha técnica XDCAM y MD5.
     Un bruto no conforme queda en AVISO. Actualiza res (tc_gop, conforme, ficha, md5)."""
     import mxf_util
     xdcam = bool(plan["destino"].get("xdcam"))
@@ -1977,28 +1935,9 @@ def acabado_profesional(res, salida, plan, cfg, ffprobe, inicio, segundos, progr
         except Exception as e:
             LOG.error("%s: no se pudo reescribir el TC interno (%s)", proyecto, e)
             res["errores"].append(detalle_error(None, "TC interno", [], str(e)))
-    if xdcam and cfg.get("rdd9", True):
-        bmx = buscar_bmx(ffprobe)
-        if bmx:
-            progreso("  %s: empaquetando en RDD 9..." % proyecto)
-            try:
-                empaquetar_rdd9([bmx], salida, parar=True)
-                res["rdd9"] = True
-                res["bytes"] = salida.stat().st_size  # crece unos KB: al reanudar se compara con este
-            except Detenido:
-                raise
-            except Exception as e:
-                LOG.error("%s: no se pudo empaquetar en RDD 9 (%s); queda en MXF OP1a de ffmpeg", proyecto, e)
-                res["errores"].append(detalle_error(None, "RDD 9", [], str(e)))
-                res["rdd9"] = False
-                if not cfg.get("ficha_tecnica", True):  # con ficha, la ficha lo marca no conforme
-                    res["estado"] = "AVISO: sin RDD 9 (%s)" % str(e)[:200]
-        else:
-            LOG.warning("%s: no está bmxtranswrap; el bruto queda en MXF OP1a de ffmpeg, sin RDD 9", proyecto)
     if xdcam and cfg.get("ficha_tecnica", True):
         progreso("  %s: comprobando el formato..." % proyecto)
-        esperado = {"pistas": plan["pistas_audio"], "tc": fmt_tc(inicio, plan["fps"]), "duracion": segundos, "tc_gop": bool(res.get("tc_gop")),
-                    "rdd9": res.get("rdd9")}
+        esperado = {"pistas": plan["pistas_audio"], "tc": fmt_tc(inicio, plan["fps"]), "duracion": segundos, "tc_gop": bool(res.get("tc_gop"))}
         try:
             ok, texto = mxf_util.ficha_tecnica(ffprobe, salida, esperado, flags_subproceso())
         except Exception as e:

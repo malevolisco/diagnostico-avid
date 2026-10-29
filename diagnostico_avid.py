@@ -1771,15 +1771,18 @@ CUENTA_TRIAJE = {"restaurar": "para restaurar", "poco": "con poco material", "re
                  "sin": "sin material de cámara"}
 
 
-def escribir_triaje(triaje, resumen, destino, cfg):
+def escribir_triaje(triaje, resumen, destino, cfg, solo=None):
     """Qué proyectos restaurar (exportar_brutos.triaje_proyectos): proyectos.html con una captura por clip de cámara,
-    proyectos.csv para Excel y triaje.json para la ventana (el selector de proyectos). Devuelve {veredicto: n}."""
+    proyectos.csv para Excel y triaje.json para la ventana (el selector de proyectos). solo: los proyectos que salen en
+    proyectos.html y proyectos.csv (los analizados ahora); triaje.json lleva todos, para el selector. Devuelve
+    {veredicto: n} de los que salen."""
     otros = lambda t: ", ".join("%d %s" % (n, OTROS_TRIAJE.get(k, (k, k))[n != 1]) for k, n in sorted(t["otros"].items()))
+    todos, triaje = triaje, [t for t in triaje if solo is None or t["proyecto"] in solo]
     cuenta = Counter(t["veredicto"] for t in triaje)
     guardar_json(destino, "triaje.json", [{"proyecto": t["proyecto"], "veredicto": t["veredicto"], "clips": len(t["camara"]),
                                            "sin_audio": len(t.get("sin_audio") or []), "dudosos": len(t.get("dudosos") or []),
                                            "segundos": round(t["segundos"], 1), "mas_largo": round(t["mas_largo"], 1),
-                                           "otros": dict(t["otros"])} for t in triaje])
+                                           "otros": dict(t["otros"])} for t in todos])
     with open(destino / "proyectos.csv", "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f, delimiter=";")
         w.writerow(["Proyecto", "Propuesta", "Clips de cámara", "Duración", "El más largo", "Sin audio", "Otros clips"])
@@ -2037,6 +2040,11 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
 
         progreso("6/6 Escribiendo resumen e informe...")
         resumen = construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmpeg_ok)
+        # El informe es de los proyectos analizados ahora; los sumados de análisis anteriores siguen en los datos del
+        # análisis (Montaje y Exportar los usan) pero no salen en el informe ni en proyectos.html (29/10/2026)
+        del_informe, avisos_disco = None, list(resumen["avisos"])
+        if solo and sumados:
+            del_informe = {p["nombre"] for p in proyectos} - set(sumados)
         if solo:
             resumen["parcial"] = {"proyectos": [p["nombre"] for p in proyectos], "proyectos_disco": del_disco,
                                   "mxf_analizados": len(objetivo or []), "mxf_disco": mxf_disco, "gb_media_disco": resumen["gb_media"],
@@ -2044,12 +2052,15 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
             resumen["gb_media"] = gb(sum(c["bytes"] for c in clips))  # la media de estos proyectos, no la del disco
             resumen["avisos"].insert(0, {"nivel": "info", "texto": "Análisis solo de %d de %d proyectos (%s): %d de los %d MXF del disco. "
                                          "Los demás proyectos y los clips que no están en ningún bin no salen en este informe."
-                                         % (len(proyectos), del_disco, "; ".join(resumen["parcial"]["proyectos"]),
+                                         % (len(del_informe or proyectos), del_disco,
+                                            "; ".join(sorted(del_informe) if del_informe else resumen["parcial"]["proyectos"]),
                                             len(objetivo or []), mxf_disco)})
             if sumados:
-                resumen["avisos"].insert(1, {"nivel": "info", "texto": "%d proyectos vienen de análisis anteriores de este disco, sin volver a "
-                                             "leerlos (su media no ha cambiado): %s." % (len(sumados), "; ".join(
-                                                 "%s (%s)" % (k, str(v or "")[:10]) for k, v in sorted(sumados.items())))})
+                resumen["avisos"].insert(1, {"nivel": "info", "texto": "Este informe es %s (%s). Hay %d más analizado%s antes en este "
+                                             "disco, que no salen aquí pero Montaje y Exportar tienen a mano (su media no ha cambiado): %s."
+                                             % ("del proyecto analizado ahora" if len(del_informe) == 1 else "de los %d proyectos analizados ahora" % len(del_informe),
+                                                "; ".join(sorted(del_informe)), len(sumados), "" if len(sumados) == 1 else "s",
+                                                 "; ".join("%s (%s)" % (k, str(v or "")[:10]) for k, v in sorted(sumados.items())))})
             if cambiados:
                 resumen["avisos"].insert(0, {"nivel": "aviso", "texto": "Estos proyectos se analizaron antes, pero su media ha cambiado en el "
                                              "disco y no salen aquí: vuelve a analizarlos (elígelos en Elegir proyectos): %s." % "; ".join(cambiados)})
@@ -2066,15 +2077,28 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
         if EXPORT_OK:  # qué proyectos restaurar, antes del montaje
             nombres = [p["nombre"] for p in proyectos] + ([] if solo else ["SIN_PROYECTO"] if cruce.get("huerfanos") else [])
             triaje = exportar_brutos.triaje_proyectos(clips, cfg_origen, nombres)
-            resumen["triaje"] = escribir_triaje(triaje, resumen, destino, cfg_origen)
-            sin_audio = sorted({c["nombre"] for t in triaje for c in t["sin_audio"]})
+            resumen["triaje"] = escribir_triaje(triaje, resumen, destino, cfg_origen, del_informe)
+            sin_audio = sorted({c["nombre"] for t in triaje for c in t["sin_audio"] if del_informe is None or t["proyecto"] in del_informe})
             if sin_audio:  # aviso de clips sin audio (28/10/2026)
                 resumen["avisos"].append({"nivel": "aviso", "texto": "%d clips de cámara no tienen audio (ninguna pista de sonido): %s%s. "
                                           "En el bruto irían en silencio: mira si el sonido está en otro fichero o en otro disco."
                                           % (len(sin_audio), ", ".join(sin_audio[:15]), "…" if len(sin_audio) > 15 else "")})
         resumen["carpetas_media_enlazada"] = sorted(media_de_otros)  # el selector de proyectos no las ofrece
         guardar_json(destino, "resumen.json", resumen)
-        informe_html(resumen, proyectos, bins, clips, cruce, destino)
+        if del_informe is None:
+            informe_html(resumen, proyectos, bins, clips, cruce, destino)
+        else:  # solo los proyectos de ahora: las cifras se recalculan con ellos; los avisos y los brutos son los de este análisis
+            p_i = [p for p in proyectos if p["nombre"] in del_informe]
+            b_i = [b for b in bins if b.get("proyecto") in del_informe]
+            c_i = [c for c in clips if set(c.get("proyectos") or ()) & del_informe or set(c.get("proyectos_render") or ()) & del_informe]
+            rutas = {r for c in c_i for r in c["ficheros"]}
+            cr_i = dict(cruce, por_proyecto=[x for x in cruce["por_proyecto"] if x["proyecto"] in del_informe])
+            r_i = construir_resumen(origen, ficheros, p_i, b_i, [m for m in mxf if m["ruta"] in rutas], c_i, cr_i, ffmpeg_ok)
+            r_i.update({k: resumen[k] for k in ("parcial", "brutos", "brutos_carpeta", "detenido", "triaje") if k in resumen})
+            # los avisos de este análisis (parcial, sin audio, brutos) y los del cruce, pero de estos proyectos
+            r_i["avisos"] = [a for a in resumen["avisos"] if not any(a is b for b in avisos_disco)] + r_i["avisos"]
+            r_i["gb_media"] = gb(sum(c["bytes"] for c in c_i))
+            informe_html(r_i, p_i, b_i, c_i, cr_i, destino)
 
         zip_path = destino.with_suffix(".zip")
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:

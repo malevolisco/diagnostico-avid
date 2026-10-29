@@ -1456,6 +1456,23 @@ class QueProyectosRestaurar(unittest.TestCase):
         self.assertIn("PANTALLA PARTIDA", [c["nombre"] for c in t["AGENCIAS"]["camara"]])
 
     @unittest.skipIf(da is None, "sin pyavb")
+    def test_listado_solo_de_lo_analizado_ahora(self):
+        """Con proyectos de análisis anteriores sumados, proyectos.html y proyectos.csv son de los analizados ahora;
+        triaje.json lleva todos, para que el selector siga marcándolos."""
+        d = Path(tempfile.mkdtemp())
+        try:
+            triaje = eb.triaje_proyectos(self.clips(), self.cfg, ["GRANDE", "CORTO", "AGENCIAS"])
+            cuenta = da.escribir_triaje(triaje, {"origen": "E:\\", "fecha": "29/10/2026"}, d, self.cfg, {"CORTO"})
+            self.assertEqual(cuenta, {"poco": 1})
+            filas = (d / "proyectos.csv").read_text(encoding="utf-8-sig").splitlines()[1:]
+            self.assertEqual([f.split(";")[0] for f in filas], ["CORTO"])
+            self.assertNotIn("GRANDE", (d / "proyectos.html").read_text(encoding="utf-8"))
+            todos = {t["proyecto"] for t in json.loads((d / "triaje.json").read_text(encoding="utf-8"))}
+            self.assertTrue({"GRANDE", "CORTO", "AGENCIAS"} <= todos)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    @unittest.skipIf(da is None, "sin pyavb")
     def test_listado_html_csv_y_json(self):
         d = Path(tempfile.mkdtemp())
         try:

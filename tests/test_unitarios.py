@@ -82,10 +82,11 @@ class Reintento(unittest.TestCase):
             self.clips.append({"clave": "K%d" % i, "nombre": "CLIP %d" % i, "ficheros": [v], "fichero_video": v,
                                "num_audio": 0, "duracion": DUR, "bytes": 1000, "timecode": None})
         self.llamadas = []
-        self._orig = (eb.ejecutar_ffmpeg, eb.duracion_ffprobe)
+        self._orig = (eb.ejecutar_ffmpeg, eb.duracion_ffprobe, eb.buscar_bmx)
+        eb.buscar_bmx = lambda ffprobe: None  # ffmpeg simulado: la unión con bmx se prueba en UnirRDD9 y en el CI
 
     def tearDown(self):
-        eb.ejecutar_ffmpeg, eb.duracion_ffprobe = self._orig
+        eb.ejecutar_ffmpeg, eb.duracion_ffprobe, eb.buscar_bmx = self._orig
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def simular(self, falla):
@@ -445,7 +446,8 @@ class OpcionesExportacion(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
-        self._orig = (eb.ejecutar_ffmpeg, eb.medir_audio)
+        self._orig = (eb.ejecutar_ffmpeg, eb.medir_audio, eb.buscar_bmx)
+        eb.buscar_bmx = lambda ffprobe: None
         self.cmds = []
 
         def ejecutar(cmd, timeout):
@@ -457,7 +459,7 @@ class OpcionesExportacion(unittest.TestCase):
         eb.medir_audio = lambda ffmpeg, ruta, *canal: self.medidas.get(Path(ruta).name, {"lufs": -23.0, "pico": -6.0})
 
     def tearDown(self):
-        eb.ejecutar_ffmpeg, eb.medir_audio = self._orig
+        eb.ejecutar_ffmpeg, eb.medir_audio, eb.buscar_bmx = self._orig
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_por_defecto(self):
@@ -556,10 +558,11 @@ class OrdenYParalelo(unittest.TestCase):
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
-        self._orig = (eb.ejecutar_ffmpeg, eb.duracion_ffprobe)
+        self._orig = (eb.ejecutar_ffmpeg, eb.duracion_ffprobe, eb.buscar_bmx)
+        eb.buscar_bmx = lambda ffprobe: None
 
     def tearDown(self):
-        eb.ejecutar_ffmpeg, eb.duracion_ffprobe = self._orig
+        eb.ejecutar_ffmpeg, eb.duracion_ffprobe, eb.buscar_bmx = self._orig
         eb.PARAR.clear()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
@@ -1052,7 +1055,8 @@ class Detener(unittest.TestCase):
 
     def test_exportacion_para_entre_proyectos(self):
         tmp = Path(tempfile.mkdtemp())
-        orig = (eb.ejecutar_ffmpeg, eb.duracion_ffprobe)
+        orig = (eb.ejecutar_ffmpeg, eb.duracion_ffprobe, eb.buscar_bmx)
+        eb.buscar_bmx = lambda ffprobe: None
         try:
             mxf, clips = [], []
             for p in ("A", "B", "C"):
@@ -1079,7 +1083,7 @@ class Detener(unittest.TestCase):
             self.assertFalse(list(destino.glob("_tmp_*")), "queda la carpeta temporal del proyecto a medias")
             self.assertFalse((destino / "PROY B_T01.mxf").exists())
         finally:
-            eb.ejecutar_ffmpeg, eb.duracion_ffprobe = orig
+            eb.ejecutar_ffmpeg, eb.duracion_ffprobe, eb.buscar_bmx = orig
             shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -1710,6 +1714,124 @@ class CacheDelAnalisis(unittest.TestCase):
             "alto", "ancho", "bits", "canales", "codec", "color_matriz", "color_primarias", "color_rango", "color_transfer", "duracion",
             "field_order", "file_package_name", "file_package_umid", "fps", "fps_medio", "muestreo", "perfil", "pix_fmt", "rotacion",
             "tipo"]), "Ha cambiado lo que guarda resumir_mxf: sube VERSION_CACHE y actualiza esta lista")
+
+
+class CanalesConSonido(unittest.TestCase):
+    """Más canales que pistas: entran primero los que suenan (12 canales, bruto de 8)."""
+
+    def test_sonido_al_final(self):
+        picos = {k: (-20.0 if k >= 9 else -120.0) for k in range(1, 13)}
+        self.assertEqual(eb.fuentes_con_sonido(list(range(1, 9)), picos, 12), [9, 10, 11, 12, 1, 2, 3, 4])
+
+    def test_salteados_y_sin_medir(self):
+        picos = {1: -120.0, 3: -30.0, 5: -59.0, 7: -61.0}  # el 2, 4, 6 y del 8 al 12 no se han podido medir
+        self.assertEqual(eb.fuentes_con_sonido([1, 2, 3, 4], picos, 12), [3, 5, 1, 2])
+
+    def test_nada_suena_se_queda_igual(self):
+        self.assertEqual(eb.fuentes_con_sonido([1, 2, 3, 4], {k: -120.0 for k in range(1, 13)}, 12), [1, 2, 3, 4])
+        self.assertEqual(eb.fuentes_con_sonido([1, 2, 3, 4], {}, 12), [1, 2, 3, 4])
+
+
+class UnirRDD9(unittest.TestCase):
+    """La unión con bmxtranswrap -t rdd9 en la carpeta de los segmentos (bmx en Windows no abre "北京"), y ffmpeg si falla.
+    bmx se sustituye por un script que concatena los segmentos; ffprobe, por una función que cuenta las pistas."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.trabajo = self.tmp / "_tmp_CHINA 北京"
+        self.trabajo.mkdir()
+        self.segs = []
+        for i in (1, 2, 3):
+            s = self.trabajo / ("seg_%05d.mxf" % i)
+            s.write_bytes(b"S%d" % i)
+            self.segs.append(s)
+        self.salida = self.tmp / "20260916_CHINA 北京 SEPTIEMBRE DE 2021.mxf"
+        self.falso = self.tmp / "falso_bmx.py"
+        self.cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+        self.plan = {"fps": 25, "destino": {"xdcam": True}}
+        self._orig = eb.pistas_ffprobe
+        self.pistas = {}
+        eb.pistas_ffprobe = lambda ffprobe, ruta: self.pistas.get(Path(ruta).name, ["video", "audio", "audio"])
+        eb.PARAR.clear()
+
+    def tearDown(self):
+        eb.pistas_ffprobe = self._orig
+        eb.PARAR.clear()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def bmx(self, cuerpo):
+        self.falso.write_text("import sys, time\nargs = sys.argv[1:]\n" + cuerpo, encoding="utf-8")
+        return [sys.executable, str(self.falso)]
+
+    CONCATENA = ("o = args.index('-o')\n"
+                 "open(args[o + 1], 'wb').write(b''.join(open(f, 'rb').read() for f in args[o + 2:]))\n")
+
+    def test_une_en_orden_con_nombres_cortos(self):
+        self.cfg["timecode_inicio"] = "10:00:00:00"
+        tc = eb.timecode_inicio(self.cfg, 25)
+        bmx = self.bmx("assert args[:6] == ['-t', 'rdd9', '--no-reorder', '-y', %r, '-o'], args\n" % tc + self.CONCATENA)
+        ok, err, cmd = eb.unir_rdd9(bmx, self.segs, self.salida, self.cfg, self.plan, 30, "ffprobe")
+        self.assertTrue(ok, err)
+        self.assertEqual(self.salida.read_bytes(), b"S1S2S3")
+        self.assertEqual(cmd[-3:], ["seg_00001.mxf", "seg_00002.mxf", "seg_00003.mxf"])  # sin la ruta con "北京"
+        self.assertEqual(sorted(x.name for x in self.trabajo.iterdir()), ["seg_00001.mxf", "seg_00002.mxf", "seg_00003.mxf"])
+
+    def test_si_falla_no_deja_nada(self):
+        bmx = self.bmx("open('union_rdd9.mxf', 'wb').write(b'a medias'); sys.stderr.write('Failed to open input'); sys.exit(1)\n")
+        ok, err, _ = eb.unir_rdd9(bmx, self.segs, self.salida, self.cfg, self.plan, 30, "ffprobe")
+        self.assertFalse(ok)
+        self.assertIn("Failed to open input", err)
+        self.assertFalse(self.salida.exists())
+        self.assertFalse((self.trabajo / "union_rdd9.mxf").exists())
+
+    def test_pista_perdida_es_un_fallo(self):
+        """bmx deja fuera sin error la pista que no puede unir (un audio más corto): sin ella, el bruto no vale."""
+        self.pistas["union_rdd9.mxf"] = ["video", "audio"]
+        ok, err, _ = eb.unir_rdd9(self.bmx(self.CONCATENA), self.segs, self.salida, self.cfg, self.plan, 30, "ffprobe")
+        self.assertFalse(ok)
+        self.assertIn("pistas", err)
+        self.assertFalse(self.salida.exists())
+
+    def test_detener(self):
+        threading.Timer(0.5, eb.PARAR.set).start()
+        t = time.time()
+        with self.assertRaises(eb.Detenido):
+            eb.unir_rdd9(self.bmx("time.sleep(30)\n"), self.segs, self.salida, self.cfg, self.plan, 30, "ffprobe")
+        self.assertLess(time.time() - t, 10)
+
+    def test_buscar_bmx_junto_a_ffprobe(self):
+        exe = "bmxtranswrap.exe" if os.name == "nt" else "bmxtranswrap"
+        (self.tmp / exe).write_bytes(b"")
+        self.assertEqual(eb.buscar_bmx(str(self.tmp / "ffprobe")), str(self.tmp / exe))
+
+    def test_si_bmx_falla_une_ffmpeg_y_queda_en_aviso(self):
+        """En la exportación: bmx falla, se une con ffmpeg y el bruto queda marcado (sin ficha, en AVISO)."""
+        v = "MXF/C1V01.mxf"
+        mxf = {v: {"ruta": v, "pistas": [{"tipo": "video", "codec": "mpeg2video", "ancho": 1920, "alto": 1080, "fps": "25/1",
+                                          "pix_fmt": "yuv422p", "field_order": "tt"}]}}
+        clips = [{"clave": "K1", "nombre": "CLIP 1", "ficheros": [v], "fichero_video": v, "num_audio": 0, "duracion": DUR,
+                  "bytes": 1000, "timecode": None}]
+        orig = (eb.ejecutar_ffmpeg, eb.duracion_ffprobe, eb.buscar_bmx, eb.unir_segmentos)
+        unidos = []
+
+        def ejecutar(cmd, timeout, cwd=None):
+            if "rdd9" in cmd:
+                return False, "Not appending track segment"
+            Path(cmd[-1]).write_bytes(b"mxf")
+            return True, ""
+        eb.ejecutar_ffmpeg, eb.duracion_ffprobe, eb.buscar_bmx = ejecutar, lambda ffprobe, ruta: DUR, lambda ffprobe: "bmxtranswrap"
+        eb.unir_segmentos = lambda segs, salida, *a: (unidos.append(salida.name), salida.write_bytes(b"x"), (True, None, []))[2]
+        try:
+            cfg = dict(self.cfg, ficha_tecnica=False, md5=False)
+            destino = self.tmp / "brutos"
+            destino.mkdir()
+            res = eb.exportar_proyecto("P", clips, mxf, self.tmp, destino, "ffmpeg", "ffprobe", lambda m: None, cfg)
+        finally:
+            eb.ejecutar_ffmpeg, eb.duracion_ffprobe, eb.buscar_bmx, eb.unir_segmentos = orig
+        self.assertEqual(len(unidos), 1)
+        self.assertIs(res["rdd9"], False)
+        self.assertTrue(res["estado"].startswith("AVISO: sin RDD 9"), res["estado"])
+        self.assertEqual([e["fase"] for e in res["errores"]], ["RDD 9"])
 
 
 @unittest.skipIf(da is None, "sin pyavb")

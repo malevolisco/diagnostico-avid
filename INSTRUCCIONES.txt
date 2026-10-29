@@ -282,6 +282,10 @@ clips en orden de fecha y de 2 horas como mucho:
    - El HDR (HLG, PQ) se pasa a color normal (BT.709) para que no salga
      lavado; la columna "Color origen" del shotlist dice cuál era.
    - Cada canal de audio es una pista del bruto: un estéreo da 2 pistas.
+     Si un clip trae más canales que pistas tiene el bruto (por ejemplo 12),
+     entran primero los que tienen sonido; el shotlist dice cuáles.
+   - Los brutos salen empaquetados según la norma RDD 9 (la de XDCAM
+     HD422 de Sony); la ficha técnica de cada bruto lo dice.
    - La media OMF de los Avid antiguos no se puede exportar (ffmpeg no la
      lee): el informe la cuenta y marca sus clips "media en OMF".
    Convertir a HD es lento: el programa convierte varios clips a la vez,

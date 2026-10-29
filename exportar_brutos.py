@@ -126,6 +126,8 @@ CONFIG_DEFECTO = {
     "_ganancia_db": "Con niveles_audio = ganancia: dB por pista del bruto, de -20 a 20 (p. ej. [3, 0] sube 3 dB la pista 1)",
     "md5": True,
     "_md5": "Un fichero .md5 por bruto (comprobación de integridad al copiarlo)",
+    "rdd9": True,
+    "_rdd9": "true = los brutos XDCAM salen empaquetados según SMPTE RDD 9 (el MXF de XDCAM HD422 de Sony): los clips los une bmxtranswrap de la BBC, que va con el programa, en lugar de ffmpeg; no recodifica ni añade tiempo | false = MXF OP1a de ffmpeg",
     "quitar_duplicados": True,
     "_quitar_duplicados": "Clips DV que son un trozo de otro del mismo proyecto (misma fecha, hora y timecode de cinta de la cámara y los mismos fotogramas; un subclip o una consolidación de Avid): true = no entran en el bruto y quedan en la papelera del montaje, de donde se pueden recuperar | false = entran los dos",
     "ficha_tecnica": True,
@@ -275,13 +277,14 @@ def fps_num(texto):
 TIEMPO_AGOTADO = "tiempo agotado"
 
 
-def ejecutar_ffmpeg(cmd, timeout):
+def ejecutar_ffmpeg(cmd, timeout, cwd=None):
     """Devuelve (ok, últimas líneas de stderr). timeout en segundos: un MXF dañado no debe colgar la exportación.
-    Si se pulsa Detener, mata ffmpeg en un segundo como mucho y lanza Detenido."""
+    Si se pulsa Detener, mata ffmpeg en un segundo como mucho y lanza Detenido. También sirve para bmxtranswrap."""
     if PARAR.is_set():
         raise Detenido()
     try:
-        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, **flags_subproceso())
+        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=cwd,
+                                **flags_subproceso())
     except Exception as e:
         return False, str(e)
     limite = time.monotonic() + timeout
@@ -1596,6 +1599,49 @@ def args_video(plan, mxf_video, cfg, convertir_color=True):
     return args
 
 
+CON_SONIDO_DB = -60  # pico por debajo: el canal está en silencio (o casi)
+
+
+def picos_canales(ffmpeg, origen, audios):
+    """Pico (dBFS) de cada canal de audio del clip ({número de canal 1..n: dB}; -120 si está en silencio, sin el canal si
+    no se ha podido medir). Una pasada por fichero, con todos sus flujos a la vez (astats)."""
+    picos = {}
+    for ruta in dict.fromkeys(ch["ruta"] for ch in audios):
+        flujos = sorted({ch["flujo"] for ch in audios if ch["ruta"] == ruta})
+        grafo = ";".join("[0:a:%d]astats=measure_overall=none:measure_perchannel=Peak_level[o%d]" % (f, i) for i, f in enumerate(flujos))
+        cmd = [ffmpeg, "-nostats", "-hide_banner", "-i", str(ruta_larga(Path(origen) / ruta)), "-filter_complex", grafo]
+        cmd += sum((["-map", "[o%d]" % i] for i in range(len(flujos))), []) + ["-f", "null", "-"]
+        try:
+            r = subprocess.run(cmd, capture_output=True, timeout=600, **flags_subproceso())
+        except Exception as e:
+            LOG.warning("Picos de audio: %s (%s)", ruta, e)
+            continue
+        canal = None
+        for linea in r.stderr.decode("utf-8", "replace").splitlines():
+            m = re.search(r"Parsed_astats_(\d+) .*Channel: (\d+)", linea)
+            if m:
+                canal = (flujos[int(m.group(1))] if int(m.group(1)) < len(flujos) else None, int(m.group(2)) - 1)
+                continue
+            m = re.search(r"Peak level dB: (-?[\d.]+|-inf)", linea)
+            if m and canal:
+                for k, ch in enumerate(audios, 1):
+                    if (ch["ruta"], ch["flujo"], ch["canal"]) == (ruta, canal[0], canal[1]):
+                        picos[k] = -120.0 if m.group(1) == "-inf" else float(m.group(1))
+                canal = None
+    return picos
+
+
+def fuentes_con_sonido(fuentes, picos, n_canales):
+    """Si el clip trae más canales que pistas tiene el bruto (p. ej. 12 y el bruto 8), entran primero los que tienen
+    sonido, en su orden, para que el bruto no se quede sin audio porque el sonido va en los canales 9 a 12. Si no se ha
+    podido medir ninguno con sonido, se queda como estaba."""
+    sonando = [k for k in sorted(picos) if picos[k] >= CON_SONIDO_DB]
+    if not sonando:
+        return fuentes
+    resto = [k for k in range(1, n_canales + 1) if k not in sonando]
+    return (sonando + resto)[:len(fuentes)]
+
+
 # ---------------------------------------------------------------------------
 # Segmentos y unión
 # ---------------------------------------------------------------------------
@@ -1613,11 +1659,18 @@ def hacer_segmento(clip, idx, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, nomb
     n = plan["pistas_audio"]
     enrutado = list(cfg.get("enrutado_audio") or [])
     fuentes = [(enrutado[k] if k < len(enrutado) else k + 1) for k in range(n)]  # pista del clip (1..8) o 0 = silencio
+    elegidas = []
+    if not enrutado and 0 < n < len(audios):  # más canales que pistas: van los que suenan, no los n primeros sin más
+        nuevas = fuentes_con_sonido(fuentes, picos_canales(ffmpeg, origen, audios), len(audios))
+        if nuevas != fuentes:
+            fuentes = nuevas
+            elegidas = ["%d canales en el clip: entran los que tienen sonido (%s)" % (len(audios), ", ".join(map(str, fuentes)))]
     # Con el enrutado por defecto, que al clip le falten pistas es lo normal (se rellenan con silencio): solo se avisa
     # si el enrutado elegido a mano pide una pista que el clip no tiene, o si se pierden pistas del clip.
     avisos = ["pista %d del clip no existe (silencio)" % r for r in sorted({r for r in fuentes if r > len(audios)})] if enrutado else []
     if not audios:  # el clip no trae sonido: se avisa, aunque en el bruto vaya en silencio
         avisos.insert(0, "SIN AUDIO")
+    avisos += elegidas
     perdidas = [r for r in range(1, len(audios) + 1) if r not in fuentes]
     if perdidas:
         avisos.append("no entran las pistas %s del clip" % ", ".join(map(str, perdidas)))
@@ -1724,6 +1777,51 @@ def unir_segmentos(segmentos, salida, ffmpeg, cfg, plan, duracion_total):
     ok, err = ejecutar_ffmpeg(cmd, timeout_union(duracion_total))
     lista.unlink(missing_ok=True)
     return ok, err, cmd
+
+
+def buscar_bmx(ffprobe):
+    """bmxtranswrap (bmx de la BBC, licencia BSD): junto a ffprobe (bin/ del programa) o en el PATH; None si no está."""
+    exe = "bmxtranswrap.exe" if os.name == "nt" else "bmxtranswrap"
+    junto = Path(str(ffprobe or "")).parent / exe
+    return str(junto) if ffprobe and junto.exists() else shutil.which("bmxtranswrap")
+
+
+def pistas_ffprobe(ffprobe, ruta):
+    """Tipos de las pistas del fichero, en orden ("video", "audio", ...); [] si ffprobe no lo lee."""
+    cmd = [ffprobe, "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(ruta)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, **flags_subproceso())
+        return [x.strip() for x in r.stdout.splitlines() if x.strip()]
+    except Exception:
+        return []
+
+
+def unir_rdd9(bmx, segmentos, salida, cfg, plan, duracion_total, ffprobe):
+    """Une los segmentos con bmxtranswrap -t rdd9: el bruto sale empaquetado según SMPTE RDD 9 en la misma pasada que
+    la unión con ffmpeg (bmx lee los MXF en orden y escribe uno, sin recodificar). bmx en Windows abre los ficheros con
+    la página de códigos del sistema ("北京" le llega como "??"): trabaja en la carpeta de los segmentos, que es su
+    directorio actual, con sus nombres (seg_00001.mxf...), y el resultado se mueve al nombre del bruto. bmx deja fuera
+    sin error una pista que no puede unir (p. ej. un audio más corto): se comprueba que el bruto tiene las mismas pistas
+    que el primer segmento. bmx: lista con el ejecutable (y lo que vaya delante, para las pruebas).
+    Devuelve (ok, error, comando); si no sale bien, no deja nada."""
+    carpeta = Path(segmentos[0]).parent
+    nombres = [Path(s).name for s in segmentos]
+    hecho = carpeta / "union_rdd9.mxf"
+    cmd = [*bmx, "-t", "rdd9", "--no-reorder", "-y", timecode_inicio(cfg, plan["fps"]), "-o", hecho.name, *nombres]
+    if any(Path(s).parent != carpeta for s in segmentos) or not all(n.isascii() for n in nombres):
+        return False, "segmentos fuera de la carpeta de trabajo o con nombres no ASCII", cmd
+    ok, err = ejecutar_ffmpeg(cmd, timeout_union(duracion_total), cwd=carpeta)
+    if ok and not hecho.exists():
+        ok, err = False, "bmxtranswrap no ha escrito el fichero. " + err
+    if ok:
+        esperadas, salen = pistas_ffprobe(ffprobe, segmentos[0]), pistas_ffprobe(ffprobe, hecho)
+        if not salen or salen != esperadas:
+            ok, err = False, "pistas %s, esperadas %s. %s" % (salen, esperadas, err)
+    if not ok:
+        hecho.unlink(missing_ok=True)
+        return False, err, cmd
+    os.replace(hecho, salida)
+    return True, err, cmd
 
 
 # ---------------------------------------------------------------------------
@@ -1948,7 +2046,18 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
             progreso("  %s: uniendo %d clips..." % (proyecto, len(segmentos)))
             avisar("uniendo")
             uniendo = True
-            ok, err, cmd = unir_segmentos(segmentos, salida, ffmpeg, cfg, plan, acumulado)
+            ok = False
+            bmx = buscar_bmx(ffprobe) if plan["destino"].get("xdcam") and cfg.get("rdd9", True) else None
+            if bmx:
+                ok, err, cmd = unir_rdd9([bmx], segmentos, salida, cfg, plan, acumulado, ffprobe)
+                res["rdd9"] = ok
+                if not ok:  # se une con ffmpeg; la ficha técnica lo marca no conforme
+                    LOG.error("%s: bmx no ha podido unir en RDD 9 (%s); se une con ffmpeg, en MXF OP1a", proyecto, (err or "")[-300:])
+                    res["errores"].append(detalle_error(None, "RDD 9", cmd, err))
+            elif plan["destino"].get("xdcam") and cfg.get("rdd9", True):
+                LOG.warning("%s: no está bmxtranswrap; el bruto sale en MXF OP1a de ffmpeg, sin RDD 9", proyecto)
+            if not ok:
+                ok, err, cmd = unir_segmentos(segmentos, salida, ffmpeg, cfg, plan, acumulado)
             if not ok and puede_reintentar and err != TIEMPO_AGOTADO:
                 return reintentar("unión: %s" % (err or "")[-200:])
             if ok and salida.exists():
@@ -2015,10 +2124,13 @@ def comprobar_parar():
 
 
 def acabado_profesional(res, salida, plan, cfg, ffprobe, inicio, segundos, progreso, proyecto):
-    """Tras unir: TC interno del vídeo igual al del fichero (solo lo convertido), ficha técnica XDCAM y MD5.
+    """Tras unir: TC interno del vídeo igual al del fichero (solo lo convertido), ficha técnica XDCAM (con la envoltura
+    RDD 9) y MD5.
     Un bruto no conforme queda en AVISO. Actualiza res (tc_gop, conforme, ficha, md5)."""
     import mxf_util
     xdcam = bool(plan["destino"].get("xdcam"))
+    if res.get("rdd9") is False and not cfg.get("ficha_tecnica", True):  # con ficha, la ficha lo marca no conforme
+        res["estado"] = "AVISO: sin RDD 9 (bmx no ha podido unir los clips)"
     if xdcam and plan["modo"] == "convertir":
         try:
             res["tc_gop"] = mxf_util.parchear_tc_gop(salida, inicio, plan["fps"])
@@ -2027,7 +2139,8 @@ def acabado_profesional(res, salida, plan, cfg, ffprobe, inicio, segundos, progr
             res["errores"].append(detalle_error(None, "TC interno", [], str(e)))
     if xdcam and cfg.get("ficha_tecnica", True):
         progreso("  %s: comprobando el formato..." % proyecto)
-        esperado = {"pistas": plan["pistas_audio"], "tc": fmt_tc(inicio, plan["fps"]), "duracion": segundos, "tc_gop": bool(res.get("tc_gop"))}
+        esperado = {"pistas": plan["pistas_audio"], "tc": fmt_tc(inicio, plan["fps"]), "duracion": segundos, "tc_gop": bool(res.get("tc_gop")),
+                    "rdd9": res.get("rdd9")}
         try:
             ok, texto = mxf_util.ficha_tecnica(ffprobe, salida, esperado, flags_subproceso())
         except Exception as e:

@@ -99,9 +99,12 @@ Página 1 · Disco
    y el programa recuerda las carpetas para la próxima vez. Si analizas
    unos proyectos y otro día otros del mismo disco, el nuevo análisis
    SUMA los de antes (no se vuelven a leer, salvo que su media haya
-   cambiado en el disco: entonces lo avisa). En "Elegir proyectos" los ya
-   analizados salen con "✓ analizado"; si pides analizar solo proyectos
-   ya analizados, pregunta si quieres usar lo guardado e ir a Montaje.
+   cambiado en el disco: entonces lo avisa) para Montaje y Exportar. El
+   informe y "Qué proyectos restaurar" enseñan solo los proyectos que
+   acabas de analizar; un aviso arriba dice cuántos hay de antes.
+   En "Elegir proyectos" los ya analizados salen con "✓ analizado"; si
+   pides analizar solo proyectos ya analizados, pregunta si quieres usar
+   lo guardado e ir a Montaje.
    Usa siempre la misma carpeta de informe (mejor una del ordenador, por
    ejemplo Documentos\Analisis Avid) para que los encuentre.
 5. Al terminar se abre el informe en el navegador y aparece un mensaje con dos

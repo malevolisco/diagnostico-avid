@@ -15,6 +15,7 @@ import datetime as dt
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -2002,6 +2003,79 @@ class TrozosRepetidos(unittest.TestCase):
                                                        "papelera": [], "movidos": []}})
         self.assertEqual([c["clave"] for c in m2.papelera("P")], ["CORTO"])
         self.assertEqual(m2.nuevos("P"), [])
+
+
+class TrozosRepetidosPorSonido(unittest.TestCase):
+    """Cualquier formato (30/10/2026): candidatos por el timecode del fichero y confirmación con el sonido, muestra a muestra."""
+    FFMPEG = shutil.which("ffmpeg")
+
+    def clip(self, clave, tc, dur, proyectos=("P",), audio=None, fps="25/1"):
+        return {"clave": clave, "nombre": clave, "fichero_video": clave + ".mxf", "ficheros": [clave + ".mxf"] + ([audio] if audio else []),
+                "fps": fps, "timecode": tc, "duracion": dur, "num_audio": 1 if audio else 0, "proyectos": list(proyectos)}
+
+    def test_candidatos_por_timecode(self):
+        largo = self.clip("LARGO", "10:00:00:00", 60, audio="a")
+        corto = self.clip("CORTO", "10:00:20:00", 13, audio="a")
+        fuera = self.clip("FUERA", "10:00:55:00", 13, audio="a")  # se sale del largo
+        otro_fps = self.clip("OTRO FPS", "10:00:20:00", 13, audio="a", fps="30000/1001")
+        sin_tc = self.clip("SIN TC", None, 5, audio="a")
+        mudo = self.clip("MUDO", "10:00:20:00", 5)
+        c = eb.duplicados_tc([largo, corto, fuera, otro_fps, sin_tc, mudo])
+        self.assertEqual([(d["corto"]["clave"], d["largo"]["clave"], d["desde"]) for d in c], [("CORTO", "LARGO", 500)])
+
+    def test_tope_de_largos_por_corto_y_primero_los_de_su_proyecto(self):
+        """Cámaras que empiezan cada clip en 00:00:00:00: cualquier clip corto cabe en cualquiera más largo."""
+        largos = [self.clip("L%02d" % i, "00:00:00:00", 100 + i, proyectos=("OTRO",), audio="a") for i in range(15)]
+        suyo = self.clip("SUYO", "00:00:00:00", 200, audio="a")
+        corto = self.clip("CORTO", "00:00:00:00", 10, audio="a")
+        c = [d for d in eb.duplicados_tc(largos + [suyo, corto]) if d["corto"] is corto]
+        self.assertEqual(len(c), 10)
+        self.assertEqual(c[0]["largo"]["clave"], "SUYO")
+
+    def test_sonido_con_forma(self):
+        import array
+        import math
+        tono = array.array("h", (int(8000 * math.sin(2 * math.pi * 1000 * i / 48000)) for i in range(48000)))
+        voz = array.array("h", (int(8000 * abs(math.sin(3 * i / 48000)) * math.sin(2 * math.pi * 300 * i / 48000)) for i in range(48000)))
+        self.assertFalse(eb.sonido_con_forma(tono.tobytes()))  # tono de referencia
+        self.assertFalse(eb.sonido_con_forma(bytes(96000)))  # silencio
+        self.assertTrue(eb.sonido_con_forma(voz.tobytes()))
+
+    def test_buscar_muestras(self):
+        donde = bytes(range(256))
+        self.assertEqual(eb.buscar_muestras(donde[50:90], donde), 25)
+        self.assertIsNone(eb.buscar_muestras(donde[51:91], donde))  # solo a mitad de muestra: no vale
+        self.assertIsNone(eb.buscar_muestras(donde[50:90], donde[:60] + donde[61:]))
+
+    @unittest.skipUnless(da is not None and FFMPEG, "sin pyavb o sin ffmpeg")
+    def test_copia_exacta_si_otro_microfono_y_tono_no(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        ff = lambda *a: subprocess.run([self.FFMPEG, "-v", "error", "-y"] + list(a), check=True)
+        # "voz": ruido rosa con un volumen que sube y baja de forma irregular
+        ff("-f", "lavfi", "-i", "anoisesrc=d=20:c=pink:r=48000:a=0.5:seed=7", "-f", "lavfi",
+           "-i", "aevalsrc='0.05+0.95*abs(sin(2.1*t)*sin(5.3*t+1)*sin(0.7*t))':d=20:s=48000", "-filter_complex", "[0][1]amultiply[a]",
+           "-map", "[a]", "-c:a", "pcm_s16le", str(tmp / "largo.wav"))
+        ff("-ss", "7.32", "-i", str(tmp / "largo.wav"), "-t", "8", "-c:a", "pcm_s16le", str(tmp / "trozo.wav"))
+        ff("-i", str(tmp / "largo.wav"), "-f", "lavfi", "-i", "anoisesrc=d=20:c=white:r=48000:a=0.01:seed=11", "-filter_complex",
+           "[0]highpass=f=200,lowpass=f=5000,adelay=4[x];[x][1]amix=inputs=2:normalize=0[a]", "-map", "[a]", "-c:a", "pcm_s16le",
+           str(tmp / "otra_camara.wav"))
+        ff("-ss", "7.32", "-i", str(tmp / "otra_camara.wav"), "-t", "8", "-c:a", "pcm_s16le", str(tmp / "otra_camara_trozo.wav"))
+        ff("-f", "lavfi", "-i", "sine=f=1000:r=48000:d=20", "-c:a", "pcm_s16le", str(tmp / "tono.wav"))
+        ff("-f", "lavfi", "-i", "sine=f=1000:r=48000:d=8", "-c:a", "pcm_s16le", str(tmp / "tono_trozo.wav"))
+        mxf = [{"ruta": n, "pistas": [{"tipo": "audio", "canales": 1}]} for n in
+               ("largo.wav", "trozo.wav", "otra_camara_trozo.wav", "tono.wav", "tono_trozo.wav")]
+        largo = self.clip("ENTREVISTA", "10:00:00:00", 20, audio="largo.wav")
+        trozo = self.clip("TROZO", "10:00:07:08", 8, audio="trozo.wav")  # 7,32 s = 7 s y 8 fotogramas
+        otra = self.clip("OTRA CAMARA", "10:00:07:08", 8, audio="otra_camara_trozo.wav")
+        tono = self.clip("BARRAS", "11:00:00:00", 20, audio="tono.wav")
+        tono_trozo = self.clip("BARRAS TROZO", "11:00:05:00", 8, audio="tono_trozo.wav")
+        clips = [largo, trozo, otra, tono, tono_trozo]
+        marcados = da.repetidos_por_sonido(clips, tmp, self.FFMPEG, mxf)
+        self.assertEqual([c["clave"] for c in marcados], ["TROZO"])
+        self.assertEqual(trozo["contenido_en"]["nombre"], "ENTREVISTA")
+        self.assertAlmostEqual(trozo["contenido_en"]["desde"], 7.3, delta=0.05)
+        self.assertEqual(eb.texto_duplicado(trozo), "parte de ENTREVISTA, del 0:07,3 al 0:15,3")
 
 
 class MediaEnlazada(unittest.TestCase):

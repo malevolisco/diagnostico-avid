@@ -43,6 +43,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from collections import Counter, defaultdict
@@ -129,7 +130,7 @@ CONFIG_DEFECTO = {
     "rdd9": True,
     "_rdd9": "true = los brutos XDCAM salen empaquetados según SMPTE RDD 9 (el MXF de XDCAM HD422 de Sony): los clips los une bmxtranswrap de la BBC, que va con el programa, en lugar de ffmpeg; no recodifica ni añade tiempo | false = MXF OP1a de ffmpeg",
     "quitar_duplicados": True,
-    "_quitar_duplicados": "Clips DV que son un trozo de otro del mismo proyecto (misma fecha, hora y timecode de cinta de la cámara y los mismos fotogramas; un subclip o una consolidación de Avid): true = no entran en el bruto y quedan en la papelera del montaje, de donde se pueden recuperar | false = entran los dos",
+    "_quitar_duplicados": "Clips que son un trozo de otro del mismo proyecto (un subclip o una consolidación de Avid). En DV: misma fecha, hora y timecode de cinta de la cámara y los mismos fotogramas; en cualquier formato: timecode del fichero dentro del otro y el mismo sonido, muestra a muestra: true = no entran en el bruto y quedan en la papelera del montaje, de donde se pueden recuperar | false = entran los dos",
     "ficha_tecnica": True,
     "_ficha_tecnica": "Una ficha .txt por bruto que dice si el fichero exportado es conforme a XDCAM HD422",
     "medidor_audio": True,
@@ -908,6 +909,80 @@ def duplicados_dv(clips, margen=1.0):
                 desde = int(round((tco[0] - tl[0]).total_seconds() * fps))
             candidatos.append({"corto": corto, "largo": largo, "desde": max(0, desde)})
     return candidatos, solapes
+
+
+def duplicados_tc(clips, tope=10):
+    """Clips de cualquier formato cuyo tramo de timecode (el del fichero, que Avid conserva al consolidar o al hacer un
+    subclip) cae entero dentro del de otro con los mismos fps: candidatos a ser un trozo copiado, que hay que confirmar
+    con el sonido (diagnostico_avid.marcar_duplicados). Solo clips con vídeo, sonido y timecode, y no marcados ya.
+    Muchas cámaras empiezan cada clip en 00:00:00:00: de cada corto se miran como mucho tope largos, primero los de su
+    proyecto. Devuelve [{"corto", "largo", "desde"}]: desde es el fotograma del largo donde empezaría el corto."""
+    grupos = defaultdict(list)
+    for c in clips:
+        fps = fps_num(c.get("fps"))
+        if not (c.get("fichero_video") and c.get("timecode") and c.get("num_audio") and c.get("duracion") and fps) or c.get("contenido_en"):
+            continue
+        try:
+            t0 = tc_cinta(c["timecode"], c.get("fps"))
+        except ValueError:
+            continue
+        grupos[c.get("fps")].append((t0, t0 + int(round(c["duracion"] * fps)), c))
+    import heapq
+    candidatos = []
+    for tramos in grupos.values():
+        tramos.sort(key=lambda x: (x[0], -(x[1] - x[0]), str(x[2].get("clave"))))
+        for k, (b0, b1, corto) in enumerate(tramos):
+            # los de antes empiezan antes o a la vez (y, si a la vez, duran más o igual): valen los que acaban después
+            # (un fotograma de holgura por el redondeo de la duración). Sin guardarlos todos: con miles de clips en
+            # 00:00:00:00 serían millones de parejas.
+            suyos = set(corto.get("proyectos") or ())
+            mejores = heapq.nsmallest(tope, ((not (suyos & set(largo.get("proyectos") or ())), largo.get("duracion") or 0, n, largo, b0 - a0)
+                                             for n, (a0, a1, largo) in enumerate(tramos[:k]) if b1 <= a1 + 1),
+                                      key=lambda x: x[:3])
+            candidatos += [{"corto": corto, "largo": x[3], "desde": x[4]} for x in mejores]
+    return candidatos
+
+
+def muestras_sonido(ffmpeg, ruta, canal, inicio, dur):
+    """Muestras de un canal de audio (canal: lo que da canales_clip), tal cual en PCM de 16 bits, sin remuestrear, desde
+    inicio durante dur segundos. b"" si no se puede leer."""
+    cmd = [ffmpeg, "-v", "error", "-ss", "%.3f" % max(0.0, inicio), "-i", str(ruta), "-t", "%.3f" % dur, "-map", "0:a:%d" % canal["flujo"]]
+    if canal.get("de", 1) > 1:
+        cmd += ["-af", "pan=mono|c0=c%d" % canal["canal"]]
+    cmd += ["-c:a", "pcm_s16le", "-f", "s16le", "-"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=120, **flags_subproceso())
+    except Exception:
+        return b""
+    return r.stdout[:len(r.stdout) // 2 * 2] if r.returncode == 0 else b""
+
+
+def sonido_con_forma(muestras, bloque=400):
+    """¿El sonido cambia lo bastante para servir de huella? Un tono de referencia o un silencio son iguales en cualquier
+    sitio y no prueban nada; la voz o el ambiente, sí. Mira el volumen por bloques de 400 muestras (8 ms a 48 kHz):
+    tiene que haber algo por encima de -50 dBFS y una variación (desviación típica) de 3 dB o más."""
+    import array
+    import math
+    import statistics
+    m = array.array("h")
+    m.frombytes(muestras)
+    if sys.byteorder == "big":
+        m.byteswap()
+    niveles = []
+    for i in range(0, len(m) - bloque + 1, bloque):
+        e = sum(x * x for x in m[i:i + bloque]) / bloque
+        niveles.append(max(-60.0, 10 * math.log10(e / 32768.0 ** 2)) if e > 0 else -60.0)
+    return len(niveles) >= 10 and max(niveles) >= -50 and statistics.pstdev(niveles) >= 3
+
+
+def buscar_muestras(trozo, donde):
+    """Posición (en muestras) en la que trozo aparece idéntico, byte a byte, dentro de donde; None si no está."""
+    if not trozo or len(trozo) > len(donde):
+        return None
+    i = donde.find(trozo)
+    while i != -1 and i % 2:  # muestras de 2 bytes: solo valen las posiciones pares
+        i = donde.find(trozo, i + 1)
+    return None if i == -1 else i // 2
 
 
 def es_duplicado(c, cfg):

@@ -51,9 +51,10 @@ def main():
     # ENLACES: 2 ficheros enlazados (AMA) fuera de Avid MediaFiles y 1 clip con la media en otra carpeta (--media-extra).
     # ORIGEN: 2 bins (uno "compras"), un MOV enlazado de una Panasonic y 2 clips importados sin pistas de origen.
     # offline: CLIP OFFLINE, los 2 "APROX B" ambiguos y VIEJO OMF (su media es OMF, que no se lee)
-    # DUPLICADO: una entrevista DV y un trozo suyo copiado a otro fichero (mismo subcódigo de cámara y mismos fotogramas)
-    esperado = {"proyectos": 8, "bins": 12, "bins_ilegibles": 1, "offline": 4, "renders_en_bins": 1, "clips_compartidos": 1, "clips_fisicos": 30,
-                "huerfanos": 5, "trozos_repetidos": 1}
+    # DUPLICADO: una entrevista DV y un trozo suyo copiado a otro fichero (mismo subcódigo de cámara y mismos fotogramas),
+    # y una entrevista HD y un trozo suyo (mismo timecode del fichero y mismo sonido, muestra a muestra)
+    esperado = {"proyectos": 8, "bins": 12, "bins_ilegibles": 1, "offline": 4, "renders_en_bins": 1, "clips_compartidos": 1, "clips_fisicos": 32,
+                "huerfanos": 5, "trozos_repetidos": 2}
     for k, v in esperado.items():
         if r.get(k) != v:
             fallo("resumen.%s = %r, esperado %r" % (k, r.get(k), v))
@@ -111,8 +112,8 @@ def main():
                            "ORIGEN SEPTIEMBRE DE 2021": ("convertir", 3, 6.0),
                            "ABORTO SEPTIEMBRE DE 2021": ("convertir", 2, 4.0), "APROX SEPTIEMBRE DE 2021": ("convertir", 1, 2.0),
                            "NTSC SEPTIEMBRE DE 2021": ("convertir", 2, 4.0), "SIN PROYECTO SEPTIEMBRE DE 2021": ("convertir", 4, 7.0),
-                           # DUPLICADO: solo la entrevista; el trozo repetido, fuera (en la papelera del montaje)
-                           "DUPLICADO SEPTIEMBRE DE 2021": ("convertir", 1, 6.0)}
+                           # DUPLICADO: solo las dos entrevistas; los trozos repetidos, fuera (en la papelera del montaje)
+                           "DUPLICADO SEPTIEMBRE DE 2021": ("convertir", 2, 12.0)}
     else:
         # Un bruto por tarjeta (_Tnn_fecha), y aparte agencias, importados y piezas. 15 SEPT: el clip "2017 07 13" es del día 10
         # (otra tarjeta); el de Reuters lo dice la ruta del bin; la pieza se llama como la secuencia. El vídeo de móvil
@@ -133,8 +134,8 @@ def main():
                            "ABORTO_T01_2021-09-15": ("convertir", 2, 4.0), "APROX_T01_2021-09-15": ("copia", 1, 2.0),
                            "NTSC_T01_2021-09-15": ("copia", 1, 2.0), "NTSC_T02_2021-09-15": ("copia", 1, 2.0),
                            "SIN_PROYECTO_T01_2021-09-15": ("copia", 4, 7.0),
-                           # DUPLICADO: la entrevista DV, copiada sin recomprimir; el trozo repetido, fuera
-                           "DUPLICADO_T01_2021-09-15": ("copia", 1, 6.0)}
+                           # DUPLICADO: las dos entrevistas (DV NTSC y HD: formatos distintos, se convierte); los trozos repetidos, fuera
+                           "DUPLICADO_T01_2021-09-15": ("convertir", 2, 12.0)}
     if sorted(por) != sorted(esperado_brutos):
         fallo("brutos %s, esperados %s" % (sorted(por), sorted(esperado_brutos)))
     for proy, (modo, incl, seg) in esperado_brutos.items():

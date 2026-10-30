@@ -169,11 +169,13 @@ Usa el último análisis del disco: no lo repite.
   resto se reparte de nuevo). "Deshacer" o Ctrl+Z deshace.
 - TROZOS REPETIDOS: si un clip es un trozo de otro del mismo proyecto
   (por ejemplo, un subclip de una entrevista que Avid copió a otro
-  fichero), el programa lo detecta (misma fecha, hora y timecode que
-  grabó la cámara y los mismos fotogramas) y lo deja en la papelera,
+  fichero), el programa lo detecta y lo deja en la papelera,
   con el texto "parte de ENTREVISTA, del 2:37,6 al 2:51,3". Así no sale
   dos veces en el bruto. Si hiciera falta, "Recuperar los marcados" lo
-  vuelve a meter. Solo funciona con vídeo DV (DV, DVCAM, DVCPRO).
+  vuelve a meter. En vídeo DV lo reconoce por la fecha, la hora y el
+  timecode que grabó la cámara y los mismos fotogramas; en cualquier otro
+  formato, por el timecode y el mismo sonido (tiene que ser sonido que
+  cambia, como una voz: un tono o un silencio no sirven para saberlo).
 - Lo movido a mano sale en naranja y en el Excel pone "movido a mano".
 - "Renombrar..." cambia el nombre del fichero del bruto elegido.
 - "Orden automático" deshace todo lo del proyecto.

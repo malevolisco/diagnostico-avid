@@ -73,9 +73,10 @@ def main():
     if (aprox.get("clips_aproximados"), aprox.get("clips_ambiguos")) != (1, 2):
         fallo("APROX: aproximados %r, ambiguos %r; esperado 1 y 2" % (aprox.get("clips_aproximados"), aprox.get("clips_ambiguos")))
     grab = (json.loads((carpeta / "cruce.json").read_text(encoding="utf-8")).get("fecha_grabacion") or {})
-    # NTSC (columnas Shoot Date/Time del bin) y el de ORIGEN con el reloj desfasado; la Panasonic del 1/1/2000, descartada
-    if (grab.get("clips"), sum((grab.get("imposibles") or {}).values()), grab.get("desfasados")) != (3, 1, 1):
-        fallo("fecha de grabación: %r clips, %r imposibles, %r desfasados; esperados 3, 1 y 1"
+    # NTSC (columnas Shoot Date/Time del bin) y el de ORIGEN con el reloj desfasado; la Panasonic del 1/1/2000, descartada;
+    # y la entrevista DV de DUPLICADO y su trozo, por el subcódigo de la cámara (13/11/2002: no cuenta como desfasado)
+    if (grab.get("clips"), sum((grab.get("imposibles") or {}).values()), grab.get("desfasados")) != (5, 1, 1):
+        fallo("fecha de grabación: %r clips, %r imposibles, %r desfasados; esperados 5, 1 y 1"
               % (grab.get("clips"), grab.get("imposibles"), grab.get("desfasados")))
     if r.get("mxf_error"):
         fallo("%d MXF con error de lectura" % r["mxf_error"])
@@ -112,8 +113,9 @@ def main():
                            "ORIGEN SEPTIEMBRE DE 2021": ("convertir", 3, 6.0),
                            "ABORTO SEPTIEMBRE DE 2021": ("convertir", 2, 4.0), "APROX SEPTIEMBRE DE 2021": ("convertir", 1, 2.0),
                            "NTSC SEPTIEMBRE DE 2021": ("convertir", 2, 4.0), "SIN PROYECTO SEPTIEMBRE DE 2021": ("convertir", 4, 7.0),
-                           # DUPLICADO: solo las dos entrevistas; los trozos repetidos, fuera (en la papelera del montaje)
-                           "DUPLICADO SEPTIEMBRE DE 2021": ("convertir", 2, 12.0)}
+                           # DUPLICADO: solo las dos entrevistas; los trozos repetidos, fuera (en la papelera del montaje). La DV
+                           # es de 2002 (fecha de la cámara) y la HD de 2021: más de separar_si_pasan_dias, en brutos aparte
+                           "DUPLICADO NOVIEMBRE DE 2002": ("convertir", 1, 6.0), "DUPLICADO SEPTIEMBRE DE 2021": ("convertir", 1, 6.0)}
     else:
         # Un bruto por tarjeta (_Tnn_fecha), y aparte agencias, importados y piezas. 15 SEPT: el clip "2017 07 13" es del día 10
         # (otra tarjeta); el de Reuters lo dice la ruta del bin; la pieza se llama como la secuencia. El vídeo de móvil

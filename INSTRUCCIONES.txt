@@ -240,6 +240,10 @@ clips en orden de fecha y de 2 horas como mucho:
    - HONDURAS DICIEMBRE DE 2018 A ENERO DE 2019.mxf   dos meses seguidos
    - PANAMA 2019 PIEZAS JULIO DE 2019.mxf        piezas ya renderizadas (solo si se marcan)
    - PANAMA 2019.mxf                             clips sin fecha
+   Si en un mismo proyecto hay material de épocas distintas (por ejemplo,
+   de dos corresponsales, uno de 2002 y otro de 2019), en cuanto entre dos
+   clips seguidos pasan más de 6 meses empieza otro bruto:
+   CHAVELA VARGAS NOVIEMBRE DE 2002 y CHAVELA VARGAS ABRIL DE 2019.
    - SIN PROYECTO <MES> DE <AÑO>.mxf             clips que no están en ningún bin
    Todos salen en XDCAM HD422 50 (1920x1080, 1080i50, 16:9). El material en SD
    4:3 queda con bandas negras a los lados, sin deformar; el NTSC pasa a 25.
@@ -304,7 +308,9 @@ clips en orden de fecha y de 2 horas como mucho:
    1 de enero de una cámara con el reloj sin poner) no se usa: el clip va
    por la del volcado y la columna "Aviso fecha" lo dice. Si la de
    grabación se aleja más de 12 horas del volcado (reloj de la cámara mal
-   puesto), se usa igual, pero con aviso.
+   puesto), se usa igual, pero con aviso. En vídeo DV (cintas) la fecha
+   es la que grabó la cámara en cada fotograma; que la cinta se capturara
+   años después es normal y no se avisa.
 
 Todo seguido, sin pasar por Montaje ni Exportar: en la página Disco, abre
 "Opciones avanzadas" y marca "Analizar y exportar seguido" antes de pulsar

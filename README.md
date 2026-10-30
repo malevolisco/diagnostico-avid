@@ -81,6 +81,7 @@ Los análisis se guardan. Si otro día se analizan otros proyectos del mismo dis
 | Decisión | Por qué |
 |---|---|
 | **Un bruto por proyecto y mes, de 2 h como máximo**, con nombre `PROYECTO MES DE AÑO`. El clip que no cabe abre el bruto siguiente. | Petición del Archivo: brutos manejables y con un nombre que se entiende sin abrirlos. |
+| **Material de otra época en el mismo proyecto, en otro bruto**: si entre dos clips seguidos pasan más de 6 meses (`separar_si_pasan_dias`), el siguiente abre un bruto nuevo. En DV, la fecha de grabación es la que escribe la cámara en cada fotograma. | Un mismo proyecto de Avid puede juntar material de dos corresponsales grabado con años de diferencia (en un disco real, 2002 y 2019, todo volcado en 2019); sin esto salía un solo bruto "NOVIEMBRE DE 2002 A ABRIL DE 2019". |
 | **Orden cronológico**: por la fecha de grabación si consta, si no por la del fichero; con la misma fecha, por timecode. | Así el bruto respeta el orden en que se grabó. |
 | **XDCAM HD422 50 Mb/s 1080i50** (25 imágenes entrelazadas = 50 campos, campo superior primero) **16:9**. Si todo el bruto ya está en ese formato, se copia sin recomprimir. | Es el formato de ingesta del Archivo. Copiar evita pérdida de calidad y tiempo. |
 | El **vídeo vertical** se encaja sin deformar (pillarbox) y el **NTSC** se pasa a 25. Se conservan los **canales de audio** por separado. | Cualquier cámara tiene que acabar en el mismo formato sin estropear la imagen. |

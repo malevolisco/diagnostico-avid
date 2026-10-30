@@ -40,8 +40,8 @@ class Montaje:
     """listas: {proyecto: {"material": [clips], "piezas": [clips]}} de exportar_brutos.listas_por_proyecto (en orden
     cronológico); fecha: clip -> datetime | None; tope: segundos por bruto; guardado: "proyectos" de montaje.json."""
 
-    def __init__(self, listas, fecha, tope, guardado=None, descartados=None):
-        self.listas, self.fecha, self.tope = listas, fecha, tope
+    def __init__(self, listas, fecha, tope, guardado=None, descartados=None, salto=eb.SALTO_DIAS):
+        self.listas, self.fecha, self.tope, self.salto = listas, fecha, tope, salto
         self.descartados = descartados or {}  # {proyecto: [(clip, motivo)]}: lo que no entra en ningún bruto
         self.por_clave = {c.get("clave"): c for l in listas.values() for cs in l.values() for c in cs}
         self.orden = {p: {c.get("clave"): (f, i) for f in ("material", "piezas") for i, c in enumerate(l.get(f) or [])}
@@ -65,7 +65,7 @@ class Montaje:
         return self.estados.get(p) or self._automatico(p)
 
     def _automatico(self, p):
-        trozos = eb.trozos_proyecto(self.listas[p], self.fecha, self.tope)
+        trozos = eb.trozos_proyecto(self.listas[p], self.fecha, self.tope, salto=self.salto)
         # los trozos repetidos de otro clip (exportar_brutos.es_duplicado) empiezan en la papelera: se pueden recuperar
         return {"brutos": [{"nombre": None, "tipo": f, "clips": [c.get("clave") for c in t]} for f, t in trozos],
                 "papelera": [c.get("clave") for c in self.listas[p].get("duplicados") or []], "movidos": []}
@@ -280,22 +280,22 @@ class Montaje:
         self.estados[p] = estado
 
     @classmethod
-    def cargar(cls, carpeta_brutos, listas, fecha, tope, descartados=None):
+    def cargar(cls, carpeta_brutos, listas, fecha, tope, descartados=None, salto=eb.SALTO_DIAS):
         """Lee montaje.json de la carpeta de brutos; si no hay pero hay un cortes.json antiguo, lo convierte."""
         ruta = Path(carpeta_brutos) / FICHERO
         if ruta.exists():
             try:
                 guardado = json.loads(ruta.read_text(encoding="utf-8")).get("proyectos") or {}
             except Exception as e:
-                m = cls(listas, fecha, tope, descartados=descartados)
+                m = cls(listas, fecha, tope, descartados=descartados, salto=salto)
                 m.avisos.append("%s ilegible (%s): se usa el reparto automático" % (FICHERO, e))
                 return m
-            return cls(listas, fecha, tope, guardado, descartados)
-        m = cls(listas, fecha, tope, descartados=descartados)
+            return cls(listas, fecha, tope, guardado, descartados, salto)
+        m = cls(listas, fecha, tope, descartados=descartados, salto=salto)
         cortes = eb.cargar_cortes(carpeta_brutos)
         for p, claves in sorted(cortes.items()):
             if p in listas:
-                trozos = eb.trozos_proyecto(listas[p], fecha, tope, claves)
+                trozos = eb.trozos_proyecto(listas[p], fecha, tope, claves, salto)
                 m.estados[p] = {"brutos": [{"nombre": None, "tipo": f, "clips": [c.get("clave") for c in t]} for f, t in trozos],
                                 "papelera": [], "movidos": []}
         if m.estados:
@@ -307,7 +307,7 @@ class Montaje:
         mxf_por_ruta = {m["ruta"]: m for m in mxf}
         listas = eb.listas_por_proyecto(clips, cruce, mxf_por_ruta, cfg)
         return cls.cargar(carpeta_brutos, listas, lambda c: eb.fecha_clip(c, mxf_por_ruta), 3600 * float(cfg.get("horas_por_bruto", 2)),
-                          eb.descartados_por_proyecto(clips, cruce, mxf_por_ruta, cfg))
+                          eb.descartados_por_proyecto(clips, cruce, mxf_por_ruta, cfg), eb.salto_dias(cfg))
 
     # --- exportar -------------------------------------------------------------------------------------------------
 

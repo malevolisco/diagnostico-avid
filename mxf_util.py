@@ -200,8 +200,8 @@ def subcodigo_dv(ruta, cola=8 * 1024 * 1024):
         f.seek(pos)
         inicio = _datos_dv(f.read(canal), nseq)
         ultimo = None
-        if n > tam:  # un solo bloque con todos los fotogramas
-            ultimo = pos + n - tam
+        if n > tam:  # un solo bloque con todos los fotogramas: el último entero (Avid puede dejar bytes de más al final)
+            ultimo = pos + (n // tam - 1) * tam
         else:  # un bloque por fotograma: el último elemento de imagen, cerca del final (antes del índice y del pie)
             f.seek(0, 2)
             final = f.tell()
@@ -213,13 +213,70 @@ def subcodigo_dv(ruta, cola=8 * 1024 * 1024):
                 extra = (trozo[i + 16] & 0x7F) if trozo[i + 16] & 0x80 else 0
                 ultimo = desde + i + 17 + extra
         fin = None
-        if ultimo is not None:
-            f.seek(ultimo)
+        # si el último no es un fotograma DV entero, el anterior que lo sea: los 30 anteriores y luego de 30 en 30 (unos
+        # 100 s): sin el final real, un largo con un corte de grabación dentro parece más corto de lo que es
+        for atras in (list(range(30)) + list(range(30, 3000, 30)) if n > tam else [0]):
+            if ultimo is None or ultimo - atras * tam < pos:
+                break
+            f.seek(ultimo - atras * tam)
             dato = f.read(canal)
             if _es_inicio_dv(dato):
                 fin = _datos_dv(dato, nseq)
+                if atras and fin.get("tc"):  # el timecode del último, contando los que faltan
+                    fin["atras"] = atras
+                break
         # fotogramas: exacto con la esencia en un bloque; con un bloque por fotograma no se cuentan (None)
         return {"inicio": inicio, "fin": fin, "fotograma": tam, "fotogramas": n // tam if n > tam else None}
+
+
+def situar_tc_dv(ruta, objetivos, a_fotogramas, paso=30):
+    """Fotograma (desde 0) en el que el subcódigo DV del clip dice cada timecode de objetivos (en fotogramas, como los da
+    a_fotogramas a partir del texto 'hh:mm:ss:ff'): {objetivo: índice o None}. No supone el timecode continuo: si la
+    cámara paró y volvió a grabar dentro del clip, el timecode salta. Lee el de uno de cada paso fotogramas (unas 600
+    lecturas de 12 KB para 10 minutos) y, en el tramo que contiene el objetivo, el fotograma exacto: si el tramo es
+    seguido, por la diferencia; si hay un salto dentro, uno a uno."""
+    with open(ruta, "rb") as f:
+        esencia = _esencia_dv(f)
+        if esencia is None:
+            return {o: None for o in objetivos}
+        pos, clave, n, nseq, tam = esencia
+        if n > tam:
+            total, sitio = n // tam, lambda i: pos + i * tam
+        else:
+            f.seek(0)
+            posiciones = [p for p, c, largo in _klv(f) if c == clave]
+            total, sitio = len(posiciones), posiciones.__getitem__
+        leidos = {}
+
+        def tc(i):
+            if i not in leidos:
+                f.seek(sitio(i))
+                dato = f.read(SECUENCIA_DIF)
+                texto = _datos_dv(dato, 1)["tc"] if _es_inicio_dv(dato) else None
+                try:
+                    leidos[i] = a_fotogramas(texto) if texto else None
+                except ValueError:
+                    leidos[i] = None
+            return leidos[i]
+
+        muestras = list(range(0, total, paso)) + ([total - 1] if total and (total - 1) % paso else [])
+        salida = {}
+        for objetivo in objetivos:
+            encontrado = None
+            for a, b in zip(muestras, muestras[1:] or muestras):
+                ta, tb = tc(a), tc(b)
+                if ta == objetivo:
+                    encontrado = a
+                elif tb == objetivo:
+                    encontrado = b
+                elif ta is not None and tb is not None and tb - ta == b - a and ta < objetivo < tb:
+                    encontrado = a + objetivo - ta  # tramo seguido
+                elif ta is None or tb is None or tb - ta != b - a:  # salto (o fotograma ilegible) dentro: uno a uno
+                    encontrado = next((i for i in range(a + 1, b) if tc(i) == objetivo), None)
+                if encontrado is not None:
+                    break
+            salida[objetivo] = encontrado
+        return salida
 
 
 def huella_fotograma_dv(ruta, indice):

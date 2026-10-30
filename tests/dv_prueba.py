@@ -21,10 +21,12 @@ def _packs(tc_frames, cuando, fps):
     return tc, fecha, hora
 
 
-def poner_subcodigo(ruta, tc_inicio, cuando_inicio, fps=30000 / 1001):
+def poner_subcodigo(ruta, tc_inicio, cuando_inicio, fps=30000 / 1001, salto=None):
     """Escribe, fotograma a fotograma, el timecode de cinta (tc_inicio: 'hh:mm:ss:ff', y sigue) y la fecha y hora de
-    grabación (cuando_inicio: datetime, avanza con el tiempo real del fotograma) en todos los canales. Devuelve cuántos
-    fotogramas ha escrito. Solo para la esencia en un bloque (lo que escribe el mxf_opatom de ffmpeg)."""
+    grabación (cuando_inicio: datetime, avanza con el tiempo real del fotograma) en todos los canales. salto: (fotograma,
+    segundos): desde ese fotograma, timecode y hora van segundos por delante, como cuando la cámara para y vuelve a
+    grabar con el timecode siguiendo al reloj. Devuelve cuántos fotogramas ha escrito. Solo para la esencia en un bloque
+    (lo que escribe el mxf_opatom de ffmpeg)."""
     h, m, s, f = (int(x) for x in tc_inicio.split(":"))
     base = int(round(fps))
     inicio = ((h * 60 + m) * 60 + s) * base + f
@@ -36,7 +38,8 @@ def poner_subcodigo(ruta, tc_inicio, cuando_inicio, fps=30000 / 1001):
             raise ValueError("sin esencia DV")
         tam = mxf_util.subcodigo_dv(ruta)["fotograma"]
         for i in range(n // tam):
-            tc, fecha, hora = _packs(inicio + i, cuando_inicio + dt.timedelta(seconds=i / fps), fps)
+            extra = salto[1] if salto and i >= salto[0] else 0
+            tc, fecha, hora = _packs(inicio + i + extra * base, cuando_inicio + dt.timedelta(seconds=i / fps + extra), fps)
             for s in range(tam // mxf_util.SECUENCIA_DIF):
                 o0 = pos + i * tam + s * mxf_util.SECUENCIA_DIF
                 for blk in (1, 2):  # subcódigo

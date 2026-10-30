@@ -866,13 +866,16 @@ def tramo_dv(c):
     if t1 < t0:
         return None
     tc = None
-    if ini.get("tc") and fin.get("tc"):
-        try:
-            tc = (tc_cinta(ini["tc"], c.get("fps")), tc_cinta(fin["tc"], c.get("fps")))
-        except ValueError:
-            tc = None
-        if tc and tc[1] < tc[0]:
-            tc = None
+    try:
+        if ini.get("tc") and fin.get("tc"):
+            tc = (tc_cinta(ini["tc"], c.get("fps")), tc_cinta(fin["tc"], c.get("fps")) + int(fin.get("atras") or 0))
+        elif ini.get("tc") and dv.get("fotogramas"):  # sin el último fotograma: el primero más los que tiene el clip
+            tc0 = tc_cinta(ini["tc"], c.get("fps"))
+            tc = (tc0, tc0 + int(dv["fotogramas"]) - 1)
+    except ValueError:
+        tc = None
+    if tc and tc[1] < tc[0]:
+        tc = None
     return t0, t1, tc
 
 
@@ -882,8 +885,13 @@ def duplicados_dv(clips, margen=1.0):
     identidad, con los mismos fotogramas). Devuelve ([{"corto", "largo", "desde"}], [(a, b)]): desde es el fotograma
     del largo donde empezaría el corto; la segunda lista, los que solo se solapan en parte. Hay que confirmarlo con
     los fotogramas (diagnostico_avid.marcar_duplicados): dos cámaras grabando a la vez dan tramos que se solapan."""
+    # a igual inicio, primero el más largo (se queda), contado en fotogramas (la hora del último va en segundos enteros) y,
+    # si duran lo mismo, el que tiene más sonido: de dos copias del mismo clip, una muda y otra con sonido, la que se queda
+    # en el bruto es la que tiene sonido
+    def fotogramas(c):
+        return (c.get("dv") or {}).get("fotogramas") or int(round((c.get("duracion") or 0) * (fps_num(c.get("fps")) or 25)))
     tramos = sorted(((t, c) for c in clips if c.get("fichero_video") for t in [tramo_dv(c)] if t),
-                    key=lambda x: (x[0][0], -(x[0][1] - x[0][0]).total_seconds(), str(x[1].get("clave"))))
+                    key=lambda x: (x[0][0], -fotogramas(x[1]), -(x[1].get("num_audio") or 0), str(x[1].get("clave"))))
     holgura = dt.timedelta(seconds=margen)
     candidatos, solapes = [], []
     for i, (ta, a) in enumerate(tramos):
@@ -899,6 +907,7 @@ def duplicados_dv(clips, margen=1.0):
                     solapes.append((a, b))
                 continue
             fps = fps_num(largo.get("fps")) or 25
+            por_hora = int(round((tco[0] - tl[0]).total_seconds() * fps))  # la hora va en segundos enteros: ±1 s
             if tl[2] and tco[2]:  # con timecode de cinta: tiene que caer dentro y cuadrar con la hora
                 if not (tl[2][0] <= tco[2][0] and tco[2][1] <= tl[2][1]):
                     continue
@@ -906,8 +915,9 @@ def duplicados_dv(clips, margen=1.0):
                     continue
                 desde = tco[2][0] - tl[2][0]
             else:
-                desde = int(round((tco[0] - tl[0]).total_seconds() * fps))
-            candidatos.append({"corto": corto, "largo": largo, "desde": max(0, desde)})
+                desde = por_hora
+            candidatos.append({"corto": corto, "largo": largo, "desde": max(0, desde), "por_tc": bool(tl[2] and tco[2]),
+                               "desde_hora": max(0, por_hora)})
     return candidatos, solapes
 
 
@@ -930,7 +940,7 @@ def duplicados_tc(clips, tope=10):
     import heapq
     candidatos = []
     for tramos in grupos.values():
-        tramos.sort(key=lambda x: (x[0], -(x[1] - x[0]), str(x[2].get("clave"))))
+        tramos.sort(key=lambda x: (x[0], -(x[1] - x[0]), -(x[2].get("num_audio") or 0), str(x[2].get("clave"))))
         for k, (b0, b1, corto) in enumerate(tramos):
             # los de antes empiezan antes o a la vez (y, si a la vez, duran más o igual): valen los que acaban después
             # (un fotograma de holgura por el redondeo de la duración). Sin guardarlos todos: con miles de clips en

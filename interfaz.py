@@ -996,7 +996,7 @@ class App:
         self.aj["tc"].set(cfg.get("timecode_inicio", "00:00:00:00"))
         self.aj["niveles"].set(cfg.get("niveles_audio", "sin_tocar"))
         for clave in ("ficha_tecnica", "md5", "medidor_audio"):
-            self.aj[clave].set(bool(cfg.get(clave, True)))
+            self.aj[clave].set(bool(cfg.get(clave)))
         self.poniendo = False
         self.pintar_pistas()
 

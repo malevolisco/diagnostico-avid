@@ -127,16 +127,18 @@ CONFIG_DEFECTO = {
     "_niveles_audio": "sin_tocar (recomendado: el bruto es documento) | ganancia = ganancia_db fija por pista | r128 = cada clip a -23 LUFS (EBU R128), con tope de +/-12 dB; altera el original",
     "ganancia_db": [],
     "_ganancia_db": "Con niveles_audio = ganancia: dB por pista del bruto, de -20 a 20 (p. ej. [3, 0] sube 3 dB la pista 1)",
-    "md5": True,
-    "_md5": "Un fichero .md5 por bruto (comprobación de integridad al copiarlo)",
+    "md5": False,
+    "_md5": "true = un fichero .md5 por bruto (comprobación de integridad al copiarlo); vuelve a leer el bruto entero, así que alarga la exportación",
     "rdd9": True,
     "_rdd9": "true = los brutos XDCAM salen empaquetados según SMPTE RDD 9 (el MXF de XDCAM HD422 de Sony): los clips los une bmxtranswrap de la BBC, que va con el programa, en lugar de ffmpeg; no recodifica ni añade tiempo | false = MXF OP1a de ffmpeg",
     "quitar_duplicados": True,
     "_quitar_duplicados": "Clips que son un trozo de otro del mismo proyecto (un subclip o una consolidación de Avid). En DV: misma fecha, hora y timecode de cinta de la cámara y los mismos fotogramas; en cualquier formato: timecode del fichero dentro del otro y el mismo sonido, muestra a muestra: true = no entran en el bruto y quedan en la papelera del montaje, de donde se pueden recuperar | false = entran los dos",
-    "ficha_tecnica": True,
-    "_ficha_tecnica": "Una ficha .txt por bruto que dice si el fichero exportado es conforme a XDCAM HD422",
-    "medidor_audio": True,
-    "_medidor_audio": "Mide sonoridad y pico de cada clip y avisa en el shotlist de saturados o casi mudos (no los toca)",
+    "ficha_tecnica": False,
+    "_ficha_tecnica": "true = una ficha .txt por bruto que dice si el fichero exportado es conforme a XDCAM HD422",
+    "medidor_audio": False,
+    "_medidor_audio": "true = mide sonoridad y pico de cada clip y avisa en el shotlist de saturados o casi mudos (no los toca); lee el sonido de cada clip, así que alarga la exportación",
+    "version_config": 2,
+    "_version_config": "2 (30/10/2026): las comprobaciones finales (ficha_tecnica, md5, medidor_audio) vienen desmarcadas",
     "verificar_decodificando": False,
     "_verificar_decodificando": "true = tras unir, decodifica el bruto entero para comprobarlo (lento, muy seguro)"
 }
@@ -201,6 +203,9 @@ def flags_subproceso():
     return {}
 
 
+COMPROBACIONES = ("ficha_tecnica", "md5", "medidor_audio")  # al final de cada bruto; alargan la exportación
+
+
 def cargar_config(ruta):
     ruta = Path(ruta)
     if not ruta.exists():
@@ -210,8 +215,12 @@ def cargar_config(ruta):
     try:
         with open(ruta, encoding="utf-8") as f:
             cfg = json.load(f)
+        if cfg.get("version_config", 1) < 2 and "_md5" in cfg:  # escrito por una versión de antes: las comprobaciones, desmarcadas
+            for clave in COMPROBACIONES:
+                cfg.pop(clave, None)
         base = json.loads(json.dumps(CONFIG_DEFECTO))
-        base.update({k: v for k, v in cfg.items() if k != "convertir"})
+        base.update({k: v for k, v in cfg.items() if k != "convertir" and not k.startswith("_")})  # los comentarios, los de ahora
+        base["version_config"] = CONFIG_DEFECTO["version_config"]
         base["convertir"].update(cfg.get("convertir", {}))
         return base
     except Exception as e:
@@ -1815,7 +1824,7 @@ def hacer_segmento(clip, idx, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, nomb
 
     niveles = cfg.get("niveles_audio", "sin_tocar")
     medidas = {}
-    if usadas and (cfg.get("medidor_audio", True) or niveles == "r128"):
+    if usadas and (cfg.get("medidor_audio") or niveles == "r128"):
         for r in usadas:
             ch = audios[r - 1]
             medidas[r] = medir_audio(ffmpeg, ruta_larga(Path(origen) / ch["ruta"]), ch["flujo"], ch["canal"] if ch["de"] > 1 else None)
@@ -2266,7 +2275,7 @@ def acabado_profesional(res, salida, plan, cfg, ffprobe, inicio, segundos, progr
     Un bruto no conforme queda en AVISO. Actualiza res (tc_gop, conforme, ficha, md5)."""
     import mxf_util
     xdcam = bool(plan["destino"].get("xdcam"))
-    if res.get("rdd9") is False and not cfg.get("ficha_tecnica", True):  # con ficha, la ficha lo marca no conforme
+    if res.get("rdd9") is False and not cfg.get("ficha_tecnica"):  # con ficha, la ficha lo marca no conforme
         res["estado"] = "AVISO: sin RDD 9 (bmx no ha podido unir los clips)"
     if xdcam and plan["modo"] == "convertir":
         try:
@@ -2274,7 +2283,7 @@ def acabado_profesional(res, salida, plan, cfg, ffprobe, inicio, segundos, progr
         except Exception as e:
             LOG.error("%s: no se pudo reescribir el TC interno (%s)", proyecto, e)
             res["errores"].append(detalle_error(None, "TC interno", [], str(e)))
-    if xdcam and cfg.get("ficha_tecnica", True):
+    if xdcam and cfg.get("ficha_tecnica"):
         progreso("  %s: comprobando el formato..." % proyecto)
         esperado = {"pistas": plan["pistas_audio"], "tc": fmt_tc(inicio, plan["fps"]), "duracion": segundos, "tc_gop": bool(res.get("tc_gop")),
                     "rdd9": res.get("rdd9")}
@@ -2289,7 +2298,7 @@ def acabado_profesional(res, salida, plan, cfg, ffprobe, inicio, segundos, progr
             fallos = [l[7:] for l in texto.splitlines() if l.startswith("FALLO")]
             res["estado"] = "AVISO: no conforme con XDCAM HD422 (%s)" % "; ".join(fallos)[:300]
             LOG.warning("%s: %s", proyecto, res["estado"])
-    if cfg.get("md5", True):
+    if cfg.get("md5"):
         progreso("  %s: calculando MD5..." % proyecto)
         res["md5"] = mxf_util.escribir_md5(salida, comprobar_parar)
 

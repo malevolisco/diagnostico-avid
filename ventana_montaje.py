@@ -927,9 +927,9 @@ class PanelOpciones:
             self.ganancias[k].delete(0, "end")
             self.ganancias[k].insert(0, str(gan[k] if k < len(gan) else 0))
         self.niveles.set(cfg.get("niveles_audio", "sin_tocar"))
-        self.md5.set(bool(cfg.get("md5", True)))
-        self.ficha.set(bool(cfg.get("ficha_tecnica", True)))
-        self.medidor.set(bool(cfg.get("medidor_audio", True)))
+        self.md5.set(bool(cfg.get("md5")))
+        self.ficha.set(bool(cfg.get("ficha_tecnica")))
+        self.medidor.set(bool(cfg.get("medidor_audio")))
         self.prefijo.set(cfg.get("prefijo_fichero") or "")
         if hasattr(self, "bt_exportar"):
             self.revisar()

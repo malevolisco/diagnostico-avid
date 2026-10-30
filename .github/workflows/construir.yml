@@ -74,8 +74,8 @@ jobs:
         run: |
           # El disco simulado tiene material capturado sin nombre de cámara (como el de México): estas pruebas lo meten en
           # los brutos, como hasta el 27/10/2026. La regla nueva (solo lo de cámara) se prueba aparte, al final.
-          '{"solo_material_de_camara": false}' | Set-Content dist/DiagnosticoAvid/config_brutos.json -Encoding utf8NoBOM
-          '{"solo_material_de_camara": false}' | Set-Content config_brutos.json -Encoding utf8NoBOM
+          '{"solo_material_de_camara": false, "ficha_tecnica": true, "md5": true}' | Set-Content dist/DiagnosticoAvid/config_brutos.json -Encoding utf8NoBOM
+          '{"solo_material_de_camara": false, "ficha_tecnica": true, "md5": true}' | Set-Content config_brutos.json -Encoding utf8NoBOM
           $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--origen disco_prueba --destino salida --brutos brutos --sin-gui --no-abrir --media-extra disco_prueba_media2" -PassThru -Wait -NoNewWindow
           if ($p.ExitCode -ne 0) { Get-Content salida/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
           Get-Content salida/*/diagnostico.log | Select-Object -Last 15
@@ -87,9 +87,9 @@ jobs:
         shell: pwsh
         run: |
           $a = (Get-ChildItem -Directory salida/Diagnostico_* | Select-Object -First 1).FullName
-          '{"solo_material_de_camara": false, "rdd9": false}' | Set-Content dist/DiagnosticoAvid/config_brutos.json -Encoding utf8NoBOM
+          '{"solo_material_de_camara": false, "rdd9": false, "ficha_tecnica": true, "md5": true}' | Set-Content dist/DiagnosticoAvid/config_brutos.json -Encoding utf8NoBOM
           $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--usar-analisis `"$a`" --brutos brutos_ffmpeg --proyectos `"ABORTO;NTSC`"" -PassThru -Wait -NoNewWindow
-          '{"solo_material_de_camara": false}' | Set-Content dist/DiagnosticoAvid/config_brutos.json -Encoding utf8NoBOM
+          '{"solo_material_de_camara": false, "ficha_tecnica": true, "md5": true}' | Set-Content dist/DiagnosticoAvid/config_brutos.json -Encoding utf8NoBOM
           if ($p.ExitCode -ne 0) { Get-Content brutos_ffmpeg/exportacion.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
           $m = (Get-ChildItem bmx -Recurse -Filter mxf2raw.exe | Select-Object -First 1).FullName
           python tests/probar_rdd9.py brutos brutos_ffmpeg --ffmpeg bin/ffmpeg.exe --ffprobe bin/ffprobe.exe --mxf2raw $m
@@ -156,7 +156,7 @@ jobs:
       - name: Exportación con agrupar=proyecto y formato auto (por tarjetas, copia, timecode NTSC drop-frame)
         shell: pwsh
         run: |
-          Set-Content dist/DiagnosticoAvid/config_brutos.json '{"agrupar": "proyecto", "formato_salida": "auto", "excluir_importados": false, "solo_material_de_camara": false}' -Encoding utf8NoBOM
+          Set-Content dist/DiagnosticoAvid/config_brutos.json '{"agrupar": "proyecto", "formato_salida": "auto", "excluir_importados": false, "solo_material_de_camara": false, "ficha_tecnica": true, "md5": true}' -Encoding utf8NoBOM
           $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--origen disco_prueba --destino salida3 --brutos brutos_proyecto --sin-gui --no-abrir --media-extra disco_prueba_media2" -PassThru -Wait -NoNewWindow
           if ($p.ExitCode -ne 0) { Get-Content salida3/*/diagnostico.log; throw "El ejecutable ha fallado con código $($p.ExitCode)" }
           Remove-Item dist/DiagnosticoAvid/config_brutos.json

@@ -162,6 +162,7 @@ class Montaje:
             if k in e["papelera"]:
                 e["papelera"].remove(k)
                 self._insertar_por_orden(e, p, k)
+                e.setdefault("recuperados", []).append(k)  # un trozo repetido recuperado a mano no vuelve a la papelera
 
     def colocar(self, p, claves):
         """Coloca clips nuevos (de un análisis posterior) en su sitio por fecha."""
@@ -266,16 +267,22 @@ class Montaje:
         perdidas = [k for k in guardadas if k not in validas]
         if perdidas:
             self.avisos.append("%s: %d clips del montaje ya no están en el análisis; se quitan" % (p, len(perdidas)))
+        recuperados = [k for k in e.get("recuperados", []) if k in validas]
+        # un montaje de antes de detectarlos: los trozos repetidos van a la papelera (también los que estaban en un bruto),
+        # salvo los que se recuperaron a mano
+        duplicados = [c.get("clave") for c in self.listas[p].get("duplicados") or []
+                      if c.get("clave") not in papelera and c.get("clave") not in recuperados]
+        if duplicados:
+            for b in brutos:
+                b["clips"] = [k for k in b["clips"] if k not in duplicados]
+            papelera += duplicados
         colocadas = {k for b in brutos for k in b["clips"]} | set(papelera)
-        duplicados = [c.get("clave") for c in self.listas[p].get("duplicados") or [] if c.get("clave") not in colocadas]
-        papelera += duplicados  # un montaje de antes de detectarlos: a la papelera, no a "sin colocar"
-        colocadas |= set(duplicados)
         nuevas = [k for f in ("material", "piezas") for k in (c.get("clave") for c in self.listas[p].get(f) or []) if k not in colocadas]
         if nuevas:
             self.avisos.append("%s: %d clips nuevos sin colocar; no se exportan hasta colocarlos" % (p, len(nuevas)))
             self.sin_colocar[p] = nuevas
         estado = {"brutos": brutos, "papelera": papelera, "movidos": [k for k in e.get("movidos", []) if k in validas],
-                  "modificado": e.get("modificado")}
+                  "recuperados": recuperados, "modificado": e.get("modificado")}
         self._limpiar(estado)
         self.estados[p] = estado
 

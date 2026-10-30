@@ -997,6 +997,31 @@ def buscar_muestras(trozo, donde):
     return None if i == -1 else i // 2
 
 
+ID_P2 = re.compile(r"^(\d{4}[A-Z0-9]{2})(\.new(\.\d+)?)?$", re.IGNORECASE)
+
+
+def mismo_clip_de_camara(clips):
+    """Grupos de clips con el mismo identificador de clip P2 (0008AY, 00059S.new.04: Avid añade .new.NN al hacer un
+    subclip o consolidar) que comparten proyecto: [(largo, [cortos])], el largo primero (más fotogramas; a igual, más
+    sonido). Son candidatos: que el corto esté dentro del largo se comprueba con el timecode (marcar_duplicados)."""
+    grupos = defaultdict(list)
+    for c in con_video(clips):
+        m = ID_P2.match(str(c.get("nombre") or ""))
+        if m and not c.get("contenido_en"):
+            for p in c.get("proyectos") or ["SIN_PROYECTO"]:
+                grupos[(m.group(1).upper(), p)].append(c)
+    fotogramas = lambda c: (c.get("dv") or {}).get("fotogramas") or int(round((c.get("duracion") or 0) * (fps_num(c.get("fps")) or 25)))
+    salida, vistos = [], set()
+    for cs in grupos.values():
+        cs = [c for c in cs if id(c) not in vistos]
+        if len(cs) < 2:
+            continue
+        cs.sort(key=lambda c: (-fotogramas(c), -(c.get("num_audio") or 0), str(c.get("clave"))))
+        salida.append((cs[0], cs[1:]))
+        vistos.update(id(c) for c in cs[1:])
+    return salida
+
+
 def es_duplicado(c, cfg):
     """¿Es un trozo repetido de otro clip del mismo proyecto (marcar_duplicados)? Entonces no entra en el bruto: en el
     montaje queda en la papelera, de donde se puede recuperar (quitar_duplicados en config_brutos.json)."""
@@ -1010,6 +1035,8 @@ def texto_duplicado(c):
     if not d:
         return ""
     t = lambda s: ("%d:%04.1f" % (s // 60, s % 60)).replace(".", ",")
+    if d.get("desde") is None:
+        return "parte de %s (mismo clip de cámara)" % d.get("nombre")
     return "parte de %s, del %s al %s" % (d.get("nombre"), t(d.get("desde") or 0), t(d.get("hasta") or 0))
 
 

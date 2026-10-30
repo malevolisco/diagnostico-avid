@@ -2022,6 +2022,22 @@ class TrozosRepetidos(unittest.TestCase):
                                                        "papelera": [], "movidos": []}})
         self.assertEqual([c["clave"] for c in m2.papelera("P")], ["CORTO"])
         self.assertEqual(m2.nuevos("P"), [])
+        # (30/10/2026) también si el montaje guardado lo tenía en un bruto; uno recuperado a mano, no
+        en_bruto = {"P": {"brutos": [{"nombre": None, "tipo": "material", "clips": ["LARGO", "CORTO"]}], "papelera": [], "movidos": []}}
+        m3 = montaje.Montaje(listas, fecha, 7200, en_bruto)
+        self.assertEqual(([c["clave"] for c in m3.papelera("P")], [c["clave"] for b in m3.brutos("P") for c in b["clips"]]),
+                         (["CORTO"], ["LARGO"]))
+        m3.recuperar("P", ["CORTO"])
+        m4 = montaje.Montaje(listas, fecha, 7200, json.loads(json.dumps(m3.a_json()))["proyectos"])
+        self.assertEqual((m4.papelera("P"), sorted(c["clave"] for b in m4.brutos("P") for c in b["clips"])), ([], ["CORTO", "LARGO"]))
+
+    def test_mismo_clip_de_camara(self):
+        """Clips de tarjeta P2 con el mismo identificador (00059S, 00059S.new.04) en el mismo proyecto: el más largo
+        primero; de otro proyecto o con otro identificador, aparte."""
+        c = lambda n, dur, p="P": {"clave": n + str(dur), "nombre": n, "fichero_video": "v", "duracion": dur, "proyectos": [p], "fps": "25/1"}
+        largo, a, b, otro_p, otro_id = c("00059S.new.01", 600), c("00059S.new.04", 11), c("00059S.new.01", 13), c("00059S.new.07", 9, "Q"), c("0008AY", 5)
+        grupos = eb.mismo_clip_de_camara([a, largo, b, otro_p, otro_id, c("ENTREVISTA", 30), c("ENTREVISTA", 10)])
+        self.assertEqual([(g[0]["clave"], [x["clave"] for x in g[1]]) for g in grupos], [("00059S.new.01600", ["00059S.new.0113", "00059S.new.0411"])])
 
 
 class MaterialDeOtraEpoca(unittest.TestCase):

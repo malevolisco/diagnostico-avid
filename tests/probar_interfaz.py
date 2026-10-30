@@ -12,6 +12,8 @@ tampoco de arriba abajo), con la pantalla que haya: en una pequeña la ventana v
 2 · Montaje: "Fuera del bruto" con agencia, efecto e importado. Pestaña "Origen del material": el bin "compras" sale
    arriba como dudoso; se marca "Fuera: agencia", se guarda origen.json (y se aprende en el fichero de lo aprendido) y el
    montaje se rehace con ese clip fuera.
+   Visor: "Todo" deja el bruto entero en la línea de tiempo y el zoom llega a PPS_MAX px por segundo; la flecha avanza un
+   fotograma y el visor enseña el fotograma exacto; "Ver y oír" abre ffplay, el cursor va con lo que suena y se para.
    Bajar un clip, deshacer, volver a bajar; al cambiar de página pregunta y guarda montaje.json.
 3 · Exportar: piezas sin marcar; un TC no válido desactiva el botón y dice por qué; exportar; cada bruto acaba en
    "Terminado" y "Conforme · MD5".
@@ -31,6 +33,9 @@ from tkinter import messagebox  # noqa: E402
 
 import diagnostico_avid as d  # noqa: E402
 import interfaz  # noqa: E402
+import ventana_montaje as vm  # noqa: E402
+
+os.environ.setdefault("SDL_AUDIODRIVER", "dummy")  # ffplay ("Ver y oír") sin tarjeta de sonido en el equipo de pruebas
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # la consola de Windows (cp1252) no tiene ☑
 DISCO, DESTINO, BRUTOS, CAPTURAS = sys.argv[1], sys.argv[2], sys.argv[3], Path(sys.argv[4])
@@ -253,6 +258,49 @@ def montar():
     comprobar(sitios and min(x1 - x0 for x0, x1, _, _ in sitios) >= pm.min_clip, "clips más estrechos que %d px: %s" % (pm.min_clip, sitios))
     comprobar([pm.clip_en_x((x0 + x1) / 2, sitios)[0] for x0, x1, _, _ in sitios] == list(range(len(sitios))),
               "al pinchar en un clip de la línea de tiempo se elige otro")
+    # Zoom: "Todo" deja el bruto entero a la vista; ampliando se llega a PPS_MAX píxeles por segundo
+    pm.ajustar()
+    app.raiz.update()
+    _, ancho = pm.geometria()
+    comprobar(ancho <= pm.linea.winfo_width() + 4, "con Todo el bruto debe caber entero: %.0f > %d" % (ancho, pm.linea.winfo_width()))
+    for _ in range(40):
+        pm.ampliar(2)
+    app.raiz.update()
+    comprobar(pm.escala()[0] >= vm.PPS_MAX * 0.75, "con el zoom máximo se debe llegar a los fotogramas: %.0f px/s" % pm.escala()[0])
+    captura("3b_linea_zoom.png")
+    pm.ajustar()
+    # Fotograma a fotograma: la flecha avanza 1/25 s y el visor pide el fotograma exacto
+    pm.t = 1.0
+    pm.paso_fotograma(1)
+    comprobar(abs(pm.t - 1.04) < 1e-6, "un paso de fotograma debe ser 1/25 s: %s" % pm.t)
+    esperar(lambda: pm.exactos or not vm.PIL_OK, ver_y_oir, limite=30)  # sin Pillow, el visor no enseña imágenes
+
+
+@seguro
+def ver_y_oir():
+    pm = app.montaje
+    comprobar(pm.ffplay, "no se encuentra ffplay junto a ffmpeg")
+    pm.t = 0.0
+    pm.ver_y_oir()
+    comprobar(pm.sonando is not None and pm.bt_sonido.cget("text").startswith("■"), "Ver y oír no ha arrancado")
+    app.raiz.after(2500, sonando)
+
+
+@seguro
+def sonando():
+    pm = app.montaje
+    s = pm.sonando
+    comprobar(s is not None and s["procesos"][1].poll() is None, "ffplay se ha cerrado antes de tiempo")
+    comprobar(pm.t > 1.0, "el cursor no va con lo que suena: %.2f s" % pm.t)
+    procesos = s["procesos"] if s else ()
+    pm.ver_y_oir()
+    comprobar(pm.sonando is None and all(x.poll() is not None for x in procesos), "Parar no ha cerrado ffplay")
+    app.raiz.after(100, montar_cambios)
+
+
+@seguro
+def montar_cambios():
+    pm = app.montaje
     antes = [c["nombre"] for c, _, _ in pm.tramos()]
     pm.tv.selection_set("0")
     pm.accion("bajar")

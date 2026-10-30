@@ -322,5 +322,67 @@ class Visor(unittest.TestCase):
         self.assertEqual(list((self.tmp / "visor").glob("*")), [])
 
 
+    def test_fotograma_exacto(self):
+        """El fotograma de un segundo con decimales (no el de la tira de 1 por segundo): distinto del de al lado."""
+        import subprocess
+        video = self.tmp / "clip.mxf"
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=720x576:r=25:d=3", "-c:v", "mpeg2video",
+                        "-f", "mxf", str(video)], check=True)
+        a, b = montaje.fotograma_exacto("ffmpeg", video, 1.0), montaje.fotograma_exacto("ffmpeg", video, 1.04)
+        self.assertTrue(a and a.startswith(b"\xff\xd8") and b and b.startswith(b"\xff\xd8"))
+        self.assertNotEqual(a, b)
+        self.assertIsNone(montaje.fotograma_exacto("ffmpeg", self.tmp / "no_existe.mxf", 1.0))
+
+    def test_ver_y_oir_junta_video_y_pistas(self):
+        """Media de Avid: el vídeo y cada pista de sonido en ficheros distintos. Lo que se manda a ffplay lleva el vídeo a
+        960x540 y todo el sonido junto en estéreo, desde el segundo pedido."""
+        import json
+        import subprocess
+        (self.tmp / "MXF").mkdir()
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=720x576:r=25:d=4", "-c:v", "mpeg2video",
+                        "-f", "mxf", str(self.tmp / "MXF" / "V01.mxf")], check=True)
+        for n, f in ((1, 440), (2, 660)):
+            subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=f=%d:d=4" % f, "-ac", "1", "-c:a", "pcm_s24le",
+                            str(self.tmp / "MXF" / ("A0%d.wav" % n))], check=True)
+        clip = {"fichero_video": "MXF/V01.mxf", "ficheros": ["MXF/V01.mxf", "MXF/A01.wav", "MXF/A02.wav"]}
+        canales = [{"ruta": "MXF/A01.wav", "flujo": 0, "canal": 0, "de": 1}, {"ruta": "MXF/A02.wav", "flujo": 0, "canal": 0, "de": 1}]
+        cmd = montaje.orden_sonido("ffmpeg", self.tmp, clip, 1.5, canales)
+        self.assertEqual(cmd[-3:], ["-f", "nut", "pipe:1"])
+        salida = self.tmp / "sale.nut"
+        subprocess.run(cmd[:-1] + [str(salida)], check=True)
+        d = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(salida)],
+                                      capture_output=True, check=True).stdout)
+        self.assertEqual([(s["codec_type"], s.get("width"), s.get("channels")) for s in d["streams"]],
+                         [("video", 960, None), ("audio", None, 2)])
+        self.assertAlmostEqual(float(d["format"]["duration"]), 2.5, delta=0.2)
+        # sin sonido (o sin saber de él): solo la imagen
+        cmd = montaje.orden_sonido("ffmpeg", self.tmp, clip, 0, [])
+        self.assertNotIn("[a]", cmd)
+        self.assertEqual(montaje.orden_ffplay("ffplay", "1. CLIP")[-2:], ["nut", "-"])
+
+
+class Regla(unittest.TestCase):
+    def test_paso_regla(self):
+        """Timecodes a intervalos redondos, sin pisarse (90 px), y marcas pequeñas entre ellos; con mucho zoom, cada
+        fotograma (1/25 s)."""
+        self.assertEqual(montaje.paso_regla(1), (120, 10))
+        self.assertEqual(montaje.paso_regla(10), (10, 1))
+        self.assertEqual(montaje.paso_regla(250), (0.4, 0.04))
+        self.assertEqual(montaje.paso_regla(0.01), (7200, 900))
+        for pps in (0.02, 0.3, 3, 30, 300):
+            paso, menor = montaje.paso_regla(pps)
+            self.assertGreaterEqual(paso * pps, 90)
+            self.assertTrue(menor is None or (menor < paso and menor * pps >= 8))
+
+    def test_buscar_ffplay(self):
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "ffmpeg.exe").write_bytes(b"")
+            (d / "ffplay.exe").write_bytes(b"")
+            self.assertEqual(montaje.buscar_ffplay(str(d / "ffmpeg.exe")), str(d / "ffplay.exe"))
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

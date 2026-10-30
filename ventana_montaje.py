@@ -4,10 +4,12 @@ PÁGINA DE MONTAJE Y OPCIONES AVANZADAS DE EXPORTACIÓN
 =====================================================
 
 - PantallaMontaje: la página "2 · Montaje" de la ventana (interfaz.py). Visor de
-  fotogramas (1 por segundo, 480x270, sin sonido), ficha del clip, línea de tiempo por
-  la que se arrastra, lista de clips y acciones (quitar, mover, cortar, renombrar,
-  deshacer), papelera, clips nuevos y "Fuera del bruto". La lógica está en montaje.py;
-  aquí solo la vista.
+  fotogramas (1 por segundo, 480x270; al parar el cursor, el fotograma exacto), "Ver y
+  oír" (el clip de verdad, con sonido, en una ventana de ffplay), ficha del clip, línea
+  de tiempo con zoom, regla y tira de fotogramas, lista de clips y acciones (quitar,
+  mover, cortar, renombrar, deshacer), papelera, clips nuevos y "Fuera del bruto".
+  Teclas: Espacio, flechas, Mayús+flechas, Inicio/Fin, J/K/L. La lógica está en
+  montaje.py; aquí solo la vista.
 - PanelOpciones / dialogo_opciones: "Opciones avanzadas…" de la página Exportar, con
   todas las opciones (enrutado, ganancias, prefijo, predeterminados).
 
@@ -18,6 +20,8 @@ para mostrar los JPEG del visor (sin Pillow la página funciona, pero sin imagen
 import io
 import queue
 import shutil
+import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -31,6 +35,8 @@ except Exception:  # pragma: no cover
     PIL_OK = False
 
 VISOR_W, VISOR_H = 480, 270
+FPS_BRUTO = 25  # el bruto sale a 25 imágenes/s: un paso de fotograma es 1/25 s
+PPS_MAX = 250  # zoom máximo de la línea de tiempo: píxeles por segundo (10 por fotograma)
 
 
 def fmt_h(segundos):
@@ -84,6 +90,13 @@ class PantallaMontaje:
         self.claves_tv = []
         self.cola = queue.Queue()
         self.pool = ThreadPoolExecutor(max(1, hilos)) if ffmpeg else None
+        # Fotograma exacto donde se para el cursor (los de la tira son de 1 por segundo): de uno en uno, el último pedido
+        self.pool_exacto = ThreadPoolExecutor(1) if ffmpeg else None
+        self.exactos, self.pedido_exacto, self.espera_exacto = {}, None, None
+        self.ffplay = mj.buscar_ffplay(ffmpeg)
+        self.sonando = None  # {"procesos", "n" (clip), "desde" (s del bruto), "t0", "fin"}: "Ver y oír" en marcha
+        self.miniaturas = {}  # (clave, segundo) -> imagen pequeña para la tira de la línea de tiempo
+        self.rango_linea = None
 
         f = self.marco = ttk.Frame(contenedor, style="Fondo.TFrame")
         f.pack(fill="both", expand=True)
@@ -148,7 +161,11 @@ class PantallaMontaje:
         ctrl = ttk.Frame(visor_caja, style="Fondo.TFrame")
         ctrl.pack(pady=(4, 0) if compacto else (8, 0))
         ttk.Button(ctrl, text="◀◀", width=4, command=lambda: self.mover_cursor(-10)).pack(side="left")
-        self.bt_play = ttk.Button(ctrl, text="▶  Avance", style="Elegido.TButton", command=self.reproducir)
+        self.bt_sonido = ttk.Button(ctrl, text="▶  Ver y oír", style="Elegido.TButton", command=self.ver_y_oir)
+        self.bt_sonido.pack(side="left", padx=(4, 0))
+        if not self.ffplay:
+            self.bt_sonido.state(["disabled"])
+        self.bt_play = ttk.Button(ctrl, text="⏩ Avance", command=self.reproducir)
         self.bt_play.pack(side="left", padx=4)
         ttk.Button(ctrl, text="▶▶", width=4, command=lambda: self.mover_cursor(10)).pack(side="left")
         if compacto:  # el timecode, debajo: en una fila no cabe con un visor pequeño
@@ -158,9 +175,12 @@ class PantallaMontaje:
         self.lbl_tc.pack(side="left", padx=(0 if compacto else 16, 8))
         self.lbl_total = ttk.Label(ctrl, text="", style="Suave.TLabel")
         self.lbl_total.pack(side="left")
-        self.cb_vel = ttk.Combobox(ctrl, state="readonly", width=5, values=["x1", "x10", "x60"])
+        self.cb_vel = ttk.Combobox(ctrl, state="readonly", width=5, values=["x4", "x10", "x60"])
         self.cb_vel.current(1)
         self.cb_vel.pack(side="left", padx=(12, 0))
+        if not compacto:
+            ttk.Label(visor_caja, text="Espacio: ver y oír · ←/→: fotograma · Mayús+←/→: 1 s · Inicio/Fin: clip · J/L: 5 s",
+                      style="Suave.TLabel").pack(pady=(4, 0))
 
         ttk.Label(ficha, text="CLIP", style="Panel.Seccion.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
         self.lbl_nombre = ttk.Label(ficha, text="", style="Panel.Grande.TLabel", wraplength=200 if compacto else 270)
@@ -191,7 +211,7 @@ class PantallaMontaje:
             self.botones.append(b)
         ttk.Button(acc, text="+", width=3, style=fantasma, command=lambda: self.ampliar(2)).pack(side="right")
         ttk.Button(acc, text="−", width=3, style=fantasma, command=lambda: self.ampliar(0.5)).pack(side="right", padx=4)
-        ttk.Label(acc, text="Zoom", style="Panel.Suave.TLabel").pack(side="right", padx=4)
+        ttk.Button(acc, text="Todo", width=5, style=fantasma, command=self.ajustar).pack(side="right")  # el bruto entero
 
         lt = ttk.Frame(centro, style="Fondo.TFrame", padding=(8, 4, 8, 0) if compacto else (12, 6, 12, 0))
         lt.pack(fill="x")
@@ -203,7 +223,7 @@ class PantallaMontaje:
         self.linea.pack(fill="x")
         self.sb_linea = ttk.Scrollbar(lt, orient="horizontal", command=self.linea.xview)
         self.sb_linea.pack(fill="x")
-        self.linea.configure(xscrollcommand=self.sb_linea.set)
+        self.linea.configure(xscrollcommand=self.al_desplazar_linea)
         leyenda = ttk.Frame(lt, style="Fondo.TFrame")
         leyenda.pack(fill="x", pady=(4, 0))
         for color, texto in ((tema.CLIP, "cronológico" if compacto else "en orden cronológico"),
@@ -213,6 +233,8 @@ class PantallaMontaje:
         # La ayuda, o el clip que hay bajo el ratón (en los cortos no cabe el nombre). Ancho fijo: si no, un nombre largo
         # ensancharía la página
         self.ayuda_linea = "Rueda: mover · Ctrl+rueda: zoom · Ctrl+clic: varios"
+        if compacto:
+            self.ayuda_linea = "Espacio: ver y oír · ←/→: fotograma · Ctrl+rueda: zoom"
         self.lbl_encima = ttk.Label(leyenda, text=self.ayuda_linea, style="Suave.TLabel", width=38)
         self.lbl_encima.pack(side="left")
         self.lbl_foto = ttk.Label(leyenda, text="", style="Suave.TLabel")
@@ -247,14 +269,20 @@ class PantallaMontaje:
         self.linea.bind("<Leave>", lambda e: self.lbl_encima.configure(text=self.ayuda_linea))
         # rueda: la línea de lado; Ctrl + rueda: zoom (en Linux, botones 4 y 5)
         self.linea.bind("<MouseWheel>", lambda e: self.rueda_linea(-1 if e.delta > 0 else 1))
-        self.linea.bind("<Control-MouseWheel>", lambda e: self.rueda_linea(-1 if e.delta > 0 else 1, zoom=True))
+        self.linea.bind("<Control-MouseWheel>", lambda e: self.rueda_linea(-1 if e.delta > 0 else 1, zoom=True, x=e.x))
         self.linea.bind("<Button-4>", lambda e: self.rueda_linea(-1))
         self.linea.bind("<Button-5>", lambda e: self.rueda_linea(1))
-        self.linea.bind("<Control-Button-4>", lambda e: self.rueda_linea(-1, zoom=True))
-        self.linea.bind("<Control-Button-5>", lambda e: self.rueda_linea(1, zoom=True))
+        self.linea.bind("<Control-Button-4>", lambda e: self.rueda_linea(-1, zoom=True, x=e.x))
+        self.linea.bind("<Control-Button-5>", lambda e: self.rueda_linea(1, zoom=True, x=e.x))
         top = f.winfo_toplevel()
         self.atajos = [("<Control-z>", lambda e: self.deshacer()), ("<Control-s>", lambda e: self.guardar() if self.activa() else None),
-                       ("<Left>", lambda e: self.mover_cursor(-1)), ("<Right>", lambda e: self.mover_cursor(1))]
+                       ("<Left>", self.tecla(lambda: self.paso_fotograma(-1))), ("<Right>", self.tecla(lambda: self.paso_fotograma(1))),
+                       ("<Shift-Left>", self.tecla(lambda: self.mover_cursor(-1))), ("<Shift-Right>", self.tecla(lambda: self.mover_cursor(1))),
+                       ("<Home>", self.tecla(lambda: self.ir_al_clip(0))), ("<End>", self.tecla(lambda: self.ir_al_clip(0, final=True))),
+                       ("<Up>", self.tecla(lambda: self.ir_al_clip(-1), lista=False)),
+                       ("<Down>", self.tecla(lambda: self.ir_al_clip(1), lista=False)),
+                       ("<space>", self.tecla(self.ver_y_oir)), ("<Key-k>", self.tecla(self.parar_sonido)),
+                       ("<Key-j>", self.tecla(lambda: self.mover_cursor(-5))), ("<Key-l>", self.tecla(lambda: self.mover_cursor(5)))]
         for tecla, accion in self.atajos:
             top.bind(tecla, accion, add="+")
         if not PIL_OK:
@@ -361,17 +389,28 @@ class PantallaMontaje:
             self.tv.see(sel[0])
 
     def escala(self):
-        total = sum(d for _, _, d in self.tramos()) or 1
+        """(píxeles por segundo, duración del bruto, ancho mínimo de un clip). Con zoom 1 el bruto entero cabe en la
+        línea; cada clip mide al menos unos píxeles para verse, y más (hasta min_clip, para poder pincharlo) al ampliar."""
+        tramos = self.tramos()
+        total = sum(d for _, _, d in tramos) or 1
         ancho = max(200, self.linea.winfo_width() - 4)
-        return ancho * self.zoom / total, total
+        n = max(1, len(tramos))
+        minimo = min(self.min_clip, max(3.0, self.zoom * ancho * 0.5 / n))
+        pps = max((ancho * self.zoom - n * minimo) / total, ancho * self.zoom * 0.5 / total)
+        return pps, total, minimo
+
+    def zoom_maximo(self):
+        """El zoom con el que un segundo mide PPS_MAX píxeles (o 1 si el bruto es tan corto que ya cabe así)."""
+        total = sum(d for _, _, d in self.tramos()) or 1
+        return max(1.0, PPS_MAX * total / max(200, self.linea.winfo_width() - 4))
 
     def geometria(self):
         """Dónde va cada clip en la línea de tiempo: ([(x0, x1, t0, dur)], ancho total). Proporcional al tiempo, pero cada
-        clip mide al menos min_clip píxeles, para que se pueda pinchar aunque dure 2 s en un bruto de 2 h."""
-        pps, _ = self.escala()
+        clip mide al menos unos píxeles, para que se pueda pinchar aunque dure 2 s en un bruto de 2 h."""
+        pps, _, minimo = self.escala()
         x, sitios = 2.0, []
         for _, t, d in self.tramos():
-            w = max(self.min_clip, d * pps)
+            w = max(minimo, d * pps)
             sitios.append((x, x + w, t, d))
             x += w
         return sitios, x
@@ -394,27 +433,115 @@ class PantallaMontaje:
         return None, 0.0
 
     def pintar_linea(self):
+        """Regla con timecodes (más finos cuanto más zoom, hasta los fotogramas), los clips y, en los que caben, una tira
+        de fotogramas. La regla y la tira, solo de la parte visible (se repinta al desplazar)."""
         tema, cv = self.tema, self.linea
         cv.delete("all")
         sitios, ancho = self.geometria()
         movidos = self.m.movidos(self.p) if self.p else set()
         sel = set(self.seleccion())
-        ultimo = -1000
+        vx0 = cv.canvasx(0)
+        vx1 = vx0 + max(200, cv.winfo_width())
+        self.rango_linea = (round(vx0), round(vx1), round(ancho))
+        arriba, abajo = 22, self.alto_linea - 6
+        alto_tira = abajo - arriba - 6
+        tw = int(alto_tira * 16 / 9)
         for (x0, x1, t0, d), (c, _, _) in zip(sitios, self.tramos()):
-            if x0 - ultimo >= 90:  # regla: el timecode del principio de un clip, sin que se pisen
-                cv.create_line(x0, 0, x0, 8, fill=tema.SUAVE)
-                cv.create_text(x0 + 3, 2, text=fmt_tc(t0), anchor="nw", fill=tema.SUAVE, font=(tema.MONO, 8))
-                ultimo = x0
+            if x1 < vx0 - 2 or x0 > vx1 + 2:
+                continue
             color = tema.SUAVE if not c.get("fichero_video") else tema.ACENTO if c.get("clave") in movidos else tema.CLIP
             marcado = c.get("clave") in sel
-            cv.create_rectangle(x0, 22, x1, self.alto_linea - 6, fill=color, outline="#ffffff" if marcado else tema.CAMPO, width=2 if marcado else 1)
+            cv.create_rectangle(x0, arriba, x1, abajo, fill=color, outline="#ffffff" if marcado else tema.CAMPO, width=2 if marcado else 1)
+            if PIL_OK and alto_tira >= 18 and x1 - x0 >= tw + 6 and c.get("clave") in self.listos:
+                self.pintar_tira(c, x0, x1, d, arriba + 3, tw, alto_tira, vx0, vx1)
             if x1 - x0 > 50:
-                cv.create_text(x0 + 5, 30, text=c["nombre"], anchor="nw", fill=tema.SOBRE_ACENTO if color == tema.ACENTO else "#ffffff",
-                               font=(tema.LETRA, 8), width=x1 - x0 - 8)
+                texto = cv.create_text(x0 + 5, arriba + 3, text=c["nombre"], anchor="nw", font=(tema.LETRA, 8), width=x1 - x0 - 8,
+                                       fill=tema.SOBRE_ACENTO if color == tema.ACENTO else "#ffffff")
+                caja = cv.bbox(texto)
+                if caja and c.get("clave") in self.listos:  # sobre la tira, con fondo para que se lea
+                    fondo = cv.create_rectangle(caja[0] - 2, caja[1] - 1, caja[2] + 2, caja[3] + 1, fill=color, outline="")
+                    cv.tag_lower(fondo, texto)
+        self.pintar_regla(sitios, vx0, vx1)
         x = self.x_de_t(self.t, sitios) if sitios else 2
         cv.create_line(x, 16, x, self.alto_linea, fill=tema.CABEZAL, width=2)
         cv.create_polygon(x - 6, 14, x + 6, 14, x, 22, fill=tema.CABEZAL, outline="")
         cv.configure(scrollregion=(0, 0, ancho + 4, self.alto_linea))
+
+    def pintar_regla(self, sitios, vx0, vx1):
+        """Timecodes del bruto a intervalos redondos (paso_regla) y marcas pequeñas entre ellos, en la parte visible."""
+        tema, cv = self.tema, self.linea
+        if not sitios:
+            return
+        pps, total, _ = self.escala()
+        paso, menor = mj.paso_regla(pps)
+        _, t_ini = self.clip_en_x(max(vx0, 2), sitios)
+        _, t_fin = self.clip_en_x(vx1, sitios)
+        for p, largo in ((menor, 4), (paso, 8)):
+            if not p:
+                continue
+            k = int(t_ini // p)
+            ultimo = -1000
+            while k * p <= min(t_fin, total) + 1e-6:
+                tt = k * p
+                x = self.x_de_t(tt, sitios)
+                cv.create_line(x, 0, x, largo, fill=tema.SUAVE)
+                if p == paso and x - ultimo >= 80:
+                    cv.create_text(x + 3, 1, text=fmt_tc(tt), anchor="nw", fill=tema.SUAVE, font=(tema.MONO, 8))
+                    ultimo = x
+                k += 1
+
+    def pintar_tira(self, c, x0, x1, d, y, tw, th, vx0, vx1):
+        """Fotogramas del clip (de su tira de 1 por segundo) uno detrás de otro, solo los que se ven."""
+        jpgs = self.jpegs_de(c)
+        if not jpgs:
+            return
+        cv = self.linea
+        x = x0 + 3 + max(0, int((vx0 - x0) // tw)) * tw
+        while x + tw <= x1 - 2 and x <= vx1:
+            segundo = (x - x0) / (x1 - x0) * d if x1 > x0 else 0
+            i = min(int(segundo), len(jpgs) - 1)
+            foto = self.miniatura(c.get("clave"), i, jpgs, tw, th)
+            if foto:
+                cv.create_image(x, y, image=foto, anchor="nw")
+            x += tw
+
+    def miniatura(self, clave, i, jpgs, tw, th):
+        k = (clave, i, tw)
+        foto = self.miniaturas.get(k)
+        if foto is None:
+            try:
+                imagen = Image.open(io.BytesIO(jpgs[i]))
+                imagen.draft("RGB", (tw, th))
+                foto = self.miniaturas[k] = ImageTk.PhotoImage(imagen.resize((tw, th)), master=self.marco)
+            except Exception:
+                return None
+            if len(self.miniaturas) > 600:
+                for viejo in list(self.miniaturas)[:200]:
+                    self.miniaturas.pop(viejo)
+        return foto
+
+    def jpegs_de(self, c):
+        """Los JPEG de la tira de 1 por segundo del clip (leídos una vez; los de los últimos 30 clips, en memoria)."""
+        k = c.get("clave")
+        ruta = self.listos.get(k)
+        if not ruta:
+            return None
+        jpgs = self.jpegs.get(k)
+        if jpgs is None:
+            jpgs = self.jpegs[k] = mj.fotogramas(ruta)
+            if len(self.jpegs) > 30:
+                self.jpegs.pop(next(iter(self.jpegs)))
+        return jpgs
+
+    def al_desplazar_linea(self, a, b):
+        """La barra de la línea de tiempo; y, si se ve otra parte, se repinta (la regla y la tira son solo de lo visible)."""
+        self.sb_linea.set(a, b)
+        if not self.vivo or self.rango_linea is None:
+            return
+        vx0 = round(self.linea.canvasx(0))
+        if abs(vx0 - self.rango_linea[0]) > 2:
+            self.rango_linea = None  # una sola vez aunque lleguen varios
+            self.linea.after_idle(self.pintar_linea)
 
     def ver_cursor(self):
         """Si el cabezal se ha salido de la parte visible de la línea de tiempo, la mueve para que se vea."""
@@ -436,9 +563,9 @@ class PantallaMontaje:
         c = tramos[i][0]
         self.lbl_encima.configure(text="%d. %s · %s" % (i + 1, c["nombre"], fmt_h(duracion_visible(c))))
 
-    def rueda_linea(self, sentido, zoom=False):
+    def rueda_linea(self, sentido, zoom=False, x=None):
         if zoom:
-            self.ampliar(0.5 if sentido > 0 else 2)
+            self.ampliar(1 / 1.5 if sentido > 0 else 1.5, x)
         else:
             self.linea.xview_scroll(sentido * 3, "units")
         return "break"  # que no mueva también la página
@@ -482,6 +609,12 @@ class PantallaMontaje:
                         else "Panel.TLabel")
         ruta = self.listos.get(c.get("clave"))
         self.pedir_fotogramas()  # si se ha cambiado de clip, lo suyo pasa delante
+        exacto = self.exactos.get((c.get("clave"), int(round(dentro * FPS_BRUTO))))
+        if exacto and PIL_OK:  # el cursor parado: el fotograma exacto
+            self.dibujar(("exacto", c.get("clave"), int(round(dentro * FPS_BRUTO))), lambda: exacto)
+            return
+        if not self.sonando and not self.reproduciendo:
+            self.pedir_exacto(c, dentro)
         if not ruta or not PIL_OK:
             portada = self.portadas.get(c.get("clave")) if PIL_OK else None
             if portada:  # mientras se preparan todos sus fotogramas, una imagen del clip
@@ -491,11 +624,7 @@ class PantallaMontaje:
                 return
             self.visor.create_text(self.vw / 2, self.vh / 2, fill=tema.SUAVE, text="Preparando fotogramas…" if self.ffmpeg and PIL_OK else "Sin imagen")
             return
-        jpgs = self.jpegs.get(c.get("clave"))
-        if jpgs is None:
-            jpgs = self.jpegs[c.get("clave")] = mj.fotogramas(ruta)
-            if len(self.jpegs) > 30:
-                self.jpegs.pop(next(iter(self.jpegs)))
+        jpgs = self.jpegs_de(c)
         if not jpgs:
             self.visor.create_text(self.vw / 2, self.vh / 2, fill=tema.SUAVE, text="Sin fotogramas")
             return
@@ -570,6 +699,15 @@ class PantallaMontaje:
         try:
             while True:
                 (tipo, k), ruta = self.cola.get_nowait()
+                if tipo == "exacto":
+                    if ruta:
+                        self.exactos[k] = ruta
+                        if len(self.exactos) > 64:
+                            self.exactos.pop(next(iter(self.exactos)))
+                        n, c, dentro = self.donde_cursor()
+                        if c is not None and k == (c.get("clave"), int(round(dentro * FPS_BRUTO))):
+                            self.pintar_visor()
+                    continue
                 self.en_curso.discard((tipo, k))
                 if ruta:
                     (self.listos if tipo == "tira" else self.portadas)[k] = ruta
@@ -580,17 +718,22 @@ class PantallaMontaje:
             pass
         if hubo:
             self.pintar_visor()  # y, con el hueco libre, lo siguiente (pedir_fotogramas)
+            if self.marco.winfo_ismapped():
+                self.pintar_linea()  # la tira de fotogramas de los clips que ya los tienen
+        self.seguir_sonido()
         self.marco.after(200, self.vaciar_cola)
 
     # --- eventos -----------------------------------------------------------------------------------------------
 
     def elegir_proyecto(self, p):
+        self.parar_sonido()
         self.p, self.k, self.t = p, 0, 0.0
         self.refrescar()
 
     def al_elegir_bruto(self, _=None):
         sel = self.lb_b.curselection()
         if sel and sel[0] != self.k:
+            self.parar_sonido()
             self.k, self.t = sel[0], 0.0
             self.pintar_tabla()
             self.pintar_linea()
@@ -617,6 +760,8 @@ class PantallaMontaje:
             self.tv.see(str(n))
         self.pintar_linea()
         self.pintar_visor()
+        if self.sonando:  # sigue sonando desde donde se ha pinchado
+            self.empezar_sonido()
         return "break"
 
     def al_arrastrar_linea(self, e):
@@ -632,24 +777,187 @@ class PantallaMontaje:
         self.pintar_linea()
         self.ver_cursor()
         self.pintar_visor()
+        if self.sonando:
+            self.empezar_sonido()
 
-    def ampliar(self, factor):
-        self.zoom = max(1.0, min(256.0, self.zoom * factor))
+    def paso_fotograma(self, n):
+        """Uno o varios fotogramas del bruto adelante o atrás (para; el visor enseña el fotograma exacto)."""
+        if self.sonando:
+            self.parar_sonido()
+        if self.reproduciendo:
+            self.reproducir()
+        total = sum(d for _, _, d in self.tramos())
+        self.t = max(0.0, min(total, (round(self.t * FPS_BRUTO) + n) / FPS_BRUTO))
+        self.pintar_linea()
+        self.ver_cursor()
+        self.pintar_visor()
+
+    def ir_al_clip(self, salto, final=False):
+        """Al principio (o al último fotograma, con final) del clip actual (salto 0), del anterior (-1) o del siguiente (1)."""
+        tramos = self.tramos()
+        n, _, _ = self.donde_cursor()
+        if n is None:
+            return
+        n = max(0, min(len(tramos) - 1, n + salto))
+        _, t0, d = tramos[n]
+        self.t = max(t0, t0 + d - 1 / FPS_BRUTO) if final else t0
+        if salto:
+            self.tv.selection_set(str(n))
+            self.tv.see(str(n))
+        self.pintar_linea()
+        self.ver_cursor()
+        self.pintar_visor()
+        if self.sonando:
+            self.empezar_sonido()
+
+    def tecla(self, accion, lista=True):
+        """Atajo de teclado de la página: solo si se ve, y no mientras se escribe en un campo ni (con lista=False) si la
+        lista de clips tiene el foco, porque sus flechas ya cambian de clip."""
+        def atajo(_):
+            if not self.activa():
+                return None
+            try:
+                clase = self.marco.focus_get().winfo_class()
+            except Exception:
+                clase = ""
+            if clase in ("TEntry", "Entry", "TSpinbox", "Spinbox", "TCombobox", "Text") or (not lista and clase == "Treeview"):
+                return None
+            accion()
+            return "break"
+        return atajo
+
+    # --- ver y oír (ffplay) ------------------------------------------------------------------------------------
+
+    def ver_y_oir(self):
+        if self.sonando:
+            self.parar_sonido()
+        else:
+            self.empezar_sonido()
+
+    def empezar_sonido(self):
+        """El clip del cursor, de verdad (imagen y todo su sonido), desde donde está, en una ventana de ffplay. Al acabar
+        el clip sigue con el siguiente; el cursor de la línea de tiempo va con lo que suena."""
+        self.parar_sonido()
+        if not self.ffplay or not self.ffmpeg or not self.vivo:
+            return
+        if self.reproduciendo:
+            self.reproducir()
+        n, c, dentro = self.donde_cursor()
+        if c is None or not c.get("fichero_video"):
+            return
+        d = duracion_visible(c)
+        if dentro >= d - 0.2:
+            dentro = 0.0
+        canales = eb.canales_clip(c, getattr(self.m, "mxf_por_ruta", None) or {})[:16]
+        titulo = "%d. %s  (Espacio en el programa: parar)" % (n + 1, c["nombre"])
+        try:
+            a = subprocess.Popen(mj.orden_sonido(self.ffmpeg, self.origen, c, dentro, canales), stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **eb.flags_subproceso())
+            b = subprocess.Popen(mj.orden_ffplay(self.ffplay, titulo), stdin=a.stdout, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, **eb.flags_subproceso())
+            a.stdout.close()
+        except OSError as e:
+            self.lbl_foto.configure(text="No se puede reproducir: %s" % e)
+            return
+        self.sonando = {"procesos": (a, b), "n": n, "inicio": self.t - dentro, "dentro": dentro, "dur": d, "t0": time.monotonic()}
+        self.bt_sonido.configure(text="■  Parar")
+
+    def parar_sonido(self):
+        s, self.sonando = self.sonando, None
+        if s:
+            for proc in reversed(s["procesos"]):
+                if proc.poll() is None:
+                    try:
+                        proc.kill()
+                    except OSError:
+                        pass
+            for proc in s["procesos"]:
+                try:
+                    proc.wait(timeout=3)
+                except Exception:
+                    pass
+        if hasattr(self, "bt_sonido"):
+            self.bt_sonido.configure(text="▶  Ver y oír")
+
+    def seguir_sonido(self):
+        """Mientras suena, el cursor va con el clip; cuando ffplay acaba, sigue con el siguiente clip (si se ha cerrado su
+        ventana antes de acabar, para)."""
+        s = self.sonando
+        if not s:
+            return
+        pasado = time.monotonic() - s["t0"]
+        if s["procesos"][1].poll() is None:
+            self.t = s["inicio"] + min(s["dentro"] + pasado, s["dur"])
+            if self.marco.winfo_ismapped():
+                self.pintar_linea()
+                self.ver_cursor()
+                self.pintar_visor()
+            return
+        acabado = s["dentro"] + pasado >= s["dur"] - 1.0
+        fallo = s["procesos"][1].returncode not in (0, None) and pasado < 2
+        self.parar_sonido()
+        if fallo:
+            self.lbl_foto.configure(text="ffplay no ha podido reproducir el clip")
+            return
+        tramos = self.tramos()
+        if acabado and s["n"] + 1 < len(tramos) and self.vivo:
+            self.t = tramos[s["n"] + 1][1]
+            self.empezar_sonido()
+
+    # --- fotograma exacto --------------------------------------------------------------------------------------
+
+    def pedir_exacto(self, c, dentro):
+        """Pide a ffmpeg el fotograma exacto donde está el cursor (la tira es de 1 por segundo). Espera un poco por si el
+        cursor se sigue moviendo, y solo el último."""
+        if not self.pool_exacto or not PIL_OK:
+            return
+        clave = (c.get("clave"), int(round(dentro * FPS_BRUTO)))
+        if clave in self.exactos or clave == self.pedido_exacto:
+            return
+        if self.espera_exacto:
+            self.marco.after_cancel(self.espera_exacto)
+
+        def lanzar():
+            self.espera_exacto = None
+            if not self.vivo:
+                return
+            self.pedido_exacto = clave
+            ruta = self.origen / c["fichero_video"]
+            fut = self.pool_exacto.submit(mj.fotograma_exacto, self.ffmpeg, ruta, clave[1] / FPS_BRUTO)
+            fut.add_done_callback(lambda f: self.cola.put((("exacto", clave), f.result() if not f.cancelled() and not f.exception() else None)))
+        self.espera_exacto = self.marco.after(150, lanzar)
+
+    def ampliar(self, factor, x=None):
+        """Zoom de la línea de tiempo, desde el bruto entero hasta PPS_MAX píxeles por segundo. Con la rueda (x: donde
+        está el ratón) se queda quieto lo que hay bajo el ratón; con los botones, el cabezal, en el centro."""
+        if x is not None:
+            _, t_raton = self.clip_en_x(self.linea.canvasx(x))
+        self.zoom = max(1.0, min(self.zoom_maximo(), self.zoom * factor))
         self.pintar_linea()
         sitios, ancho = self.geometria()
-        if sitios:  # el cabezal, en el centro
-            self.linea.xview_moveto(max(0.0, (self.x_de_t(self.t, sitios) - self.linea.winfo_width() / 2) / (ancho + 4)))
+        if sitios:
+            fijo, pantalla = (t_raton, x) if x is not None else (self.t, self.linea.winfo_width() / 2)
+            self.linea.xview_moveto(max(0.0, (self.x_de_t(fijo, sitios) - pantalla) / (ancho + 4)))
+        self.pintar_linea()
+
+    def ajustar(self):
+        """El bruto entero en la línea de tiempo."""
+        self.zoom = 1.0
+        self.linea.xview_moveto(0)
+        self.pintar_linea()
 
     def reproducir(self):
+        """El avance rápido por la tira de fotogramas (x4, x10, x60), sin sonido."""
         self.reproduciendo = not self.reproduciendo
-        self.bt_play.configure(text="⏸  Parar" if self.reproduciendo else "▶  Avance")
+        self.bt_play.configure(text="⏸  Parar" if self.reproduciendo else "⏩ Avance")
         if self.reproduciendo:
+            self.parar_sonido()
             self.paso()
 
     def paso(self):
         if not self.reproduciendo or not self.vivo:
             return
-        vel = (1, 10, 60)[max(0, self.cb_vel.current())]
+        vel = (4, 10, 60)[max(0, self.cb_vel.current())]
         total = sum(d for _, _, d in self.tramos())
         self.t += vel * 0.2
         if self.t >= total:
@@ -784,8 +1092,10 @@ class PantallaMontaje:
         """Deja de trabajar (fotogramas, avance) y quita la página."""
         self.vivo = False
         self.reproduciendo = False
-        if self.pool:
-            self.pool.shutdown(wait=False, cancel_futures=True)
+        self.parar_sonido()
+        for pool in (self.pool, self.pool_exacto):
+            if pool:
+                pool.shutdown(wait=False, cancel_futures=True)
         top = self.marco.winfo_toplevel()
         for tecla, _ in self.atajos:
             top.unbind(tecla)

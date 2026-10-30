@@ -68,6 +68,8 @@ CONFIG_DEFECTO = {
     "_agrupar": "proyecto_mes = cada proyecto en orden cronológico, en brutos de hasta horas_por_bruto, con nombre PROYECTO_AAAA-MM | dias = todo el disco por días seguidos, sin separar proyectos | proyecto = cada proyecto por tarjetas",
     "horas_por_bruto": 2,
     "_horas_por_bruto": "Duración máxima de un bruto (proyecto_mes y dias). El clip que la pasaría no se añade: abre el bruto siguiente",
+    "separar_si_pasan_dias": 180,
+    "_separar_si_pasan_dias": "proyecto_mes: si entre dos clips seguidos del proyecto pasan más de estos días, el siguiente abre un bruto nuevo (material de otra época o de otro corresponsal en el mismo proyecto, p. ej. 2002 y 2019) | 0 = no se separa",
     "excluir_importados": True,
     "_excluir_importados": "true = fuera de los brutos lo que viene de fuera (agencias, descargas, móvil...), decidido por pistas: metadatos del fichero, carpeta de la que se importó, nombre del bin y del fichero",
     "solo_material_de_camara": True,
@@ -377,13 +379,13 @@ def fecha_grabacion(c):
 DESFASE_RELOJ_HORAS = 12  # más diferencia entre la grabación y el volcado se avisa (reloj de la cámara mal puesto)
 
 
-def fecha_imposible(grabacion, volcado=None, ahora=None):
+def fecha_imposible(grabacion, volcado=None, ahora=None, desde=2000):
     """Por qué una fecha de grabación no puede ser buena, o None (docs/diseno_cualquier_disco.md, apartado 5): antes de
     2000, en el futuro, o el 1 de enero lejos del volcado (las cámaras con el reloj sin poner arrancan el 1/1). Un 1 de
     enero cerca del volcado puede ser de verdad (Año Nuevo), así que vale."""
     ahora = ahora or dt.datetime.now()
-    if grabacion.year < 2000:
-        return "anterior a 2000"
+    if grabacion.year < desde:
+        return "anterior a %d" % desde
     if grabacion > ahora + dt.timedelta(days=1):
         return "en el futuro"
     if (grabacion.month, grabacion.day) == (1, 1) and volcado and abs(volcado - grabacion) > dt.timedelta(days=2):
@@ -1099,19 +1101,36 @@ def listas_por_proyecto(clips, cruce, mxf_por_ruta, cfg):
     return dict(por_proyecto)
 
 
-def inicios_auto(cs, tope, desde=0):
-    """Posiciones (en cs) donde empieza cada bruto a partir de la posición desde, llenando hasta tope segundos."""
+SALTO_DIAS = 180  # separar_si_pasan_dias por defecto
+
+
+def salto_dias(cfg):
+    try:
+        return max(0.0, float((cfg or {}).get("separar_si_pasan_dias", SALTO_DIAS)))
+    except (TypeError, ValueError):
+        return SALTO_DIAS
+
+
+def inicios_auto(cs, tope, desde=0, fecha=None, salto=0):
+    """Posiciones (en cs) donde empieza cada bruto a partir de la posición desde, llenando hasta tope segundos. Con
+    fecha (clip -> datetime) y salto (días), también donde entre un clip y el anterior pasan más de salto días: material
+    de otra época en el mismo proyecto (separar_si_pasan_dias)."""
     duracion = lambda c: (c.get("duracion") or 0) if c.get("fichero_video") else 0
+    hueco = dt.timedelta(days=salto) if fecha and salto else None
     inicios, acumulado = [], 0
     for i in range(desde, len(cs)):
-        if i > desde and acumulado + duracion(cs[i]) > tope:
+        lejos = False
+        if hueco and i > desde:
+            a, b = fecha(cs[i - 1]), fecha(cs[i])
+            lejos = bool(a and b and b - a > hueco)
+        if i > desde and (lejos or acumulado + duracion(cs[i]) > tope):
             inicios.append(i)
             acumulado = 0
         acumulado += duracion(cs[i])
     return inicios
 
 
-def partir_con_cortes(cs, tope, cortes=None):
+def partir_con_cortes(cs, tope, cortes=None, fecha=None, salto=0):
     """Trozos de cs. cortes: claves de los clips donde empieza cada bruto, elegidas en la pantalla de cortes; si
     alguna ya no está (otro análisis), se ignoran y se corta automáticamente hasta tope."""
     posicion = {c.get("clave"): i for i, c in enumerate(cs)}
@@ -1120,7 +1139,7 @@ def partir_con_cortes(cs, tope, cortes=None):
     else:
         if cortes:
             LOG.warning("Cortes guardados que ya no cuadran con el análisis: se corta automáticamente")
-        inicios = inicios_auto(cs, tope)
+        inicios = inicios_auto(cs, tope, fecha=fecha, salto=salto)
     bordes = [0] + inicios + [len(cs)]
     return [cs[a:b] for a, b in zip(bordes, bordes[1:]) if b > a]
 
@@ -1136,7 +1155,7 @@ def grupos_por_proyecto_mes(clips, cruce, mxf_por_ruta, cfg, cortes=None):
     listas = listas_por_proyecto(clips, cruce, mxf_por_ruta, cfg)
     for proyecto in sorted(listas):
         elegidos = (cortes or {}).get(proyecto)
-        trozos = trozos_proyecto(listas[proyecto], fecha, tope, elegidos)
+        trozos = trozos_proyecto(listas[proyecto], fecha, tope, elegidos, salto_dias(cfg))
         for familia in ("material", "piezas"):
             de_familia = [t for f, t in trozos if f == familia]
             nombres = numerar([nombre_bruto(proyecto, [fecha(c) for c in t], familia == "piezas") for t in de_familia])
@@ -1145,7 +1164,7 @@ def grupos_por_proyecto_mes(clips, cruce, mxf_por_ruta, cfg, cortes=None):
     return grupos
 
 
-def trozos_proyecto(listas_proyecto, fecha, tope, cortes=None):
+def trozos_proyecto(listas_proyecto, fecha, tope, cortes=None, salto=SALTO_DIAS):
     """Reparto automático de un proyecto: [(familia, clips)], material y luego piezas; en cada familia, lo que tiene
     fecha en brutos de hasta tope (o con los cortes elegidos, solo en material) y al final lo que no tiene fecha."""
     trozos = []
@@ -1155,7 +1174,7 @@ def trozos_proyecto(listas_proyecto, fecha, tope, cortes=None):
         con_fecha = [c for c in cs if fecha(c)]
         sin_fecha = [c for c in cs if not fecha(c)]
         elegidos = cortes if familia == "material" else None
-        trozos += [(familia, t) for t in partir_con_cortes(con_fecha, tope, elegidos) + trozos_hasta(sin_fecha, tope)]
+        trozos += [(familia, t) for t in partir_con_cortes(con_fecha, tope, elegidos, fecha, salto) + trozos_hasta(sin_fecha, tope)]
     return trozos
 
 

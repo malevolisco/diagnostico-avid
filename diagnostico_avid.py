@@ -667,9 +667,19 @@ def leer_hora(texto):
         return None
 
 
+FUENTE_DV = "cámara (subcódigo DV)"
+
+
 def buscar_fecha_grabacion(c):
-    """Fecha y hora de grabación de un clip, de las columnas del bin o los comentarios del MXF. Solo vale si hay fecha
-    Y hora (con solo la fecha el orden dentro del día sería inventado): devuelve (datetime, fuente) o (None, motivo)."""
+    """Fecha y hora de grabación de un clip: primero la que escribe la cámara DV en cada fotograma (subcódigo, la más
+    fiable: no la teclea nadie; 30/10/2026); si no, las columnas del bin o los comentarios del MXF. Solo vale si hay
+    fecha Y hora (con solo la fecha el orden dentro del día sería inventado): devuelve (datetime, fuente) o (None, motivo)."""
+    inicio = (c.get("dv") or {}).get("inicio") or {}
+    if inicio.get("fecha") and inicio.get("hora"):
+        try:
+            return dt.datetime.strptime("%s %s" % (inicio["fecha"], inicio["hora"]), "%Y-%m-%d %H:%M:%S"), FUENTE_DV
+        except ValueError:
+            pass
     solo_fecha = None
     for fuente, datos in (("bin", c.get("columnas") or {}), ("MXF", c.get("comentarios") or {})):
         col_f = next((k for k in datos if RE_COL_FECHA.search(k)), None)
@@ -707,14 +717,16 @@ def fijar_fechas_grabacion(clips, mxf=()):
             continue
         if f:
             volcado = exportar_brutos.fecha_media(c, mxf_por_ruta) if exportar_brutos and mxf_por_ruta else None
-            motivo = exportar_brutos.fecha_imposible(f, volcado, ahora) if exportar_brutos else None
+            # DV existe desde 1995; las demás fuentes, desde 2000 (antes suele ser un reloj sin poner)
+            motivo = exportar_brutos.fecha_imposible(f, volcado, ahora, desde=1995 if fuente == FUENTE_DV else 2000) if exportar_brutos else None
             if motivo:
                 c["aviso_fecha"] = "fecha de grabación imposible (%s, %s): se ordena por la del volcado" % (f.strftime("%d/%m/%Y %H:%M"), motivo)
                 imposibles[motivo] += 1
                 continue
             c["fecha_grabacion"], c["fecha_grabacion_fuente"] = f.strftime("%Y-%m-%d %H:%M:%S"), fuente
             fuentes[fuente] += 1
-            if volcado and abs(f - volcado) > dt.timedelta(hours=exportar_brutos.DESFASE_RELOJ_HORAS):
+            # una cinta DV se captura cuando sea (años después): que se aleje del volcado es lo normal, no un reloj mal puesto
+            if fuente != FUENTE_DV and volcado and abs(f - volcado) > dt.timedelta(hours=exportar_brutos.DESFASE_RELOJ_HORAS):
                 c["aviso_fecha"] = "la hora de grabación se aleja %d h del volcado (¿reloj de la cámara desfasado?)" % round(
                     abs((f - volcado).total_seconds()) / 3600)
                 desfasados += 1

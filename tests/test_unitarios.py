@@ -2024,6 +2024,39 @@ class TrozosRepetidos(unittest.TestCase):
         self.assertEqual(m2.nuevos("P"), [])
 
 
+class MaterialDeOtraEpoca(unittest.TestCase):
+    """Disco real (30/10/2026): un proyecto con material de dos corresponsales grabado en 2002 y en 2019, volcado todo en
+    2019. La fecha de grabación sale de la cámara DV y un salto de más de separar_si_pasan_dias abre un bruto nuevo."""
+
+    def clip(self, n, fecha, hora="10:00:00", dur=60):
+        return {"clave": n, "nombre": n, "fichero_video": n + ".mxf", "ficheros": [n + ".mxf"], "duracion": dur, "proyectos": ["P"],
+                "fps": "30000/1001", "num_audio": 2, "origen": "Cámara (tarjeta P2)",
+                "dv": {"inicio": {"tc": "10:00:00:00", "fecha": fecha, "hora": hora}, "fin": None, "fotograma": 240000, "fotogramas": 1800}}
+
+    @unittest.skipIf(da is None, "sin pyavb")
+    def test_fecha_de_la_camara_dv(self):
+        viejo, nuevo, sin_hora = self.clip("A", "2002-11-13"), self.clip("B", "2019-04-15", "17:00:00"), self.clip("C", "2002-11-13", None)
+        noventa = self.clip("D", "1997-05-02")
+        r = da.fijar_fechas_grabacion([viejo, nuevo, sin_hora, noventa])
+        self.assertEqual((viejo["fecha_grabacion"], nuevo["fecha_grabacion"], noventa["fecha_grabacion"]),
+                         ("2002-11-13 10:00:00", "2019-04-15 17:00:00", "1997-05-02 10:00:00"))  # DV existe desde 1995
+        self.assertNotIn("fecha_grabacion", sin_hora)
+        self.assertEqual((r["fuentes"], r["desfasados"]), ({da.FUENTE_DV: 3}, 0))
+        self.assertNotIn("aviso_fecha", viejo)  # capturar una cinta años después es lo normal, no un reloj desfasado
+
+    def test_un_salto_de_anos_abre_otro_bruto(self):
+        cs = [dict(self.clip(n, f), fecha_grabacion=f + " " + h) for n, f, h in
+              (("A", "2002-11-13", "10:00:00"), ("B", "2002-11-14", "09:00:00"), ("C", "2019-04-15", "10:00:00"), ("D", "2019-04-15", "11:00:00"))]
+        fecha = lambda c: eb.fecha_grabacion(c)
+        listas = {"material": cs, "piezas": []}
+        trozos = lambda salto: [[c["nombre"] for c in t] for _, t in eb.trozos_proyecto(listas, fecha, 7200, salto=salto)]
+        self.assertEqual(trozos(180), [["A", "B"], ["C", "D"]])
+        self.assertEqual(trozos(0), [["A", "B", "C", "D"]])  # separar_si_pasan_dias = 0: como antes
+        cfg = dict(json.loads(json.dumps(eb.CONFIG_DEFECTO)), solo_material_de_camara=False)
+        nombres = [g["nombre"] for g in eb.grupos_de_exportacion(cs, {}, {}, cfg)]
+        self.assertEqual(nombres, ["P NOVIEMBRE DE 2002", "P ABRIL DE 2019"])
+
+
 class SoloSonido(unittest.TestCase):
     """Los clips que solo tienen sonido no van a ningún bruto ni se enseñan: ni en el montaje, ni como descartados, ni en
     el triaje (30/10/2026)."""

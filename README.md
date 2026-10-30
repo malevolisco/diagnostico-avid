@@ -48,7 +48,7 @@ Abrir cada proyecto en Avid para separar lo que vale es lento y depende de quien
 |---|---|
 | **Solo lectura del disco de origen.** El destino no puede estar dentro del disco. Si el disco se desconecta, el programa se detiene sin dejar nada a medias. | El disco suele ser la única copia del material. |
 | **Nada sale del ordenador.** No se sube vídeo ni imágenes a ningún servicio. El zip del informe puede ir solo con texto. | Es material sensible: para diagnosticar bastan los JSON y el log. |
-| **Formato de salida fijo y comprobado.** Cada bruto lleva una ficha técnica que lo verifica con ffprobe ("CONFORME") y un `.md5`. | El Archivo ingesta un formato concreto, y la ficha y el MD5 permiten comprobarlo sin abrir el fichero. |
+| **Formato de salida fijo, con comprobaciones opcionales.** Si se marcan en Exportar, cada bruto lleva una ficha técnica que lo verifica con ffprobe ("CONFORME") y un `.md5`. Vienen sin marcar desde el 30/10/2026. | El Archivo ingesta un formato concreto, y la ficha y el MD5 permiten comprobarlo sin abrir el fichero. Pero el MD5 vuelve a leer el bruto entero y el medidor de audio escucha cada clip: en el día a día alargaban demasiado la exportación. |
 | **Trazabilidad.** El shotlist dice, de cada clip, de dónde viene, por qué entra y su timecode original. Lo que se deja fuera consta en Montaje ("Fuera del bruto") y en el informe, con su motivo. | Las decisiones automáticas deben poder revisarse y corregirse. |
 | **Reproducible.** Cada versión se construye y se prueba en GitHub Actions. ffmpeg va fijado por versión y hash. | Lo que se prueba es exactamente lo que se distribuye. |
 
@@ -60,7 +60,7 @@ La ventana tiene tres páginas. La guía para quien lo usa está en [`INSTRUCCIO
 |---|---|---|
 | **1 · Disco** | "Analizar todo el disco" al recibirlo (análisis inicial). Se pueden añadir otros orígenes con "＋ Añadir origen". | Informe del disco y **"Qué proyectos restaurar"**: cada proyecto con una captura de cada clip de cámara y una propuesta (Restaurar / Poco material / Revisar / Sin material de cámara). |
 | **2 · Montaje** (opcional) | Revisar los brutos de cada proyecto: visor, línea de tiempo, quitar o mover clips, y decidir el origen de lo dudoso. | `montaje.json` y `origen.json` en la carpeta de brutos. |
-| **3 · Exportar** | Cola de brutos con su avance. Se puede detener y reanudar. | Brutos MXF con su shotlist, hoja de contactos, ficha técnica y MD5. |
+| **3 · Exportar** | Cola de brutos con su avance. Se puede detener y reanudar. | Brutos MXF con su shotlist y hoja de contactos (y ficha técnica y MD5 si se marcan). |
 
 Los análisis se guardan. Si otro día se analizan otros proyectos del mismo disco, el análisis nuevo **suma los anteriores sin repetirlos**, salvo que su media haya cambiado en el disco.
 

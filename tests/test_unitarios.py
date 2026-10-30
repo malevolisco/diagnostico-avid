@@ -446,7 +446,7 @@ class OpcionesExportacion(unittest.TestCase):
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
-        self.cfg = json.loads(json.dumps(eb.CONFIG_DEFECTO))
+        self.cfg = dict(json.loads(json.dumps(eb.CONFIG_DEFECTO)), medidor_audio=True)
         self._orig = (eb.ejecutar_ffmpeg, eb.medir_audio, eb.buscar_bmx)
         eb.buscar_bmx = lambda ffprobe: None
         self.cmds = []
@@ -466,8 +466,25 @@ class OpcionesExportacion(unittest.TestCase):
     def test_por_defecto(self):
         d = eb.CONFIG_DEFECTO
         self.assertEqual((d["timecode_inicio"], d["pistas_audio"], d["niveles_audio"], d["enrutado_audio"], d["md5"], d["ficha_tecnica"],
-                          d["medidor_audio"]), ("00:00:00:00", "max", "sin_tocar", [], True, True, True))
+                          d["medidor_audio"]), ("00:00:00:00", "max", "sin_tocar", [], False, False, False))
         self.assertEqual(eb.validar_opciones(self.cfg), [])
+
+    def test_comprobaciones_desmarcadas_en_config_de_antes(self):
+        """Un config_brutos.json escrito por una versión de antes (con sus comentarios y todo marcado) sale con las
+        comprobaciones desmarcadas; uno de ahora, o uno escrito a mano, conserva lo que diga."""
+        ruta = self.tmp / "config_brutos.json"
+        antes = dict(json.loads(json.dumps(eb.CONFIG_DEFECTO)), md5=True, ficha_tecnica=True, medidor_audio=True, prefijo_fichero="MIO_",
+                     _md5="Un fichero .md5 por bruto (comprobación de integridad al copiarlo)")
+        del antes["version_config"]
+        ruta.write_text(json.dumps(antes), encoding="utf-8")
+        c = eb.cargar_config(ruta)
+        self.assertEqual([c[k] for k in eb.COMPROBACIONES] + [c["prefijo_fichero"], c["version_config"]], [False] * 3 + ["MIO_", 2])
+        self.assertEqual(c["_md5"], eb.CONFIG_DEFECTO["_md5"])
+        ruta.write_text(json.dumps(dict(c, md5=True)), encoding="utf-8")  # guardado con la versión de ahora: se respeta
+        self.assertTrue(eb.cargar_config(ruta)["md5"])
+        ruta.write_text('{"md5": true, "ficha_tecnica": true}', encoding="utf-8")  # a mano, sin comentarios
+        c = eb.cargar_config(ruta)
+        self.assertEqual([c[k] for k in eb.COMPROBACIONES], [True, True, False])
 
     def test_validar_opciones(self):
         malos = [("timecode_inicio", "25:00:00:00"), ("timecode_inicio", "00:00:00:25"), ("timecode_inicio", "0:0:0"),

@@ -1109,6 +1109,23 @@ def marcar_duplicados(clips, origen, ffmpeg=None, mxf=()):
         LOG.warning("Trozos repetidos: no se pueden buscar (%s)", e)
         return []
     ruta = lambda c: ruta_larga(Path(origen) / c["fichero_video"])
+    # dónde empieza cada trozo en su largo según el subcódigo del largo, leído de verdad: si la cámara paró y volvió a
+    # grabar dentro del largo, su timecode salta y la diferencia de timecodes no da la posición
+    por_largo = defaultdict(list)
+    for d in candidatos:
+        t = exportar_brutos.tramo_dv(d["corto"])
+        if t and t[2]:
+            por_largo[id(d["largo"])].append((d, t[2][0]))
+    situado = {}
+    for lista in por_largo.values():
+        largo = lista[0][0]["largo"]
+        try:
+            donde = mxf_util.situar_tc_dv(ruta(largo), [o for _, o in lista], lambda x: exportar_brutos.tc_cinta(x, largo.get("fps")))
+        except OSError as e:
+            LOG.warning("Trozos repetidos: no se puede leer %s (%s)", largo["nombre"], e)
+            continue
+        for d, o in lista:
+            situado[id(d)] = donde.get(o)
     marcados = []
     for d in candidatos:
         corto, largo = d["corto"], d["largo"]
@@ -1122,7 +1139,8 @@ def marcar_duplicados(clips, origen, ffmpeg=None, mxf=()):
             # dónde mirar: con timecode de cinta, ±2 fotogramas; si no (o si el timecode salta dentro del largo), por la
             # hora de grabación, que va en segundos enteros: ±1 s
             radio = int(round(fps)) + 2
-            sitios = [d["desde"] + k for k in (0, -1, 1, -2, 2)] if d.get("por_tc") else []
+            sitios = [situado[id(d)] + k for k in (0, -1, 1)] if situado.get(id(d)) is not None else []
+            sitios += [d["desde"] + k for k in (0, -1, 1, -2, 2)] if d.get("por_tc") else []
             sitios += [d["desde_hora"] + k for r in range(radio + 1) for k in ((r,) if r == 0 else (-r, r))]
             sitio = next((x for x in dict.fromkeys(sitios)
                           if x >= 0 and primero and mxf_util.huella_fotograma_dv(ruta(largo), x) == primero), None)

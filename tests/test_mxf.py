@@ -97,6 +97,32 @@ class SubcodigoDV(unittest.TestCase):
         self.assertEqual([c["clave"] for c in da.marcar_duplicados([largo, corto], self.tmp)], ["corto"])
         self.assertAlmostEqual(corto["contenido_en"]["desde"], 2.0, delta=0.05)  # fotograma 60
 
+    def test_trozo_tras_un_corte_de_grabacion(self):
+        """Disco real (00059S): la cámara paró y volvió a grabar dentro del largo y su timecode salta 6 minutos; el trozo
+        copiado de después del salto se situaba por la diferencia de timecodes, fuera del largo, y seguía en el bruto."""
+        try:
+            import diagnostico_avid as da
+        except ImportError:
+            self.skipTest("sin pyavb")
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import dv_prueba
+        import exportar_brutos as eb
+        dt = __import__("datetime")
+        dv_prueba.poner_subcodigo(self.largo, "17:35:48:11", dt.datetime(2002, 11, 13, 23, 27, 26), salto=(90, 360))
+        tras = self.tmp / "tras_el_corte.mxf"  # 40 fotogramas desde el 120 (después del salto)
+        subprocess.run([FFMPEG, "-v", "error", "-y", "-ss", "4.004", "-i", str(self.largo), "-frames:v", "40", "-c", "copy",
+                        "-f", "mxf_opatom", str(tras)], check=True, capture_output=True)
+        dv_largo, dv_tras = mxf_util.subcodigo_dv(self.largo), mxf_util.subcodigo_dv(tras)
+        self.assertEqual((dv_largo["fin"]["tc"], dv_tras["inicio"]["tc"]), ("17:41:54:10", "17:41:52:11"))
+        a_f = lambda x: eb.tc_cinta(x, "30000/1001")
+        self.assertEqual(mxf_util.situar_tc_dv(self.largo, [a_f("17:41:52:11"), a_f("17:35:49:11"), a_f("17:40:00:00")], a_f),
+                         {a_f("17:41:52:11"): 120, a_f("17:35:49:11"): 30, a_f("17:40:00:00"): None})
+        clip = lambda clave, dv, dur: {"clave": clave, "nombre": clave, "fichero_video": clave + ".mxf", "fps": "30000/1001",
+                                       "duracion": dur, "proyectos": ["P"], "dv": dv}
+        largo, corto = clip("largo", dv_largo, 6.006), clip("tras_el_corte", dv_tras, 40 / (30000 / 1001))
+        self.assertEqual([c["clave"] for c in da.marcar_duplicados([largo, corto], self.tmp)], ["tras_el_corte"])
+        self.assertAlmostEqual(corto["contenido_en"]["desde"], 4.0, delta=0.05)  # fotograma 120 del largo
+
     def test_un_bloque_por_fotograma_y_no_dv(self):
         pal = self.tmp / "pal.mxf"  # DV25 PAL en OP1a: un elemento por fotograma; sin subcódigo (ffmpeg no lo escribe)
         subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=720x576:r=25:d=3", "-c:v", "dvvideo",

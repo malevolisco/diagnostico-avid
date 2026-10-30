@@ -1174,6 +1174,50 @@ def marcar_duplicados(clips, origen, ffmpeg=None, mxf=()):
         LOG.info("Trozo repetido: %s es %s", corto["nombre"], exportar_brutos.texto_duplicado(corto))
     if ffmpeg:
         marcados += repetidos_por_sonido(clips, origen, ffmpeg, mxf)
+    marcados += repetidos_por_nombre(clips, origen)
+    return marcados
+
+
+def repetidos_por_nombre(clips, origen):
+    """Lo que queda: clips de tarjeta P2 con el mismo identificador de cámara (0008AY, 00059S.new.04) en el mismo
+    proyecto, uno más largo (30/10/2026: "si hay uno 00059S más largo, que no meta estos"). El corto va a la papelera si
+    su primer y su último timecode de cinta están en el largo, a la distancia que toca (mxf_util.situar_tc_dv, que no
+    supone el timecode seguido): así no se pierden trozos distintos del mismo clip de cámara cuando el largo no es el
+    clip entero. Sin subcódigo DV, con el timecode del fichero dentro del largo; sin ningún timecode, solo por el nombre."""
+    import mxf_util
+    ruta = lambda c: ruta_larga(Path(origen) / c["fichero_video"])
+    marcados = []
+    for largo, cortos in exportar_brutos.mismo_clip_de_camara(clips):
+        fps = exportar_brutos.fps_num(largo.get("fps")) or 25
+        a_f = lambda x: exportar_brutos.tc_cinta(x, largo.get("fps"))
+        for corto in cortos:
+            dv = corto.get("dv") or {}
+            ini, fin = (dv.get("inicio") or {}).get("tc"), (dv.get("fin") or {}).get("tc")
+            n = dv.get("fotogramas") or int(round((corto.get("duracion") or 0) * fps))
+            desde = None
+            try:
+                if ini and fin and (largo.get("dv") or {}).get("inicio", {}).get("tc"):
+                    sitios = mxf_util.situar_tc_dv(ruta(largo), [a_f(ini), a_f(fin)], a_f)
+                    a, b = sitios.get(a_f(ini)), sitios.get(a_f(fin))
+                    if a is None or b is None or abs((b - a + 1) - n) > 2:
+                        LOG.info("Mismo clip de cámara pero no está dentro (%s en %s): se queda", corto["nombre"], largo["nombre"])
+                        continue
+                    desde = a
+                elif corto.get("timecode") and largo.get("timecode"):
+                    t0, l0 = a_f(corto["timecode"]), a_f(largo["timecode"])
+                    nl = int(round((largo.get("duracion") or 0) * fps))
+                    if not (l0 <= t0 and t0 + n <= l0 + nl + 1):
+                        LOG.info("Mismo clip de cámara pero su timecode no cae dentro (%s en %s): se queda", corto["nombre"], largo["nombre"])
+                        continue
+                    desde = t0 - l0
+            except (OSError, ValueError) as e:
+                LOG.warning("Trozos repetidos: no se puede comprobar %s en %s (%s)", corto["nombre"], largo["nombre"], e)
+                continue
+            corto["contenido_en"] = {"clave": largo.get("clave"), "nombre": largo["nombre"], "por": "nombre",
+                                     "desde": None if desde is None else round(desde / fps, 1),
+                                     "hasta": None if desde is None else round((desde + n) / fps, 1), "mismo_proyecto": True}
+            marcados.append(corto)
+            LOG.info("Trozo repetido (mismo clip de cámara): %s es %s", corto["nombre"], exportar_brutos.texto_duplicado(corto))
     return marcados
 
 

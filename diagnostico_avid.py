@@ -1270,7 +1270,7 @@ def marcar_duplicados(clips, origen, ffmpeg=None, mxf=()):
     idénticos, bit a bit, a los del clip largo (si no, son dos cámaras grabando a la vez). En cualquier formato (30/10/2026),
     los candidatos salen del timecode del fichero y se confirman con el sonido (repetidos_por_sonido). Marca el trozo:
     c["contenido_en"] = {clave, nombre, desde, hasta (s dentro del largo), mismo_proyecto}. Devuelve los marcados."""
-    import mxf_util
+    import lecturas
     for c in clips:
         c.pop("contenido_en", None)
     try:
@@ -1279,6 +1279,7 @@ def marcar_duplicados(clips, origen, ffmpeg=None, mxf=()):
         LOG.warning("Trozos repetidos: no se pueden buscar (%s)", e)
         return []
     ruta = lambda c: ruta_larga(Path(origen) / c["fichero_video"])
+    huella = lambda c, i: lecturas.huella(c["fichero_video"], ruta(c), i)  # lo leído queda en lecturas.json
     # dónde empieza cada trozo en su largo según el subcódigo del largo, leído de verdad: si la cámara paró y volvió a
     # grabar dentro del largo, su timecode salta y la diferencia de timecodes no da la posición
     por_largo = defaultdict(list)
@@ -1290,7 +1291,8 @@ def marcar_duplicados(clips, origen, ffmpeg=None, mxf=()):
     for lista in por_largo.values():
         largo = lista[0][0]["largo"]
         try:
-            donde = mxf_util.situar_tc_dv(ruta(largo), [o for _, o in lista], lambda x: exportar_brutos.tc_cinta(x, largo.get("fps")))
+            donde = lecturas.situar(largo["fichero_video"], ruta(largo), [o for _, o in lista],
+                                    lambda x: exportar_brutos.tc_cinta(x, largo.get("fps")))
         except OSError as e:
             LOG.warning("Trozos repetidos: no se puede leer %s (%s)", largo["nombre"], e)
             continue
@@ -1305,7 +1307,7 @@ def marcar_duplicados(clips, origen, ffmpeg=None, mxf=()):
         # cuántos fotogramas tiene el trozo: los de su vídeo (la duración del clip puede venir del sonido, algo más largo)
         n = (corto.get("dv") or {}).get("fotogramas") or int(round((corto.get("duracion") or 0) * fps))
         try:
-            primero = mxf_util.huella_fotograma_dv(ruta(corto), 0)
+            primero = huella(corto, 0)
             # dónde mirar: con timecode de cinta, ±2 fotogramas; si no (o si el timecode salta dentro del largo), por la
             # hora de grabación, que va en segundos enteros: ±1 s
             radio = int(round(fps)) + 2
@@ -1313,12 +1315,12 @@ def marcar_duplicados(clips, origen, ffmpeg=None, mxf=()):
             sitios += [d["desde"] + k for k in (0, -1, 1, -2, 2)] if d.get("por_tc") else []
             sitios += [d["desde_hora"] + k for r in range(radio + 1) for k in ((r,) if r == 0 else (-r, r))]
             sitio = next((x for x in dict.fromkeys(sitios)
-                          if x >= 0 and primero and mxf_util.huella_fotograma_dv(ruta(largo), x) == primero), None)
+                          if x >= 0 and primero and huella(largo, x) == primero), None)
             ultimo, intentos = None, 5
             while sitio is not None and n > 1 and ultimo is None and intentos:  # el último que exista (si n era de la duración)
-                ultimo = mxf_util.huella_fotograma_dv(ruta(corto), n - 1)
+                ultimo = huella(corto, n - 1)
                 n, intentos = n - (ultimo is None), intentos - 1
-            if sitio is None or (n > 1 and (not ultimo or mxf_util.huella_fotograma_dv(ruta(largo), sitio + n - 1) != ultimo)):
+            if sitio is None or (n > 1 and (not ultimo or huella(largo, sitio + n - 1) != ultimo)):
                 LOG.info("Mismo tramo de grabación pero otros fotogramas (¿dos cámaras?): %s y %s", corto["nombre"], largo["nombre"])
                 continue
         except OSError as e:
@@ -1342,7 +1344,7 @@ def repetidos_por_nombre(clips, origen):
     su primer y su último timecode de cinta están en el largo, a la distancia que toca (mxf_util.situar_tc_dv, que no
     supone el timecode seguido): así no se pierden trozos distintos del mismo clip de cámara cuando el largo no es el
     clip entero. Sin subcódigo DV, con el timecode del fichero dentro del largo; sin ningún timecode, solo por el nombre."""
-    import mxf_util
+    import lecturas
     ruta = lambda c: ruta_larga(Path(origen) / c["fichero_video"])
     marcados = []
     for largo, cortos in exportar_brutos.mismo_clip_de_camara(clips):
@@ -1355,7 +1357,7 @@ def repetidos_por_nombre(clips, origen):
             desde = None
             try:
                 if ini and fin and (largo.get("dv") or {}).get("inicio", {}).get("tc"):
-                    sitios = mxf_util.situar_tc_dv(ruta(largo), [a_f(ini), a_f(fin)], a_f)
+                    sitios = lecturas.situar(largo["fichero_video"], ruta(largo), [a_f(ini), a_f(fin)], a_f)
                     a, b = sitios.get(a_f(ini)), sitios.get(a_f(fin))
                     if a is None or b is None or abs((b - a + 1) - n) > 2:
                         LOG.info("Mismo clip de cámara pero no está dentro (%s en %s): se queda", corto["nombre"], largo["nombre"])
@@ -1412,31 +1414,44 @@ def repetidos_por_sonido(clips, origen, ffmpeg, mxf):
                 leidos.popitem(last=False)
         return leidos[clave]
 
+    def comparar(corto, largo, d):
+        """Dónde empieza el trozo en el largo (s), None si su sonido no está en el largo o "sin_forma" si no sirve de
+        huella. Lee el disco: queda en lecturas.json (solo el resultado, nunca el sonido)."""
+        fps = exportar_brutos.fps_num(largo.get("fps")) or 25
+        dur = corto.get("duracion") or 0
+        v = min(VENTANA_SONIDO, dur)
+        principio = sonido(corto, 0, v)
+        if not exportar_brutos.sonido_con_forma(principio):
+            return "sin_forma"
+        tasa = round(len(principio) / 2 / v / 100) * 100 or 48000  # muestras por segundo (no se remuestrea)
+        ini = max(0.0, d["desde"] / fps - 0.3)
+        pos = exportar_brutos.buscar_muestras(principio, sonido(largo, ini, v + 0.6))
+        if pos is None:
+            return None
+        desde = ini + pos / tasa
+        if dur > v + 1:  # el final, en su sitio
+            final = sonido(corto, dur - v, v)
+            ini2 = max(0.0, desde + dur - v - 0.3)
+            pos2 = exportar_brutos.buscar_muestras(final, sonido(largo, ini2, v + 0.6)) if len(final) >= tasa else None
+            if pos2 is None or abs(ini2 + pos2 / tasa - (desde + dur - v)) > 0.05:
+                return None
+        return desde
+
+    import lecturas
     sin_forma = set()
     for d in candidatos:
         corto, largo = d["corto"], d["largo"]
         if corto.get("contenido_en") or corto.get("clave") in sin_forma:
             continue
-        fps = exportar_brutos.fps_num(largo.get("fps")) or 25
         dur = corto.get("duracion") or 0
-        v = min(VENTANA_SONIDO, dur)
         try:
-            principio = sonido(corto, 0, v)
-            if not exportar_brutos.sonido_con_forma(principio):
+            desde = lecturas.ACTIVAS.leer("sonido", [corto.get("clave"), largo.get("clave"), d["desde"]],
+                                          lambda: comparar(corto, largo, d))
+            if desde == "sin_forma":
                 sin_forma.add(corto.get("clave"))  # no sirve de huella con ningún largo
                 continue
-            tasa = round(len(principio) / 2 / v / 100) * 100 or 48000  # muestras por segundo (no se remuestrea)
-            ini = max(0.0, d["desde"] / fps - 0.3)
-            pos = exportar_brutos.buscar_muestras(principio, sonido(largo, ini, v + 0.6))
-            if pos is None:
+            if desde is None:
                 continue
-            desde = ini + pos / tasa
-            if dur > v + 1:  # el final, en su sitio
-                final = sonido(corto, dur - v, v)
-                ini2 = max(0.0, desde + dur - v - 0.3)
-                pos2 = exportar_brutos.buscar_muestras(final, sonido(largo, ini2, v + 0.6)) if len(final) >= tasa else None
-                if pos2 is None or abs(ini2 + pos2 / tasa - (desde + dur - v)) > 0.05:
-                    continue
         except OSError as e:
             LOG.warning("Trozos repetidos: no se puede leer %s o %s (%s)", corto["nombre"], largo["nombre"], e)
             continue
@@ -2368,7 +2383,10 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
                 if cambiados:
                     progreso("4/6 Han cambiado en el disco desde su análisis (hay que volver a analizarlos): %s" % "; ".join(cambiados))
 
+        import lecturas
+        lecturas.empezar()
         repetidos = marcar_duplicados(clips, origen, ffmpeg, mxf) if EXPORT_OK and ffmpeg_ok else []
+        lecturas.ACTIVAS.guardar(destino)  # para repetir estas decisiones sin el disco (tests/casos_reales.py)
         cfg_origen = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json") if EXPORT_OK else None
         if hacer_miniaturas and ffmpeg_ok:
             progreso("5/6 Generando miniaturas...")

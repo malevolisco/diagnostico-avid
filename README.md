@@ -114,6 +114,7 @@ Python 3.12 con tkinter. Las lecturas pesadas se hacen con [pyavb](https://githu
 | `exportar_brutos.py` | Clasificación del origen, reparto en brutos, conversión y copia con ffmpeg, shotlist y contactos. |
 | `mxf_util.py` | Lectura de cabeceras MXF sin ffprobe, timecode, ficha técnica XDCAM HD422 (con la envoltura RDD 9) y MD5. |
 | `montaje.py` | Modelo del montaje (quitar, mover, cortar, renombrar, deshacer) y fotogramas del visor. No tiene ventana, así que se puede probar solo. |
+| `lecturas.py` | Lo que el análisis lee del vídeo y del sonido para decidir (posiciones de timecode, huellas MD5 de fotogramas, dónde está un trozo de sonido), guardado en `lecturas.json`. Permite repetir las decisiones sin el disco. |
 | `interfaz.py`, `ventana_montaje.py`, `ventana_origen.py`, `tema.py` | La ventana: páginas, montaje, origen del material y tema. Se adapta a pantallas pequeñas. |
 | `aprendizaje.py` | Sugerencias de origen aprendidas de decisiones anteriores (Bayes ingenuo sobre palabras y formas de nombre; nunca imágenes). |
 | `actualizar.py` | Actualización manual desde las releases de GitHub. Solo se usa al pulsar "Buscar actualización". |
@@ -127,7 +128,7 @@ El funcionamiento interno con detalle está en [`LEEME_tecnico.md`](LEEME_tecnic
 - `informe.html`: el informe del disco.
 - `proyectos.html` y `proyectos.csv`: qué proyectos restaurar.
 - `diagnostico.log`.
-- Datos por capa: `inventario.csv`, `proyectos.json`, `bins.json`, `mxf.json`, `clips.json`, `cruce.json`, `resumen.json` y `triaje.json`.
+- Datos por capa: `inventario.csv`, `proyectos.json`, `bins.json`, `mxf.json`, `clips.json`, `cruce.json`, `resumen.json`, `triaje.json` y `lecturas.json` (posiciones y huellas leídas del vídeo y del sonido; ni imagen ni sonido).
 - `miniaturas/`.
 - Un `.zip` para enviar. Las imágenes son opcionales en el zip.
 
@@ -150,11 +151,17 @@ python diagnostico_avid.py --help    # línea de comandos (--origen, --destino, 
 **Pruebas:**
 
 ```
-python -m unittest discover -s tests                      # unas 180 pruebas unitarias
+python -m unittest discover -s tests                      # unas 200 pruebas unitarias y los casos reales
 python tests/crear_disco_prueba.py disco_prueba --ffmpeg ffmpeg --ffprobe ffprobe
 python diagnostico_avid.py --origen disco_prueba --destino salida --brutos brutos --sin-gui --no-abrir
 python tests/comprobar_resultado.py salida brutos --ffprobe ffprobe
 ```
+
+**Casos reales** ([`tests/casos_reales.py`](tests/casos_reales.py)). Cada disco real que da un problema se guarda como prueba, para que un arreglo no rompa lo que ya funcionaba en otro disco:
+
+1. `python tests/anonimizar_caso.py Diagnostico_X_....zip nombre_del_caso` convierte el zip de diagnóstico en `tests/casos_reales/nombre_del_caso/caso.json.gz`. Solo lleva texto: clips, cruce, MXF y lecturas. Cada palabra de nombres, rutas y comentarios se cambia por un código; quedan los identificadores de cámara, las fechas, los timecodes y los formatos. Antes de guardarlo, comprueba que el caso anonimizado decide igual, clip a clip, que el original.
+2. `python tests/casos_reales.py --ver nombre_del_caso` enseña qué entra en cada bruto, qué va a la papelera y qué se queda fuera. Cuando está bien, `--actualizar` lo guarda como `esperado.json`.
+3. `test_casos_reales.py` repite cada caso en cada build (fechas de grabación, trozos repetidos con las lecturas guardadas, origen y reparto en brutos) y falla si alguna decisión cambia. También falla si queda en los casos algo que nombre a la empresa.
 
 **Integración continua** ([`.github/workflows/construir.yml`](.github/workflows/construir.yml)). En un Windows de GitHub:
 
@@ -162,7 +169,7 @@ python tests/comprobar_resultado.py salida brutos --ffprobe ffprobe
 2. Construye el `.exe` con PyInstaller.
 3. Genera un **disco Avid simulado** con proyectos, bins, P2, NTSC, agencias, efectos, móvil, media enlazada y rutas con chino.
 4. Ejecuta el `.exe` de principio a fin: análisis, brutos, reanudación, análisis parcial y acumulado, caché, montaje a mano, la ventana entera con capturas y la actualización.
-5. Comprueba el resultado.
+5. Comprueba el resultado. También que el análisis del disco simulado se repite entero sin el disco (no falta ninguna lectura en `lecturas.json`), que anonimizado decide igual y que los brutos exportados tienen los clips del plan repetido.
 
 Cada cambio en `main` publica una release.
 

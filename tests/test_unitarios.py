@@ -1710,7 +1710,7 @@ class CacheDelAnalisis(unittest.TestCase):
 
     def test_si_cambia_lo_que_se_guarda_hay_que_subir_la_version(self):
         r = self.da.resumir_mxf({"format": {"tags": {}}, "streams": [{"codec_type": "video"}]})
-        self.assertEqual((self.da.VERSION_CACHE, sorted(r), sorted(r["pistas"][0])), (2, [
+        self.assertEqual((self.da.VERSION_CACHE, sorted(r), sorted(r["pistas"][0])), (3, [
             "comentarios", "duracion", "formato", "marca", "marca_tipo", "nombre_clip", "op", "pistas", "producto", "timecode", "umid"], [
             "alto", "ancho", "bits", "canales", "codec", "color_matriz", "color_primarias", "color_rango", "color_transfer", "duracion",
             "field_order", "file_package_name", "file_package_umid", "fps", "fps_medio", "muestreo", "perfil", "pix_fmt", "rotacion",
@@ -1954,6 +1954,25 @@ class TrozosRepetidos(unittest.TestCase):
         candidatos, solapes = eb.duplicados_dv([corto, largo, otro_dia])
         self.assertEqual([(d["corto"]["clave"], d["largo"]["clave"], d["desde"]) for d in candidatos], [("CORTO", "LARGO", 4724)])
         self.assertEqual(solapes, [])
+
+    def test_largo_sin_ultimo_fotograma(self):
+        """El caso real (30/10/2026): el largo sin el último fotograma ("fin": None). Su tramo de timecode sale del primero
+        y del número de fotogramas; antes se usaba la hora, en segundos enteros, y el trozo se buscaba 11 fotogramas lejos."""
+        largo = self.clip("LARGO", "17:35:48:11", None, "23:27:26", None)
+        largo["dv"]["fin"], largo["dv"]["fotogramas"], largo["duracion"] = None, 17800, 593.926667
+        corto = self.clip("CORTO", "17:38:25:25", "17:38:39:13", "23:30:04", "23:30:17")
+        self.assertEqual(eb.tramo_dv(largo)[2][1] - eb.tramo_dv(largo)[2][0], 17799)
+        d, = eb.duplicados_dv([largo, corto])[0]
+        self.assertEqual((d["desde"], d["por_tc"], d["desde_hora"]), (4724, True, 4735))
+
+    def test_dos_copias_iguales_se_queda_la_que_tiene_sonido(self):
+        """Disco real: dos copias del mismo clip, una sin sonido; antes se quedaba la muda (por el orden de la clave)."""
+        con = dict(self.clip("ZZ CON SONIDO", "18:14:56:23", None, "02:30:06", None, dur=4.237567), num_audio=4)
+        con["dv"]["fin"], con["dv"]["fotogramas"] = None, 127  # sin el último fotograma: acaba a las 02:30:10,24
+        muda = dict(self.clip("AA MUDA", "18:14:56:23", "18:15:00:29", "02:30:06", "02:30:11", dur=4.237567), num_audio=0)
+        muda["dv"]["fotogramas"] = 127  # la hora del último, en segundos enteros: 02:30:11, parece más larga
+        d, = eb.duplicados_dv([muda, con])[0]
+        self.assertEqual((d["corto"]["clave"], d["largo"]["clave"]), ("AA MUDA", "ZZ CON SONIDO"))
 
     def test_otra_cinta_no_cuadra(self):
         """Misma hora pero timecode de cinta fuera del tramo del largo: otra cinta, no un trozo copiado."""

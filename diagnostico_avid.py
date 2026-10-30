@@ -878,7 +878,7 @@ def resumir_mxf(datos):
 
 # Sube este número si cambia lo que guarda resumir_mxf (o trabajo, en analizar_mxf): así no se usa una caché vieja que
 # no tenga los datos nuevos. tests/test_unitarios.py (CacheDelAnalisis) avisa si cambian sus claves y no se ha subido.
-VERSION_CACHE = 2
+VERSION_CACHE = 3  # 3: subcodigo_dv lee bien el último fotograma de los DV de Avid con bytes de más (30/10/2026)
 
 
 class CacheMXF:
@@ -1119,8 +1119,13 @@ def marcar_duplicados(clips, origen, ffmpeg=None, mxf=()):
         n = (corto.get("dv") or {}).get("fotogramas") or int(round((corto.get("duracion") or 0) * fps))
         try:
             primero = mxf_util.huella_fotograma_dv(ruta(corto), 0)
-            sitio = next((d["desde"] + k for k in (0, -1, 1, -2, 2)
-                          if primero and mxf_util.huella_fotograma_dv(ruta(largo), d["desde"] + k) == primero), None)
+            # dónde mirar: con timecode de cinta, ±2 fotogramas; si no (o si el timecode salta dentro del largo), por la
+            # hora de grabación, que va en segundos enteros: ±1 s
+            radio = int(round(fps)) + 2
+            sitios = [d["desde"] + k for k in (0, -1, 1, -2, 2)] if d.get("por_tc") else []
+            sitios += [d["desde_hora"] + k for r in range(radio + 1) for k in ((r,) if r == 0 else (-r, r))]
+            sitio = next((x for x in dict.fromkeys(sitios)
+                          if x >= 0 and primero and mxf_util.huella_fotograma_dv(ruta(largo), x) == primero), None)
             ultimo, intentos = None, 5
             while sitio is not None and n > 1 and ultimo is None and intentos:  # el último que exista (si n era de la duración)
                 ultimo = mxf_util.huella_fotograma_dv(ruta(corto), n - 1)

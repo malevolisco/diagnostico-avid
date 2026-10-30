@@ -200,8 +200,8 @@ def subcodigo_dv(ruta, cola=8 * 1024 * 1024):
         f.seek(pos)
         inicio = _datos_dv(f.read(canal), nseq)
         ultimo = None
-        if n > tam:  # un solo bloque con todos los fotogramas
-            ultimo = pos + n - tam
+        if n > tam:  # un solo bloque con todos los fotogramas: el último entero (Avid puede dejar bytes de más al final)
+            ultimo = pos + (n // tam - 1) * tam
         else:  # un bloque por fotograma: el último elemento de imagen, cerca del final (antes del índice y del pie)
             f.seek(0, 2)
             final = f.tell()
@@ -213,11 +213,16 @@ def subcodigo_dv(ruta, cola=8 * 1024 * 1024):
                 extra = (trozo[i + 16] & 0x7F) if trozo[i + 16] & 0x80 else 0
                 ultimo = desde + i + 17 + extra
         fin = None
-        if ultimo is not None:
-            f.seek(ultimo)
+        for atras in range(30 if n > tam else 1):  # si el último no es un fotograma DV entero, el anterior que lo sea
+            if ultimo is None or ultimo - atras * tam < pos:
+                break
+            f.seek(ultimo - atras * tam)
             dato = f.read(canal)
             if _es_inicio_dv(dato):
                 fin = _datos_dv(dato, nseq)
+                if atras and fin.get("tc"):  # el timecode del último, contando los que faltan
+                    fin["atras"] = atras
+                break
         # fotogramas: exacto con la esencia en un bloque; con un bloque por fotograma no se cuentan (None)
         return {"inicio": inicio, "fin": fin, "fotograma": tam, "fotogramas": n // tam if n > tam else None}
 

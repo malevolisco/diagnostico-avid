@@ -164,19 +164,31 @@ Usa el último análisis del disco: no lo repite.
 - El visor enseña el fotograma del punto donde estás, con el timecode en
   naranja. La primera vez que abres un bruto tarda un poco en preparar los
   fotogramas (1 por segundo, sin sonido); se puede ir mirando mientras.
+  Cuando paras el cursor, sale el fotograma exacto de ese punto.
+  VER Y OÍR: el botón "Ver y oír" (o la barra espaciadora) reproduce el
+  clip de verdad, con imagen y todo su sonido, desde donde está el cursor,
+  en una ventana aparte. Al acabar el clip sigue con el siguiente, y el
+  cursor de la línea de tiempo va con lo que suena. Espacio otra vez (o
+  "Parar", o cerrar esa ventana) lo para. "Avance" sigue pasando la tira
+  de fotogramas rápido (x4, x10, x60), sin sonido.
   Prepara primero el clip que estás mirando: al momento sale una imagen
   suya y enseguida el resto. Si te vas a otro clip, ese pasa delante.
   (Las "miniaturas" de Opciones avanzadas son solo para el informe: el
   visor no las necesita.)
   A la derecha, la ficha del clip (fecha de grabación, TC, formato, audio);
   en una pantalla pequeña, en su lugar, la lista de clips.
-- Debajo, la línea de tiempo: cada bloque es un clip, y hasta el más corto
-  tiene un ancho que se puede pinchar. Al pasar el ratón, abajo sale su
-  nombre y duración. La rueda del ratón mueve la línea de lado y
-  Ctrl + rueda hace zoom. Al elegir un clip en la lista, la línea va a él.
-  Pincha o arrastra para moverte (Ctrl+clic marca varios); "Avance" lo
-  pasa rápido; "+" y "−" también hacen zoom. Las flechas del teclado
-  mueven un segundo.
+- Debajo, la línea de tiempo: cada bloque es un clip, con sus fotogramas
+  dentro en cuanto están preparados, y encima una regla con el timecode del
+  bruto. "Todo" enseña el bruto entero; con "+" o Ctrl + rueda (amplía
+  donde está el ratón) se llega hasta ver cada fotograma, y la regla se
+  hace más fina. La rueda sola mueve la línea de lado. Al pasar el ratón,
+  abajo sale el nombre y la duración del clip. Al elegir un clip en la
+  lista, la línea va a él. Pincha o arrastra para moverte (Ctrl+clic marca
+  varios).
+- Teclas: Espacio, ver y oír o parar. ← y →, un fotograma atrás o
+  adelante. Mayús + ← y →, un segundo. J y L, cinco segundos. K, parar.
+  Inicio y Fin, principio y final del clip. ↑ y ↓, clip anterior y
+  siguiente.
 - Con uno o varios clips marcados (en la línea de tiempo o en la lista):
   "Quitar" (va a la papelera de la izquierda; "Recuperar los marcados" lo
   devuelve), "Subir"/"Bajar" (cambia el orden), "← Bruto anterior"/"Bruto

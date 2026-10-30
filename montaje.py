@@ -16,7 +16,8 @@ qué orden, antes de exportar. Diseño en docs/diseno_montaje_exportacion.md.
   nuevos esperan en "nuevos" (no se exportan) hasta que se colocan.
 
 También saca los fotogramas del visor (1 por segundo, 480x270) a un .mjpeg por
-clip en la carpeta del análisis.
+clip en la carpeta del análisis, el fotograma exacto donde se para el cursor y la
+orden para ver y oír un clip de verdad con ffplay.
 """
 
 import copy
@@ -24,6 +25,7 @@ import datetime as dt
 import hashlib
 import json
 import logging
+import shutil
 import subprocess
 import uuid
 from pathlib import Path
@@ -43,6 +45,7 @@ class Montaje:
     def __init__(self, listas, fecha, tope, guardado=None, descartados=None, salto=eb.SALTO_DIAS):
         self.listas, self.fecha, self.tope, self.salto = listas, fecha, tope, salto
         self.descartados = descartados or {}  # {proyecto: [(clip, motivo)]}: lo que no entra en ningún bruto
+        self.mxf_por_ruta = {}  # lo que dice el análisis de cada fichero (para oír el clip: sus canales de sonido)
         self.por_clave = {c.get("clave"): c for l in listas.values() for cs in l.values() for c in cs}
         self.orden = {p: {c.get("clave"): (f, i) for f in ("material", "piezas") for i, c in enumerate(l.get(f) or [])}
                       for p, l in listas.items()}
@@ -313,8 +316,10 @@ class Montaje:
     def desde_analisis(cls, clips, cruce, mxf, cfg, carpeta_brutos):
         mxf_por_ruta = {m["ruta"]: m for m in mxf}
         listas = eb.listas_por_proyecto(clips, cruce, mxf_por_ruta, cfg)
-        return cls.cargar(carpeta_brutos, listas, lambda c: eb.fecha_clip(c, mxf_por_ruta), 3600 * float(cfg.get("horas_por_bruto", 2)),
-                          eb.descartados_por_proyecto(clips, cruce, mxf_por_ruta, cfg), eb.salto_dias(cfg))
+        m = cls.cargar(carpeta_brutos, listas, lambda c: eb.fecha_clip(c, mxf_por_ruta), 3600 * float(cfg.get("horas_por_bruto", 2)),
+                       eb.descartados_por_proyecto(clips, cruce, mxf_por_ruta, cfg), eb.salto_dias(cfg))
+        m.mxf_por_ruta = mxf_por_ruta
+        return m
 
     # --- exportar -------------------------------------------------------------------------------------------------
 
@@ -405,6 +410,80 @@ def sacar_portada(ffmpeg, ruta_video, carpeta_visor, clave, timeout=120):
     cmd = [ffmpeg, "-v", "error", "-y", "-skip_frame", "nokey", "-i", eb.ruta_larga(ruta_video), "-map", "0:v:0", "-an",
            "-frames:v", "1", "-vf", VF_VISOR, "-q:v", "6", "-f", "image2", "-c:v", "mjpeg"]
     return _ffmpeg_a_fichero(cmd, fichero_portada(carpeta_visor, clave), ruta_video, timeout)
+
+
+def fotograma_exacto(ffmpeg, ruta_video, segundo, timeout=30):
+    """El fotograma del segundo pedido del clip (con decimales: el fotograma exacto, no el de la tira de 1 por segundo),
+    a 480x270, en JPEG (bytes), o None. Para el visor cuando se avanza fotograma a fotograma o se para el cursor."""
+    cmd = [ffmpeg, "-v", "error", "-nostdin", "-ss", "%.3f" % max(0.0, segundo), "-i", eb.ruta_larga(ruta_video), "-map", "0:v:0",
+           "-an", "-frames:v", "1", "-vf", VF_VISOR, "-q:v", "4", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=timeout, **eb.flags_subproceso())
+    except Exception as e:
+        LOG.warning("Visor: no se pudo sacar el fotograma %.2f s de %s (%s)", segundo, ruta_video, e)
+        return None
+    return r.stdout if r.returncode == 0 and r.stdout[:3] == b"\xff\xd8\xff" else None
+
+
+# ---------------------------------------------------------------------------
+# Ver y oír un clip (ffplay)
+# ---------------------------------------------------------------------------
+
+PLAY_W, PLAY_H = 960, 540  # la ventana de ffplay
+
+
+def buscar_ffplay(ffmpeg):
+    """ffplay junto a ffmpeg (bin/ del programa) o en el PATH; None si no está."""
+    if ffmpeg:
+        junto = Path(ffmpeg).with_name("ffplay" + Path(ffmpeg).suffix)
+        if junto.exists():
+            return str(junto)
+    return shutil.which("ffplay")
+
+
+def orden_sonido(ffmpeg, origen, clip, desde, canales):
+    """Orden de ffmpeg que saca el clip desde el segundo desde, con su vídeo a 960x540 y todo su sonido junto en
+    estéreo, en NUT por la salida estándar, para que ffplay lo reproduzca (ffplay solo abre un fichero, y en la media de
+    Avid el vídeo y cada pista de sonido van en ficheros distintos). canales: exportar_brutos.canales_clip(clip, ...).
+    El vídeo va sin comprimir (decodificar lo hace ffmpeg; ffplay solo lo enseña) y el sonido, mezclado con un limitador
+    para que no sature al sumar pistas."""
+    rutas = [clip["fichero_video"]] + [r for r in dict.fromkeys(c["ruta"] for c in canales) if r != clip["fichero_video"]]
+    entrada = {r: i for i, r in enumerate(rutas)}
+    cmd = [ffmpeg, "-v", "error", "-nostdin"]
+    for r in rutas:
+        cmd += ["-ss", "%.3f" % max(0.0, desde), "-i", eb.ruta_larga(Path(origen) / r)]
+    filtros = ["[0:v:0]yadif=0:-1:1,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black,"
+               "setsar=1,format=yuv420p[v]" % (PLAY_W, PLAY_H, PLAY_W, PLAY_H)]
+    for k, c in enumerate(canales):
+        filtros.append("[%d:a:%d]pan=mono|c0=c%d[c%d]" % (entrada[c["ruta"]], c["flujo"], c["canal"], k))
+    if canales:
+        filtros.append("%samix=inputs=%d:normalize=0:dropout_transition=0,alimiter,aformat=channel_layouts=stereo[a]"
+                       % ("".join("[c%d]" % k for k in range(len(canales))), len(canales)))
+    cmd += ["-filter_complex", ";".join(filtros), "-map", "[v]", "-c:v", "rawvideo"]
+    if canales:
+        cmd += ["-map", "[a]", "-c:a", "pcm_s16le", "-ar", "48000"]
+    return cmd + ["-f", "nut", "pipe:1"]
+
+
+def orden_ffplay(ffplay, titulo):
+    """ffplay leyendo lo que saca orden_sonido por la entrada estándar; se cierra solo al acabar el clip."""
+    return [ffplay, "-hide_banner", "-loglevel", "error", "-autoexit", "-alwaysontop", "-window_title", titulo,
+            "-x", str(PLAY_W), "-y", str(PLAY_H), "-f", "nut", "-"]
+
+
+# ---------------------------------------------------------------------------
+# Línea de tiempo
+# ---------------------------------------------------------------------------
+
+PASOS_REGLA = (0.04, 0.2, 0.4, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200)
+
+
+def paso_regla(pps, separacion=90):
+    """Cada cuánto (s) va un timecode en la regla de la línea de tiempo con pps píxeles por segundo, para que los textos
+    no se pisen (al menos separacion píxeles), y cada cuánto una marca pequeña (o None si quedarían muy juntas)."""
+    paso = next((p for p in PASOS_REGLA if p * pps >= separacion), PASOS_REGLA[-1])
+    menor = next((p for p in PASOS_REGLA if p < paso and abs(paso / p - round(paso / p)) < 1e-6 and p * pps >= 8), None)
+    return paso, menor
 
 
 def siguiente_preparacion(claves, actual, hechos, portadas, en_curso, fallidos, tipos=("portada", "tira")):

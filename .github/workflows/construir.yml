@@ -31,7 +31,7 @@ jobs:
           if ($h -ne "04861D3339C5EBE38B56C19A15CF2C0CC97F5DE4FA8910E4D47E5E6404E4A2D4") { throw "ffmpeg.zip no coincide con la versión fijada: $h" }
           Expand-Archive ffmpeg.zip -DestinationPath ffx
           New-Item -ItemType Directory -Force bin | Out-Null
-          Get-ChildItem ffx -Recurse -Include ffmpeg.exe, ffprobe.exe | Copy-Item -Destination bin
+          Get-ChildItem ffx -Recurse -Include ffmpeg.exe, ffprobe.exe, ffplay.exe | Copy-Item -Destination bin  # ffplay: "Ver y oír" del montaje
           Remove-Item bin/PONER_AQUI_ffmpeg.txt -ErrorAction SilentlyContinue
           & bin/ffmpeg.exe -version | Select-Object -First 1
 

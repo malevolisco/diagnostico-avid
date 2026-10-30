@@ -46,7 +46,7 @@ import time
 import uuid
 import webbrowser
 import zipfile
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -1093,12 +1093,13 @@ def resolucion_vista(pv):
     return "%sx%s" % (ancho, alto)
 
 
-def marcar_duplicados(clips, origen):
+def marcar_duplicados(clips, origen, ffmpeg=None, mxf=()):
     """Trozos repetidos (29/10/2026: una entrevista con un trozo de 13 s copiado en otro fichero por Avid, con otra
-    identidad, que salía dos veces en el bruto). Los candidatos salen del subcódigo DV (exportar_brutos.duplicados_dv) y
-    se confirman con los fotogramas: el primero y el último del trozo tienen que ser idénticos, bit a bit, a los del clip
-    largo (si no, son dos cámaras grabando a la vez). Marca el trozo: c["contenido_en"] = {clave, nombre, desde, hasta (s
-    dentro del largo), mismo_proyecto}. Devuelve los marcados."""
+    identidad, que salía dos veces en el bruto). En DV, los candidatos salen del subcódigo de la cámara
+    (exportar_brutos.duplicados_dv) y se confirman con los fotogramas: el primero y el último del trozo tienen que ser
+    idénticos, bit a bit, a los del clip largo (si no, son dos cámaras grabando a la vez). En cualquier formato (30/10/2026),
+    los candidatos salen del timecode del fichero y se confirman con el sonido (repetidos_por_sonido). Marca el trozo:
+    c["contenido_en"] = {clave, nombre, desde, hasta (s dentro del largo), mismo_proyecto}. Devuelve los marcados."""
     import mxf_util
     for c in clips:
         c.pop("contenido_en", None)
@@ -1136,6 +1137,80 @@ def marcar_duplicados(clips, origen):
                                  "mismo_proyecto": bool(comun) or not (corto.get("proyectos") or largo.get("proyectos"))}
         marcados.append(corto)
         LOG.info("Trozo repetido: %s es %s", corto["nombre"], exportar_brutos.texto_duplicado(corto))
+    if ffmpeg:
+        marcados += repetidos_por_sonido(clips, origen, ffmpeg, mxf)
+    return marcados
+
+
+VENTANA_SONIDO = 3.0  # segundos del principio y del final del trozo que se comparan
+
+
+def repetidos_por_sonido(clips, origen, ffmpeg, mxf):
+    """Trozos repetidos de cualquier formato. Candidatos: el tramo de timecode del fichero cae dentro del de otro clip
+    (exportar_brutos.duplicados_tc). Se confirma con el sonido del primer canal: los 3 primeros y los 3 últimos segundos
+    del trozo tienen que estar, muestra a muestra, en el clip largo en ese punto (Avid copia el sonido tal cual al
+    consolidar o hacer un subclip). Exigir muestras idénticas, y no un sonido parecido, evita confundir un trozo con otra
+    cámara que grababa lo mismo a la vez (con otro micrófono, el volumen difiere unos 6 dB de media). Y el sonido tiene
+    que variar (exportar_brutos.sonido_con_forma): un tono de referencia o un silencio son iguales en cualquier sitio."""
+    try:
+        candidatos = exportar_brutos.duplicados_tc(clips)
+    except Exception as e:
+        LOG.warning("Trozos repetidos por el sonido: no se pueden buscar (%s)", e)
+        return []
+    mxf_por_ruta = {m["ruta"]: m for m in mxf}
+    leidos, marcados, t0 = OrderedDict(), [], time.monotonic()
+
+    def sonido(c, inicio, dur):
+        """Lo leído se recuerda (los últimos 300 tramos, unos 100 MB): con cámaras que empiezan cada clip en 00:00:00:00,
+        el principio de un mismo largo se compara con muchos cortos."""
+        canales = exportar_brutos.canales_clip(c, mxf_por_ruta)
+        if not canales:
+            return b""
+        clave = (c.get("clave"), round(inicio, 3), round(dur, 3))
+        if clave in leidos:
+            leidos.move_to_end(clave)
+        else:
+            leidos[clave] = exportar_brutos.muestras_sonido(ffmpeg, ruta_larga(Path(origen) / canales[0]["ruta"]), canales[0], inicio, dur)
+            if len(leidos) > 300:
+                leidos.popitem(last=False)
+        return leidos[clave]
+
+    sin_forma = set()
+    for d in candidatos:
+        corto, largo = d["corto"], d["largo"]
+        if corto.get("contenido_en") or corto.get("clave") in sin_forma:
+            continue
+        fps = exportar_brutos.fps_num(largo.get("fps")) or 25
+        dur = corto.get("duracion") or 0
+        v = min(VENTANA_SONIDO, dur)
+        try:
+            principio = sonido(corto, 0, v)
+            if not exportar_brutos.sonido_con_forma(principio):
+                sin_forma.add(corto.get("clave"))  # no sirve de huella con ningún largo
+                continue
+            tasa = round(len(principio) / 2 / v / 100) * 100 or 48000  # muestras por segundo (no se remuestrea)
+            ini = max(0.0, d["desde"] / fps - 0.3)
+            pos = exportar_brutos.buscar_muestras(principio, sonido(largo, ini, v + 0.6))
+            if pos is None:
+                continue
+            desde = ini + pos / tasa
+            if dur > v + 1:  # el final, en su sitio
+                final = sonido(corto, dur - v, v)
+                ini2 = max(0.0, desde + dur - v - 0.3)
+                pos2 = exportar_brutos.buscar_muestras(final, sonido(largo, ini2, v + 0.6)) if len(final) >= tasa else None
+                if pos2 is None or abs(ini2 + pos2 / tasa - (desde + dur - v)) > 0.05:
+                    continue
+        except OSError as e:
+            LOG.warning("Trozos repetidos: no se puede leer %s o %s (%s)", corto["nombre"], largo["nombre"], e)
+            continue
+        comun = set(corto.get("proyectos") or ()) & set(largo.get("proyectos") or ())
+        corto["contenido_en"] = {"clave": largo.get("clave"), "nombre": largo["nombre"], "desde": round(desde, 1),
+                                 "hasta": round(desde + dur, 1), "por": "sonido",
+                                 "mismo_proyecto": bool(comun) or not (corto.get("proyectos") or largo.get("proyectos"))}
+        marcados.append(corto)
+        LOG.info("Trozo repetido (por el sonido): %s es %s", corto["nombre"], exportar_brutos.texto_duplicado(corto))
+    LOG.info("Trozos repetidos por el sonido: %d candidatos por timecode, %d confirmados (%.0f s)", len(candidatos), len(marcados),
+             time.monotonic() - t0)
     return marcados
 
 
@@ -2058,7 +2133,7 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
                 if cambiados:
                     progreso("4/6 Han cambiado en el disco desde su análisis (hay que volver a analizarlos): %s" % "; ".join(cambiados))
 
-        repetidos = marcar_duplicados(clips, origen) if EXPORT_OK and ffmpeg_ok else []
+        repetidos = marcar_duplicados(clips, origen, ffmpeg, mxf) if EXPORT_OK and ffmpeg_ok else []
         cfg_origen = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json") if EXPORT_OK else None
         if hacer_miniaturas and ffmpeg_ok:
             progreso("5/6 Generando miniaturas...")

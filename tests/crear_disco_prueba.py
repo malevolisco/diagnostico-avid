@@ -309,10 +309,34 @@ def main():
                     "-metadata", "material_package_name=ENTREVISTA DV TROZO", "-f", "mxf_opatom", str(v_trozo)], check=True)
     ut = umid(v_trozo)
     mka("ENTREVISTA DV TROZO", M / "ENTREVISTA DV TROZOA01.6D00F0020.mxf", 40 / (30000 / 1001), 440, ut)
+    # El mismo caso en HD (30/10/2026): sin subcódigo DV, el trozo se reconoce por el timecode del fichero y por el
+    # sonido, que Avid copia tal cual. El sonido es "voz" (ruido con un volumen que sube y baja): un tono no vale de huella.
+    def sonido_avid(nombre, out, umid_v, tc, entrada=None, desde=0.0, dur=6):
+        fuente = ["-ss", str(desde), "-i", str(entrada)] if entrada else [
+            "-f", "lavfi", "-i", "anoisesrc=d=%s:c=pink:r=48000:a=0.5:seed=5" % dur, "-f", "lavfi",
+            "-i", "aevalsrc='0.05+0.95*abs(sin(2.1*t)*sin(5.3*t+1))':d=%s:s=48000" % dur, "-filter_complex", "[0][1]amultiply[a]", "-map", "[a]"]
+        subprocess.run([args.ffmpeg, "-loglevel", "error", "-y"] + fuente + ["-t", str(dur), "-c:a", "pcm_s16le", "-timecode", tc,
+                        "-f", "mxf_opatom", "-metadata", "material_package_name=%s" % nombre, str(out)], check=True)
+        datos = out.read_bytes()
+        out.write_bytes(datos.replace(bytes.fromhex(umid(out)), bytes.fromhex(umid_v)))
+    v_hd = M / "ENTREVISTA HDV01.6D00F101.mxf"
+    subprocess.run([args.ffmpeg, "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=25", "-t", "6",
+                    "-c:v", "dnxhd", "-b:v", "120M", "-pix_fmt", "yuv422p", "-timecode", "10:00:00:00", "-f", "mxf_opatom",
+                    "-metadata", "material_package_name=ENTREVISTA HD", str(v_hd)], check=True)
+    uh = umid(v_hd)
+    a_hd = M / "ENTREVISTA HDA01.6D00F1010.mxf"
+    sonido_avid("ENTREVISTA HD", a_hd, uh, "10:00:00:00")
+    v_hd_trozo = M / "ENTREVISTA HD TROZOV01.6D00F102.mxf"
+    subprocess.run([args.ffmpeg, "-loglevel", "error", "-y", "-ss", "2.0", "-i", str(v_hd), "-frames:v", "60", "-c", "copy",
+                    "-timecode", "10:00:02:00", "-metadata", "material_package_name=ENTREVISTA HD TROZO", "-f", "mxf_opatom",
+                    str(v_hd_trozo)], check=True)
+    uht = umid(v_hd_trozo)
+    sonido_avid("ENTREVISTA HD TROZO", M / "ENTREVISTA HD TROZOA01.6D00F1020.mxf", uht, "10:00:02:00", entrada=a_hd, desde=2.0, dur=2.4)
     P = D / "DUPLICADO"
     P.mkdir()
     (P / "DUPLICADO.avp").write_bytes(b"avp")
-    bin_con(P / "DUPLICADO Bin.avb", [("ENTREVISTA DV", ue), ("ENTREVISTA DV TROZO", ut)])
+    bin_con(P / "DUPLICADO Bin.avb", [("ENTREVISTA DV", ue), ("ENTREVISTA DV TROZO", ut), ("ENTREVISTA HD", uh),
+                                      ("ENTREVISTA HD TROZO", uht)])
 
     # Huérfano con vídeo, solo-audio huérfano y fichero en cuarentena.
     clip("HUERFANO", "AAAA0001", 2, audios=1)

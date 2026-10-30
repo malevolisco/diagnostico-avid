@@ -52,10 +52,10 @@ def comprobar(condicion, texto):
         r["fallos"].append(texto)
 
 
-def captura(nombre):
+def captura(nombre, ventana=None):
     try:
         from PIL import ImageGrab
-        w = app.raiz
+        w = ventana or app.raiz
         w.update()
         x, y = w.winfo_rootx(), w.winfo_rooty()
         caja = (x, y, x + w.winfo_width(), y + w.winfo_height())
@@ -123,7 +123,7 @@ def disco_leido():
     llamadas = []
     listar, dialogo = d.listar_proyectos, d.dialogo_proyectos
 
-    def selector(raiz, lista, elegidos, hechos, triaje=None, analizados=None):  # en vez del diálogo: apunta lo que se le ofrece y cancela
+    def selector(raiz, lista, *a, **k):  # en vez del diálogo: apunta lo que se le ofrece y cancela
         r["selector"] = [p["nombre"] for p in lista]
         return None
 
@@ -134,6 +134,46 @@ def disco_leido():
     # 8 proyectos de Avid y 2 carpetas sin proyecto (RODAJE y material: antes de analizar no se sabe que son media enlazada)
     comprobar(not llamadas and len(r.get("selector") or []) == 10, "Proyectos… debe reutilizar la lectura: %s, %s" % (llamadas, r.get("selector")))
     captura("1_disco.png")
+    # Paso 0: qué hay en el disco
+    app.bt_que_hay.invoke()
+    esperar(lambda: app.v_que_hay is not None and app.v_que_hay.filas, que_hay, limite=60)
+
+
+@seguro
+def que_hay():
+    v = app.v_que_hay
+    app.raiz.update()
+    filas = {f["carpeta"]: f for f in v.filas}
+    comprobar(filas.get("RODAJE", {}).get("tipo") == "mezclado" and filas.get("material", {}).get("tipo") == "MOV"
+              and filas.get("ABORTO", {}).get("tipo") == "Avid", "Paso 0: %s" % {k: f["tipo"] for k, f in filas.items()})
+    comprobar(len(v.tv.get_children()) == len(v.filas) and v.tv.item(v.tv.get_children()[0], "values"), "Paso 0: la tabla no se ha rellenado")
+    comprobar("carpetas:" in v.lbl.cget("text"), "Paso 0: falta el resumen: %r" % v.lbl.cget("text"))
+    captura("0_que_hay.png", v)
+    v.destroy()
+    # HECHO: en el selector de verdad se marca ABORTO como hecho (en verde y sin marcar) y se quita; luego se cancela
+    app.raiz.after(800, hecho_en_selector)
+    app.elegir_proyectos()
+
+
+@seguro
+def hecho_en_selector():
+    v = next(w for w in app.raiz.winfo_children() if w.winfo_class() == "Toplevel" and w.title() == "Elegir proyectos")
+    i = next(n for n, (nombre, _) in enumerate(v.filas) if nombre == "ABORTO")
+    v.lb.selection_clear(0, "end")
+    v.lb.selection_set(i)
+    v.marcar(True)
+    comprobar(v.lb.get(i).startswith("✔ HECHO") and i not in v.lb.curselection(), "ABORTO marcado HECHO: %r %s" % (v.lb.get(i), v.lb.curselection()))
+    comprobar("ABORTO" in d.leer_hechos(BRUTOS), "HECHO no guardado en la carpeta de brutos: %s" % d.leer_hechos(BRUTOS))
+    captura("1b_hecho.png", v)
+    v.lb.selection_set(i)
+    v.marcar(False)
+    comprobar(not v.lb.get(i).startswith("✔") and "ABORTO" not in d.leer_hechos(BRUTOS), "Quitar HECHO: %r" % v.lb.get(i))
+    v.destroy()
+    app.raiz.after(100, analizar)
+
+
+@seguro
+def analizar():
     app.bt_analizar.invoke()
     comprobar(app.estado["ocupado"] == "analisis", "al pulsar Analizar debe quedar trabajando")
     esperar(lambda: app.estado["ocupado"] is None, montaje)

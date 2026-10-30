@@ -59,6 +59,14 @@ Página 1 · Disco
      Sus proyectos salen en "Elegir proyectos" junto a los del primero y
      su media se usa para los dos. También se lee sin modificarla. Si el informe dice que hay clips enlazados a ficheros que
      no están en el disco, es aquí donde se añade la carpeta donde estén.
+   PASO 0 · QUÉ HAY EN EL DISCO (opcional, antes de analizar): el botón
+   "0 · Qué hay en el disco" recorre el disco de Avid y los otros
+   orígenes (las carpetas y lo que tienen dentro) y dice, carpeta por
+   carpeta, qué hay: proyecto de Avid, ficheros MOV, MP4, MXF, tarjeta
+   de cámara, nada, sin vídeo o mezclado. Solo mira nombres y tamaños,
+   no abre ningún fichero: tarda unos segundos. Las carpetas mezcladas
+   salen abiertas para ver qué hay en cada subcarpeta. "Guardar como
+   CSV…" lo guarda como tabla (se abre con Excel).
 3. Al elegir el disco, el programa lee solo qué proyectos tiene (en unos
    segundos, sin abrir nada) y lo dice debajo de las carpetas, por ejemplo
    "7 proyectos · 11 bins · último cambio 15/09/2021". Sirve para ver de un
@@ -66,6 +74,13 @@ Página 1 · Disco
    "Elegir proyectos" (el botón azul) sirve para no hacerlos todos de una vez: sale la
    lista de proyectos del disco y marcas los que quieres ahora. Los que ya tienen brutos en esa carpeta salen con
    "✓ ya tiene brutos"; el botón "Solo los que faltan" marca el resto.
+   PROYECTO TERMINADO: en esa misma ventana, marca el proyecto y pulsa
+   "✔ Marcar los elegidos como HECHOS". Sale en verde, "✔ HECHO el
+   30/10/2026", y ya no se marca solo: ni al abrir la lista, ni con
+   "Todos", ni al analizar. Si hay que hacerlo otra vez, se marca a mano
+   como cualquier otro, o se le quita con "Quitar HECHO". Se guarda en
+   la carpeta de brutos (proyectos_hechos.json), así que hace falta
+   haberla elegido.
    Otro día, misma carpeta de brutos y eliges los siguientes: los ya hechos
    no se tocan. Si eliges proyectos, se analizan solo esos (sus bins y su
    vídeo), mucho más rápido que el disco entero; el informe lo dice arriba.

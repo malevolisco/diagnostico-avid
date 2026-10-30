@@ -33,6 +33,7 @@ AVISO = "#ff8a80"
 BIEN = "#6fdc9b"
 CLIP = "#3d6fa8"
 CABEZAL = "#ff5252"
+HECHO = BIEN  # proyectos marcados como HECHOS: en verde
 DETENER = "#9e3434"  # rojo apagado: se ve sin competir con el naranja de la acción principal
 
 LETRA = "Segoe UI"
@@ -104,6 +105,12 @@ def aplicar(raiz):
     e.configure("Detener.TButton", background=DETENER, foreground=TEXTO, bordercolor=DETENER, lightcolor=DETENER, darkcolor=DETENER,
                 font=letras["negrita"], padding=(14, 6))
     e.map("Detener.TButton", background=[("disabled", PANEL), ("pressed", "#7d2626"), ("active", "#b54545")],
+          foreground=[("disabled", "#6b6f75")], bordercolor=[("disabled", BORDE)], lightcolor=[("disabled", PANEL)],
+          darkcolor=[("disabled", PANEL)])
+    # Marcar un proyecto como HECHO: verde, como "HECHO" en la lista
+    e.configure("Hecho.TButton", background=HECHO, foreground=SOBRE_ACENTO, bordercolor=HECHO, lightcolor=HECHO, darkcolor=HECHO,
+                font=letras["negrita"], padding=(14, 6))
+    e.map("Hecho.TButton", background=[("disabled", PANEL), ("pressed", "#4fb87a"), ("active", "#8be6b0")],
           foreground=[("disabled", "#6b6f75")], bordercolor=[("disabled", BORDE)], lightcolor=[("disabled", PANEL)],
           darkcolor=[("disabled", PANEL)])
     e.configure("Accion.TButton", padding=(9, 4), width=-6)  # cada uno lo que mide su texto (el tema pide 11 letras)

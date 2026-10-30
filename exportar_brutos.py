@@ -710,7 +710,7 @@ def triaje_proyectos(clips, cfg, proyectos=()):
     max_seg = float(cfg.get("triaje_max_minutos", CONFIG_DEFECTO["triaje_max_minutos"])) * 60
     nuevo = lambda p: {"proyecto": p, "camara": [], "dudosos": [], "otros": Counter()}
     por = {p: nuevo(p) for p in proyectos}
-    for c in clips:
+    for c in con_video(clips):  # lo que solo tiene sonido no se cuenta ni se enseña
         if c.get("render"):
             continue
         clase = clasificar(c, cfg)[0]
@@ -722,7 +722,7 @@ def triaje_proyectos(clips, cfg, proyectos=()):
                 t["dudosos"].append(c)
                 t["otros"]["dudoso"] += 1
             else:
-                t["otros"][clase if c.get("fichero_video") else "sin vídeo"] += 1
+                t["otros"][clase] += 1
     orden = list(TRIAJE)
     for t in por.values():
         t["camara"].sort(key=lambda c: c["nombre"])
@@ -1020,11 +1020,17 @@ def motivo_descarte(c, cfg):
     return None
 
 
+def con_video(clips):
+    """Los clips con vídeo. Los que solo tienen sonido (ficheros de audio sin su vídeo) no van a ningún bruto y no se
+    enseñan en el montaje, ni siquiera como descartados (30/10/2026)."""
+    return [c for c in clips if c.get("fichero_video")]
+
+
 def descartados_por_proyecto(clips, cruce, mxf_por_ruta, cfg):
     """{proyecto: [(clip, motivo)]} de lo que se queda fuera de los brutos (para la pantalla de montaje), con las mismas
     reglas que listas_por_proyecto. Un clip en varios proyectos cuenta con el primero, como allí."""
     salida = defaultdict(list)
-    for c in clips:
+    for c in con_video(clips):
         motivo = motivo_descarte(c, cfg)
         if not motivo:
             continue
@@ -1069,7 +1075,7 @@ def listas_por_proyecto(clips, cruce, mxf_por_ruta, cfg):
     secuencias = {p["proyecto"]: {_normal(n) for n in p.get("secuencias_nombres", [])} for p in (cruce or {}).get("por_proyecto", [])}
     rx = re.compile(cfg["piezas_regex"]) if cfg.get("piezas_regex") else None
     por_proyecto = defaultdict(lambda: {"material": [], "piezas": [], "duplicados": []})
-    for c in clips:
+    for c in con_video(clips):
         render = bool(c.get("render"))
         if render and not cfg.get("renders_en_piezas", False):
             continue
@@ -1264,7 +1270,7 @@ def grupos_por_dias(clips, cruce, mxf_por_ruta, cfg):
     secuencias = {p["proyecto"]: {_normal(n) for n in p.get("secuencias_nombres", [])} for p in (cruce or {}).get("por_proyecto", [])}
     rx = re.compile(cfg["piezas_regex"]) if cfg.get("piezas_regex") else None
     familias = {"material": [], "agencias": [], "piezas": []}
-    for c in clips:
+    for c in con_video(clips):
         if c.get("render"):
             if cfg.get("renders_en_piezas", False):
                 familias["piezas"].append(c)
@@ -1307,7 +1313,7 @@ def grupos_por_proyecto(clips, cruce, mxf_por_ruta, cfg):
     politica = cfg.get("clips_compartidos", "primero")
     huerfanos = cfg.get("incluir_huerfanos", True)
     por_proyecto = defaultdict(lambda: {"normales": [], "renders": []})
-    for c in clips:
+    for c in con_video(clips):
         render = bool(c.get("render"))
         if render and not cfg.get("renders_en_piezas", False):
             continue

@@ -1702,9 +1702,6 @@ def construir_resumen(origen, ficheros, proyectos, bins, mxf, clips, cruce, ffmp
     sin_audio = sum(1 for c in clips if c["num_video"] and not c["num_audio"])
     if sin_audio:
         avisos.append(("info", "%d clips de vídeo sin pista de audio." % sin_audio))
-    solo_audio = sum(1 for c in clips if not c["num_video"])
-    if solo_audio:
-        avisos.append(("info", "%d grupos de ficheros solo con audio (sin vídeo con el mismo identificador)." % solo_audio))
     aprox = [p for p in cruce["por_proyecto"] if p.get("clips_aproximados") or p.get("clips_ambiguos")]
     if aprox:
         avisos.append(("aviso", "Cruce por nombre y duración en %d proyectos (%s): %d clips emparejados así y %d ambiguos que quedan sin emparejar. "
@@ -1876,11 +1873,12 @@ def informe_html(resumen, proyectos, bins, clips, cruce, destino):
             h.append("</table></details>")
         h.append("<div class='grid'>")
         for c in cs:
-            h.append(tarjeta_clip(c))
+            if c["num_video"]:  # lo que solo tiene sonido no se enseña (30/10/2026)
+                h.append(tarjeta_clip(c))
         h.append("</div></details>")
 
     if cruce["huerfanos"]:
-        hs = [c for c in clips if not c["proyectos"]]
+        hs = [c for c in clips if not c["proyectos"] and c["num_video"]]
         h.append("<details><summary>Clips huérfanos (sin bin) &middot; %d</summary><div class='grid'>" % len(hs))
         for c in sorted(hs, key=lambda c: c["nombre"]):
             h.append(tarjeta_clip(c))

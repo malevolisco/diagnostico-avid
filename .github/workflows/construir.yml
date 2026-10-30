@@ -64,7 +64,7 @@ jobs:
           Get-Content build.txt
 
       - name: Construir ejecutable
-        run: pyinstaller --noconfirm --clean --noconsole --onedir --name DiagnosticoAvid --add-data "bin;bin" --add-data "build.txt;." --hidden-import interfaz --hidden-import tema --hidden-import ventana_montaje --hidden-import ventana_origen --hidden-import aprendizaje --hidden-import montaje --hidden-import mxf_util diagnostico_avid.py
+        run: pyinstaller --noconfirm --clean --noconsole --onedir --name DiagnosticoAvid --add-data "bin;bin" --add-data "build.txt;." --hidden-import interfaz --hidden-import tema --hidden-import ventana_montaje --hidden-import ventana_origen --hidden-import aprendizaje --hidden-import montaje --hidden-import mxf_util --hidden-import lecturas diagnostico_avid.py
 
       - name: Disco de prueba simulado
         run: python tests/crear_disco_prueba.py disco_prueba --ffmpeg bin/ffmpeg.exe --ffprobe bin/ffprobe.exe
@@ -82,6 +82,14 @@ jobs:
 
       - name: Comprobar resultado
         run: python tests/comprobar_resultado.py salida brutos --ffprobe bin/ffprobe.exe --rdd9
+
+      - name: El análisis se repite sin el disco (lecturas.json) y anonimizado decide igual
+        shell: pwsh
+        run: |
+          # Lo que hace falta para que un disco real sirva de prueba (tests/casos_reales): todo lo que el análisis lee del
+          # vídeo y del sonido para decidir queda en lecturas.json, y los brutos exportados son los del plan repetido
+          $a = (Get-ChildItem -Directory salida/Diagnostico_* | Select-Object -First 1).FullName
+          python tests/anonimizar_caso.py "$a" simulado --config config_brutos.json --comprobar --brutos brutos
 
       - name: Unir con bmx (RDD 9) da el mismo vídeo y audio que unir con ffmpeg
         shell: pwsh

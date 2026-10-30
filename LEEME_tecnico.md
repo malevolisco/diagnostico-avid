@@ -28,6 +28,7 @@ Autor: Adrián Merinero Sánchez. Visión general y garantías: [`README.md`](RE
 | `montaje.py` | Lógica de la pantalla de montaje (quitar, mover, cortar, renombrar, deshacer; `montaje.json`) y fotogramas del visor. Sin ventana: se prueba en `tests/test_montaje.py` |
 | `ventana_montaje.py` | Página de montaje (visor, línea de tiempo, "Fuera del bruto") y diálogo de opciones avanzadas de exportación (tkinter + Pillow) |
 | `ventana_origen.py` | Pestaña "Origen del material" del montaje: qué entra y qué no, por procedencia (`origen.json`) |
+| `lecturas.py` | Lo que el análisis lee del vídeo y del sonido para decidir los trozos repetidos (`situar`: dónde dice el subcódigo DV un timecode; `huella`: MD5 de un fotograma; `"sonido"`: dónde empieza un trozo en otro clip por el sonido, o que no sirve de huella). Se guarda en `lecturas.json` con la ruta relativa al origen; nunca imagen ni sonido. `repetir(datos)` contesta desde lo guardado: lo que no está se trata como un fichero ilegible |
 | `mxf_util.py` | Acabado profesional del bruto: TC interno del vídeo, fecha de creación, ficha técnica XDCAM HD422 (con la envoltura RDD 9) y MD5 |
 | `actualizar.py` | Actualización del `.exe`, solo al pulsar "Buscar actualización" (o `--actualizar-ahora`). Lo importa el principal |
 | `config_brutos.json` | Parámetros de exportación. Se crea solo la primera vez que se exporta, junto al programa |
@@ -72,6 +73,24 @@ Opciones: `--sin-miniaturas` (análisis mucho más rápido), `--max-miniaturas 2
 8. **Informe**: `informe.html` + JSON por capa + ZIP.
 10. **Análisis acumulado** (28/10/2026): con proyectos elegidos, `sumar_analisis_anteriores` añade los proyectos de análisis anteriores del mismo disco (misma carpeta de informe) que no se vuelven a analizar, si sus MXF no han cambiado (tamaño y fecha); el resultado es un análisis completo de todo lo analizado hasta ahora (`resumen.parcial.de_antes`, `cambiados`). El informe (`informe.html`), `proyectos.html` y `proyectos.csv` son solo de los proyectos analizados ahora (29/10/2026): las cifras y los avisos se recalculan con ellos y un aviso dice cuántos hay de antes; los datos del análisis (`proyectos.json`, `clips.json`, `cruce.json`, `resumen.json`) y `triaje.json` siguen con todos, para Montaje, Exportar y el selector.
 9. **Qué proyectos restaurar** (28/10/2026, antes del montaje): `triaje_proyectos` cuenta los clips de cámara de cada proyecto (`clasificar` = propio y con vídeo; sin agencias, importados, dudosos ni efectos) y propone restaurar, poco material (hasta `triaje_max_clips` = 2 y menos de `triaje_max_minutos` = 2 min), revisar (vídeos dudosos, típicamente MP4/MOV sin pistas de cámara, y ningún clip de cámara o poco y lo dudoso dura más: se enseñan con captura para decidir en Origen del material) o sin material de cámara. `escribir_triaje` deja `proyectos.html` (tabla y una captura por clip de cámara, enlazado desde el informe), `proyectos.csv` y `triaje.json` (lo lee el selector de proyectos: propuesta en cada fila y botón "Solo los de material").
+
+## Casos reales como pruebas (30/10/2026)
+
+Cada disco real que da un problema queda como prueba permanente (`tests/casos_reales/NOMBRE/`).
+
+- **Qué se guarda.** `caso.json.gz` lleva `clips`, `cruce`, `mxf` y las `lecturas` del análisis, anonimizados con `tests/anonimizar_caso.py`, y opcionalmente el `config` con que se analizó.
+  - Cada palabra de un texto se cambia por un código (`X001`…), la misma palabra siempre por el mismo código, también en las claves de `lecturas.json`.
+  - Se quedan como están los identificadores (`identificador`: mayúsculas y cifras, con al menos tantas cifras como letras: `00059S`, `C0001`, `5CB6A85E`), las palabras técnicas de `PALABRAS` y los campos de `TAL_CUAL` (formato, códec, producto, origen, fechas, timecodes, UMID).
+  - Antes de guardar, `por_clave` compara la decisión de cada clip entre el original y el anonimizado. Si una palabra cambiada era la que decidía, lo dice, para añadirla a `PALABRAS` si no es sensible.
+- **Qué se repite.** `casos_reales.plan` repite todo lo que se decide después de leer el disco, con el código de ahora y las opciones por defecto:
+  - `fijar_fechas_grabacion`;
+  - `marcar_duplicados`, dentro de `lecturas.repetir`;
+  - `anotar_origen`;
+  - `Montaje.desde_analisis`.
+  - El resultado son los brutos de cada proyecto con sus clips, la papelera con el motivo y lo que queda fuera. `test_casos_reales` lo compara con `esperado.json` y cuenta las lecturas que faltan (`lecturas_no_grabadas`).
+  - El montaje hecho a mano (`montaje.json`) no se repite: se prueba lo automático.
+- **En el CI.** El análisis del disco simulado se comprueba con `anonimizar_caso.py --comprobar --brutos`: ninguna lectura falta, el anonimizado decide igual y los brutos que exportó el `.exe` tienen los clips del plan. Si alguien añade una lectura del disco sin pasar por `lecturas.py`, falla ahí.
+- **Primer caso: `disco_dv_2002_2019`.** Es un disco DV de 2002 y 2019 en un mismo proyecto, que debe salir en dos brutos. Se analizó con una versión anterior a `lecturas.json` (64 lecturas no grabadas), así que de él solo se repiten las fechas, el origen y el reparto. Para que cubra también los trozos repetidos (00059S), hay que volver a analizar ese disco y sustituir el caso.
 
 ## Fase 2: cómo se construye cada bruto
 

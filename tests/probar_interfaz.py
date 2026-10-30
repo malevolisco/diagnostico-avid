@@ -283,7 +283,8 @@ def ver_y_oir():
     pm.t = 0.0
     pm.ver_y_oir()
     comprobar(pm.sonando is not None and pm.bt_sonido.cget("text").startswith("■"), "Ver y oír no ha arrancado")
-    app.raiz.after(2500, sonando)
+    # a mitad del clip (los del disco de prueba duran 2 s): más tarde ffplay ya puede haber acabado, y con razón
+    app.raiz.after(1000, sonando)
 
 
 @seguro
@@ -291,7 +292,7 @@ def sonando():
     pm = app.montaje
     s = pm.sonando
     comprobar(s is not None and s["procesos"][1].poll() is None, "ffplay se ha cerrado antes de tiempo")
-    comprobar(pm.t > 1.0, "el cursor no va con lo que suena: %.2f s" % pm.t)
+    comprobar(pm.t > 0.5, "el cursor no va con lo que suena: %.2f s" % pm.t)
     procesos = s["procesos"] if s else ()
     pm.ver_y_oir()
     comprobar(pm.sonando is None and all(x.poll() is not None for x in procesos), "Parar no ha cerrado ffplay")

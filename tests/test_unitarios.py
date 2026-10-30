@@ -1430,7 +1430,7 @@ class QueProyectosRestaurar(unittest.TestCase):
         self.assertEqual([c["nombre"] for c in t["AGENCIAS"]["dudosos"]], ["PANTALLA PARTIDA"])  # para revisar, no de cámara
         self.assertEqual([c["nombre"] for c in t["GRANDE"]["camara"]], ["0001AB", "0002AB", "0003AB", "0007AC"])
         self.assertEqual((t["GRANDE"]["segundos"], t["GRANDE"]["mas_largo"]), (1010, 600))
-        self.assertEqual(t["GRANDE"]["otros"], {"sin vídeo": 1})  # el render no cuenta
+        self.assertEqual(t["GRANDE"]["otros"], {})  # ni el render ni lo que solo tiene sonido cuentan
         self.assertEqual([c["nombre"] for c in t["CORTO"]["camara"]], ["0004AB", "0005AB"])  # Reuters no es de cámara
         self.assertEqual(t["CORTO"]["otros"], {"agencia": 1})
         self.assertEqual(t["AGENCIAS"]["otros"], {"agencia": 1, "dudoso": 1})
@@ -2022,6 +2022,26 @@ class TrozosRepetidos(unittest.TestCase):
                                                        "papelera": [], "movidos": []}})
         self.assertEqual([c["clave"] for c in m2.papelera("P")], ["CORTO"])
         self.assertEqual(m2.nuevos("P"), [])
+
+
+class SoloSonido(unittest.TestCase):
+    """Los clips que solo tienen sonido no van a ningún bruto ni se enseñan: ni en el montaje, ni como descartados, ni en
+    el triaje (30/10/2026)."""
+
+    def test_no_salen_en_ningun_sitio(self):
+        cfg = dict(json.loads(json.dumps(eb.CONFIG_DEFECTO)), solo_material_de_camara=False)
+        clip = lambda n, video: {"clave": n, "nombre": n, "fichero_video": video, "ficheros": [n + "A01.mxf"], "duracion": 5,
+                                 "proyectos": ["P"], "fps": "25/1", "num_audio": 2, "origen": "Cámara (tarjeta P2)"}
+        clips = [clip("CON VIDEO", "CON VIDEOV01.mxf"), clip("SOLO SONIDO", None)]
+        nombres = lambda cs: [c["nombre"] for c in cs]
+        listas = eb.listas_por_proyecto(clips, {}, {}, cfg)
+        self.assertEqual(nombres(listas["P"]["material"]), ["CON VIDEO"])
+        self.assertEqual(eb.descartados_por_proyecto(clips, {}, {}, cfg), {})
+        for agrupar in ("proyecto_mes", "proyecto", "dias"):
+            grupos = eb.grupos_de_exportacion(clips, {}, {}, dict(cfg, agrupar=agrupar))
+            self.assertEqual([nombres(g["clips"]) for g in grupos], [["CON VIDEO"]], agrupar)
+        t, = eb.triaje_proyectos(clips, cfg, ["P"])
+        self.assertEqual(t["otros"], {})
 
 
 class TrozosRepetidosPorSonido(unittest.TestCase):

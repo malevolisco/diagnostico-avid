@@ -388,6 +388,164 @@ def carpeta_ignorada(nombre):
     return n in CARPETAS_SISTEMA or n in CARPETAS_MEDIA or n.startswith(("avid", ".", "$"))
 
 
+# Paso 0, qué hay en el disco: tipo de cada fichero por la extensión (sin abrirlo)
+TIPO_POR_EXTENSION = {".mov": "MOV", ".mp4": "MP4", ".m4v": "MP4", ".mxf": "MXF", ".mts": "AVCHD", ".m2ts": "AVCHD", ".avi": "AVI",
+                      ".mkv": "MKV", ".mpg": "MPEG", ".mpeg": "MPEG", ".3gp": "3GP", ".dv": "DV", ".omf": "OMF",
+                      ".wav": "audio", ".mp3": "audio", ".aif": "audio", ".aiff": "audio", ".m4a": "audio",
+                      ".jpg": "fotos", ".jpeg": "fotos", ".png": "fotos", ".tif": "fotos", ".tiff": "fotos", ".heic": "fotos"}
+TIPOS_VIDEO = ("MOV", "MP4", "MXF", "AVCHD", "AVI", "MKV", "MPEG", "3GP", "DV", "OMF")
+NOMBRES_TARJETA = {"CONTENTS": "P2", "XDROOT": "XDCAM", "BPAV": "XDCAM", "M4ROOT": "XAVC", "PRIVATE": "AVCHD", "AVCHD": "AVCHD",
+                   "DCIM": "DCIM", "CLIPR": "Canon", "MP_ROOT": "SD"}
+FICHEROS_DE_SISTEMA = {".ds_store", "thumbs.db", "desktop.ini"}
+
+
+def _tamano(n):
+    return "%.1f GB" % (n / 1e9) if n >= 1e9 else "%d MB" % round(n / 1e6) if n >= 1e6 else "%d KB" % max(1, round(n / 1e3)) if n else "0"
+
+
+def _que_es(c):
+    """Lo que dice una fila del paso 0 a partir de lo contado en una carpeta: (tipo, texto)."""
+    partes, clases = [], []
+    if c["avp"] or c["avb"]:
+        partes.append("proyecto de Avid (%d bin%s)" % (c["avb"], "" if c["avb"] == 1 else "s") if c["avp"]
+                      else "%d bin%s de Avid sin proyecto" % (c["avb"], "" if c["avb"] == 1 else "s"))
+        clases.append("Avid")
+    if c["media"]:
+        partes.append("media de Avid (%d fichero%s, %s)" % (c["media"], "" if c["media"] == 1 else "s", _tamano(c["media_bytes"])))
+        clases.append("Avid")
+    for t in sorted(c["tarjetas"]):
+        partes.append("tarjeta %s (%d vídeo%s)" % (t, c["tarjetas"][t], "" if c["tarjetas"][t] == 1 else "s"))
+        clases.append("tarjeta " + t)
+    for t in TIPOS_VIDEO:
+        if c["tipos"].get(t):
+            partes.append("%d %s" % (c["tipos"][t], t))
+            clases.append(t)
+    for t in ("audio", "fotos"):
+        if c["tipos"].get(t):
+            partes.append("%d %s" % (c["tipos"][t], "de audio" if t == "audio" else "fotos"))
+    if c["otros"]:
+        partes.append("%d otros" % c["otros"])
+    clases = list(dict.fromkeys(clases))
+    if not c["ficheros"]:
+        return "vacía", "No hay nada"
+    if not clases:
+        return "sin vídeo", "Sin vídeo: " + ", ".join(partes)
+    if len(clases) > 1:
+        return "mezclado", "Mezclado: " + ", ".join(partes)
+    return clases[0], partes[0][0].upper() + partes[0][1:] + ("" if len(partes) == 1 else " (y " + ", ".join(partes[1:]) + ")")
+
+
+def _cuenta_nueva():
+    return {"avp": 0, "avb": 0, "media": 0, "media_bytes": 0, "tarjetas": Counter(), "tipos": Counter(), "otros": 0, "ficheros": 0, "bytes": 0}
+
+
+def _sumar(a, b):
+    for k in ("avp", "avb", "media", "media_bytes", "otros", "ficheros", "bytes"):
+        a[k] += b[k]
+    a["tarjetas"].update(b["tarjetas"])
+    a["tipos"].update(b["tipos"])
+
+
+def que_hay(origenes, progreso=None):
+    """Paso 0: qué hay en cada carpeta de primer nivel de los orígenes, y en cada una de sus subcarpetas, sin abrir ningún
+    fichero (solo nombres y tamaños): proyecto de Avid, media de Avid, tarjetas de cámara, MOV, MP4..., vacía o mezclado.
+    Devuelve [{origen, carpeta, tipo, texto, ficheros, bytes, dentro: [filas de sus subcarpetas]}]; los ficheros sueltos
+    de la raíz de un origen salen como "(raíz)", y los de una carpeta fuera de sus subcarpetas, como "(sueltos)". Los
+    vídeos dentro de una tarjeta (CONTENTS, XDROOT, DCIM...) cuentan como de la tarjeta, y los de Avid MediaFiles como
+    media de Avid."""
+    filas = []
+    leidos = 0
+    for origen in origenes:
+        raiz = ruta_larga(origen, siempre=True)
+        cuentas = defaultdict(dict)  # carpeta de primer nivel -> {subcarpeta o "(sueltos)": cuenta}
+        for dirpath, dirs, nombres in os.walk(raiz, onerror=lambda e: LOG.warning("No se puede leer: %s", e)):
+            dirs[:] = [d for d in dirs if d.lower() not in CARPETAS_SISTEMA and d.lower() not in CARPETAS_CACHE and not d.startswith(".")]
+            partes = [x for x in Path(relativa(dirpath, raiz)).parts if x not in (".", "")]
+            if not partes:
+                primera, segunda = "(raíz)", "(sueltos)"
+                for d in dirs:  # que salgan también las carpetas vacías
+                    cuentas[d]
+            else:
+                primera, segunda = partes[0], partes[1] if len(partes) > 1 else "(sueltos)"
+                if len(partes) == 1:
+                    for d in dirs:
+                        cuentas[primera].setdefault(d, _cuenta_nueva())
+            c = cuentas[primera].setdefault(segunda, _cuenta_nueva())
+            en_media = any(x.lower() in CARPETAS_MEDIA for x in partes)
+            tarjeta = next((NOMBRES_TARJETA[x.upper()] for x in partes if x.upper() in NOMBRES_TARJETA), None)
+            for nombre in nombres:
+                if nombre.lower() in FICHEROS_DE_SISTEMA or nombre.startswith("._"):
+                    continue
+                try:
+                    tam = os.stat(os.path.join(dirpath, nombre)).st_size
+                except OSError:
+                    tam = 0
+                ext = Path(nombre).suffix.lower()
+                c["ficheros"] += 1
+                c["bytes"] += tam
+                leidos += 1
+                if progreso and leidos % 2000 == 0:
+                    progreso("Paso 0: %d ficheros vistos..." % leidos)
+                if ext == ".avp":
+                    c["avp"] += 1
+                elif ext == ".avb":
+                    c["avb"] += 1
+                elif en_media and ext in EXT_MEDIA:
+                    c["media"] += 1
+                    c["media_bytes"] += tam
+                elif tarjeta and TIPO_POR_EXTENSION.get(ext) in TIPOS_VIDEO:
+                    c["tarjetas"][tarjeta] += 1
+                elif ext in TIPO_POR_EXTENSION:
+                    c["tipos"][TIPO_POR_EXTENSION[ext]] += 1
+                elif ext in (".avs", ".avc", ".bak", ".pmr", ".mdb", ".xml", ".bim", ".ppn", ".cpi", ".mpl", ".bdm", ".smi", ".lnk"):
+                    pass  # ficheros de apoyo de Avid y de las tarjetas: no dicen nada por sí solos
+                else:
+                    c["otros"] += 1
+
+        def fila(nombre, c, dentro=()):
+            tipo, texto = _que_es(c)
+            return {"origen": str(origen), "carpeta": nombre, "tipo": tipo, "texto": texto, "ficheros": c["ficheros"], "bytes": c["bytes"],
+                    "dentro": list(dentro)}
+        for primera in sorted(cuentas, key=lambda k: (k == "(raíz)", k.lower())):
+            subs = cuentas[primera]
+            total = _cuenta_nueva()
+            for c in subs.values():
+                _sumar(total, c)
+            if primera == "(raíz)":
+                if total["ficheros"]:
+                    filas.append(fila("(raíz)", total))
+                continue
+            dentro = [fila(n, subs[n]) for n in sorted(subs, key=lambda k: (k == "(sueltos)", k.lower()))
+                      if n != "(sueltos)" or subs[n]["ficheros"]]
+            filas.append(fila(primera, total, dentro if len(dentro) > 1 or (dentro and dentro[0]["carpeta"] != "(sueltos)") else ()))
+    return filas
+
+
+def resumen_que_hay(filas):
+    """'12 carpetas: 7 de Avid, 2 MOV, 1 mezclada, 2 vacías' para el pie de la ventana del paso 0."""
+    if not filas:
+        return "No hay carpetas."
+    cuenta = Counter(f["tipo"] for f in filas)
+    nombres = {"Avid": ("de Avid", "de Avid"), "mezclado": ("mezclada", "mezcladas"), "vacía": ("vacía", "vacías"),
+               "sin vídeo": ("sin vídeo", "sin vídeo")}
+    partes = []
+    for tipo, n in cuenta.most_common():
+        uno, varios = nombres.get(tipo, (tipo, tipo))
+        partes.append("%d %s" % (n, uno if n == 1 else varios))
+    return "%d carpeta%s: %s" % (len(filas), "" if len(filas) == 1 else "s", ", ".join(partes))
+
+
+def guardar_que_hay(filas, ruta):
+    """El paso 0 en CSV (se abre en Excel): una fila por carpeta y otra por cada subcarpeta."""
+    with open(ruta, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(["Origen", "Carpeta", "Subcarpeta", "Tipo", "Qué hay", "Ficheros", "Bytes"])
+        for x in filas:
+            w.writerow([x["origen"], x["carpeta"], "", x["tipo"], x["texto"], x["ficheros"], x["bytes"]])
+            for d in x["dentro"]:
+                w.writerow([x["origen"], x["carpeta"], d["carpeta"], d["tipo"], d["texto"], d["ficheros"], d["bytes"]])
+
+
 def detectar_proyectos(ficheros, raices=()):
     """Un proyecto es una carpeta que contiene un .avp. Sus bins son los .avb
     de esa carpeta y subcarpetas (los de Trash se marcan como papelera).
@@ -2593,6 +2751,33 @@ def brutos_hechos(carpeta):
         return set()
 
 
+FICHERO_HECHOS = "proyectos_hechos.json"
+
+
+def leer_hechos(carpeta):
+    """{proyecto: fecha} de los proyectos marcados a mano como HECHOS, guardados en la carpeta de brutos del disco
+    (proyectos_hechos.json). {} si no hay o no se puede leer."""
+    try:
+        datos = json.loads((Path(carpeta) / FICHERO_HECHOS).read_text(encoding="utf-8"))
+        return {str(k): str(v) for k, v in (datos.get("hechos") or {}).items()}
+    except Exception:
+        return {}
+
+
+def marcar_hechos(carpeta, nombres, hecho=True):
+    """Marca (o desmarca) proyectos como HECHOS en la carpeta de brutos. Devuelve los hechos que quedan."""
+    hechos = leer_hechos(carpeta)
+    for n in nombres:
+        if hecho:
+            hechos[n] = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+        else:
+            hechos.pop(n, None)
+    Path(carpeta).mkdir(parents=True, exist_ok=True)
+    guardar_json(Path(carpeta), FICHERO_HECHOS, {"_comentario": "Proyectos marcados como HECHOS en la ventana (Elegir proyectos). "
+                                                  "Salen en verde y sin marcar; se pueden volver a hacer.", "hechos": hechos})
+    return hechos
+
+
 def texto_triaje(t):
     """Lo que dice el selector de proyectos de un proyecto analizado: '· Restaurar: 23 clips de cámara, 1 h 05 min'."""
     if not t or not EXPORT_OK:
@@ -2603,24 +2788,29 @@ def texto_triaje(t):
                                              fmt_duracion(t.get("segundos")), ", %d SIN AUDIO" % t["sin_audio"] if t.get("sin_audio") else "")
 
 
-def dialogo_proyectos(raiz, lista, marcados, hechos=(), triaje=None, analizados=None):
+def dialogo_proyectos(raiz, lista, marcados, hechos=(), triaje=None, analizados=None, terminados=None, al_marcar=None):
     """Ventana con la lista de proyectos para marcar los que se quieren hacer. Devuelve los nombres elegidos
-    (en el orden de la lista) o None si se cancela. marcados: los elegidos antes (None = todos). triaje: {proyecto: fila
-    de triaje.json} del último análisis (qué proyectos restaurar): sale en cada fila y da el botón "Solo los de material".
-    analizados: {proyecto: fecha} de los que ya están en el análisis guardado ("✓ analizado": no hace falta repetirlo)."""
+    (en el orden de la lista) o None si se cancela. marcados: los elegidos antes (None = todos menos los HECHOS). triaje:
+    {proyecto: fila de triaje.json} del último análisis (qué proyectos restaurar): sale en cada fila y da el botón "Solo
+    los de material". analizados: {proyecto: fecha} de los que ya están en el análisis guardado ("✓ analizado": no hace
+    falta repetirlo). terminados: {proyecto: fecha} de los marcados a mano como HECHOS: en verde y sin marcar (se pueden
+    marcar para hacerlos otra vez). al_marcar(nombres, hecho) guarda la marca y devuelve los terminados nuevos (None: sin
+    carpeta de brutos, no se puede marcar)."""
     import tkinter as tk
     from tkinter import ttk
     import tema
-    triaje, analizados = triaje or {}, analizados or {}
+    triaje, analizados, terminados = triaje or {}, analizados or {}, dict(terminados or {})
     ya = lambda n: ("   ✓ analizado el %s" % str(analizados[n])[:10] if n in analizados else "") + ("   ✓ ya tiene brutos" if n in hechos else "")
     filas = [(p["nombre"], "%s   (%s%s)%s%s" % (p["nombre"], "carpeta sin proyecto de Avid" if p.get("sin_avid") else "%d bins" % p["bins"],
                                                   ", último cambio " + p["modificado"][:10] if p["modificado"] else "",
                                                   texto_triaje(triaje.get(p["nombre"])), ya(p["nombre"])))
              for p in lista]
     filas.append(("SIN_PROYECTO", "SIN_PROYECTO   (clips que no están en ningún bin)%s%s" % (texto_triaje(triaje.get("SIN_PROYECTO")), ya("SIN_PROYECTO"))))
+    hecho_txt = lambda n: ("✔ HECHO el %s/%s/%s   " % (terminados[n][8:10], terminados[n][5:7], terminados[n][:4])) if n in terminados else ""
     v = tk.Toplevel(raiz)
     v.title("Elegir proyectos")
-    v.geometry("980x540" if triaje or analizados else "720x540")
+    ancho_v = 980 if triaje or analizados else 760
+    v.geometry("%dx%d" % (ancho_v, 580))
     v.configure(bg=tema.FONDO)
     v.transient(raiz)
     ttk.Label(v, text="%d proyectos en el disco. Marca los que quieres hacer ahora (clic para marcar o desmarcar): se analizan\n"
@@ -2629,7 +2819,7 @@ def dialogo_proyectos(raiz, lista, marcados, hechos=(), triaje=None, analizados=
                          if triaje else "")
                       + ("\nLos \"✓ analizado\" están guardados: no hace falta volver a analizarlos, y al analizar otros se suman a ellos."
                          if analizados else ""),
-              padding=12).pack(anchor="w")
+              padding=12, wraplength=ancho_v - 30).pack(anchor="w")
     caja = ttk.Frame(v, padding=(12, 0))
     caja.pack(fill="both", expand=True)
     lb = tema.lista(caja, selectmode="multiple", selectbackground=tema.ACENTO, selectforeground=tema.SOBRE_ACENTO)
@@ -2637,18 +2827,39 @@ def dialogo_proyectos(raiz, lista, marcados, hechos=(), triaje=None, analizados=
     lb.configure(yscrollcommand=sb.set)
     lb.pack(side="left", fill="both", expand=True)
     sb.pack(side="right", fill="y")
+    def pintar(i):
+        nombre, texto = filas[i]
+        lb.delete(i)
+        lb.insert(i, hecho_txt(nombre) + texto)
+        lb.itemconfig(i, foreground=tema.BIEN if nombre in terminados else tema.TEXTO)
     for i, (nombre, texto) in enumerate(filas):
-        lb.insert("end", texto)
-        if marcados is None or nombre in marcados:
+        lb.insert("end", "")
+        pintar(i)
+        if (marcados is None and nombre not in terminados) or (marcados is not None and nombre in marcados):
             lb.selection_set(i)
     resultado = {"elegidos": None}
+
+    def marcar(hecho):
+        """Los elegidos pasan a HECHOS (en verde y sin marcar) o dejan de serlo."""
+        sel = list(lb.curselection())
+        if not sel or al_marcar is None:
+            return
+        terminados.clear()
+        terminados.update(al_marcar([filas[i][0] for i in sel], hecho))
+        for i in sel:
+            pintar(i)
+            if hecho:
+                lb.selection_clear(i)
+            else:
+                lb.selection_set(i)
 
     def aceptar():
         resultado["elegidos"] = [filas[i][0] for i in lb.curselection()]
         v.destroy()
     pie = ttk.Frame(v, padding=12)
     pie.pack(fill="x")
-    ttk.Button(pie, text="Todos", command=lambda: lb.selection_set(0, "end")).pack(side="left")
+    ttk.Button(pie, text="Todos", command=lambda: [lb.selection_clear(0, "end")] + [  # los HECHOS no: se marcan uno a uno
+        lb.selection_set(i) for i, (n, _) in enumerate(filas) if n not in terminados]).pack(side="left")
     ttk.Button(pie, text="Ninguno", command=lambda: lb.selection_clear(0, "end")).pack(side="left", padx=6)
     ttk.Button(pie, text="Solo los que faltan", command=lambda: [lb.selection_clear(0, "end")] + [lb.selection_set(i) for i, (n, _) in enumerate(filas) if n not in hechos]).pack(side="left")
     if triaje:  # qué proyectos restaurar, según el último análisis
@@ -2656,6 +2867,19 @@ def dialogo_proyectos(raiz, lista, marcados, hechos=(), triaje=None, analizados=
             lb.selection_set(i) for i, (n, _) in enumerate(filas) if (triaje.get(n) or {}).get("veredicto") == "restaurar"]).pack(side="left", padx=6)
     ttk.Button(pie, text="Aceptar", style="Elegido.TButton", command=aceptar).pack(side="right")
     ttk.Button(pie, text="Cancelar", style="Fantasma.TButton", command=v.destroy).pack(side="right", padx=6)
+    pie2 = ttk.Frame(v, padding=(12, 0, 12, 12))
+    pie2.pack(fill="x")
+    bt_hecho = ttk.Button(pie2, text="✔  Marcar los elegidos como HECHOS", style="Hecho.TButton", command=lambda: marcar(True))
+    bt_hecho.pack(side="left")
+    bt_quitar = ttk.Button(pie2, text="Quitar HECHO", style="Fantasma.TButton", command=lambda: marcar(False))
+    bt_quitar.pack(side="left", padx=6)
+    if al_marcar is None:
+        for b in (bt_hecho, bt_quitar):
+            b.state(["disabled"])
+    ttk.Label(v, text="Para marcar proyectos como HECHOS, elige antes la carpeta de brutos." if al_marcar is None else
+              "Los HECHOS salen en verde y sin marcar: no se vuelven a hacer salvo que los marques.", style="Suave.TLabel",
+              wraplength=ancho_v - 30, padding=(12, 0, 12, 12)).pack(anchor="w")
+    v.lb, v.filas, v.marcar = lb, filas, marcar  # para las pruebas
     v.grab_set()
     raiz.wait_window(v)
     return resultado["elegidos"]
@@ -2688,6 +2912,7 @@ def main():
     ap.add_argument("--media-extra", help='Otras carpetas con media del disco (media repartida en varios discos), separadas por ";". Solo se leen')
     ap.add_argument("--sin-cache", action="store_true", help="Volver a leer todos los MXF aunque ya se leyeran en un análisis anterior")
     ap.add_argument("--listar-proyectos", action="store_true", help="Lista los proyectos de --origen (lectura rápida) y sale")
+    ap.add_argument("--que-hay", action="store_true", help="Paso 0: dice qué hay en cada carpeta de --origen (y de --media-extra) y sale")
     ap.add_argument("--usar-analisis", metavar="CARPETA", help="Exporta los brutos (--brutos) con un análisis ya hecho (carpeta Diagnostico_...), sin repetirlo")
     ap.add_argument("--sin-actualizar", action="store_true", help="Sin efecto (se mantiene por compatibilidad): ya no se busca versión nueva al abrir")
     ap.add_argument("--actualizar-ahora", action="store_true", help="Solo .exe: buscar e instalar la última versión sin abrir la ventana ni reabrir")
@@ -2705,6 +2930,16 @@ def main():
         r = actualizar.actualizar(BUILD, carpeta_base(), progreso=print, relanzar=False)
         print(r)
         sys.exit(0 if r in ("al_dia", "cambio_lanzado") else 1)
+    if args.que_hay:
+        if not args.origen:
+            ap.error("--que-hay requiere --origen")
+        filas = que_hay([args.origen] + [x.strip() for x in (args.media_extra or "").split(";") if x.strip()])
+        for f in filas:
+            print("%s\t%s\t%s" % (f["carpeta"], f["tipo"], f["texto"]))
+            for x in f["dentro"]:
+                print("  %s\t%s\t%s" % (x["carpeta"], x["tipo"], x["texto"]))
+        print(resumen_que_hay(filas))
+        return
     if args.listar_proyectos:
         if not args.origen:
             ap.error("--listar-proyectos requiere --origen")

@@ -121,6 +121,7 @@ class App:
         # Proyectos del disco elegido, leídos solos al elegirlo (listar_proyectos): el botón "Elegir proyectos" los reutiliza
         self.vista_disco = {"origen": None, "lista": None, "turno": 0}
         self.espera_disco = None
+        self.v_que_hay = None  # ventana del paso 0 (qué hay en el disco)
         self.cronometro = None
 
         self.cabecera()
@@ -295,6 +296,8 @@ class App:
 
         fila = ttk.Frame(izq, style="Fondo.TFrame")
         fila.pack(fill="x", pady=(10, 0))
+        self.bt_que_hay = ttk.Button(fila, text="0 · Qué hay en el disco", command=self.ver_que_hay)
+        self.bt_que_hay.pack(side="left", padx=(0, 8))
         self.bt_proy = ttk.Button(fila, text="☰  Elegir proyectos: todos", style="Proyectos.TButton", command=self.elegir_proyectos)
         self.bt_proy.pack(side="left")
         self.lbl_proy = ttk.Label(fila, text="", style="Suave.TLabel")
@@ -367,6 +370,95 @@ class App:
             self.avanzadas.pack(fill="x", pady=(12, 0), before=self.barra)
             self.bt_avanzadas.configure(text="Opciones avanzadas ▾")
 
+    # --- paso 0: qué hay en el disco -------------------------------------------------------------------------------
+
+    def ver_que_hay(self):
+        """Paso 0: recorre las carpetas del disco y de los otros orígenes y dice qué hay en cada una (proyecto de Avid,
+        MOV, MP4, tarjetas, vacía, mezclado), sin abrir ningún fichero. Se lee por detrás; la ventana se rellena al acabar."""
+        from tkinter import messagebox
+        if not self.origen.get() or not Path(self.origen.get()).is_dir():
+            return messagebox.showwarning("Falta el disco", "Elige primero el disco o la carpeta de Avid.", parent=self.raiz)
+        if self.v_que_hay is not None and self.v_que_hay.winfo_exists():
+            self.v_que_hay.destroy()
+        origenes = [self.origen.get()] + [x for x in self.estado["media_extra"] if Path(x).is_dir()]
+        self.v_que_hay = self.ventana_que_hay(origenes)
+        da = self.da
+
+        def leer():
+            try:
+                self.cola.put(("que_hay", (da.que_hay(origenes, progreso=lambda m: self.cola.put(("que_hay_avance", m))), None)))
+            except Exception as e:
+                self.cola.put(("que_hay", (None, str(e))))
+        threading.Thread(target=leer, daemon=True).start()
+
+    def ventana_que_hay(self, origenes):
+        tk, ttk = self.tk, self.ttk
+        v = tk.Toplevel(self.raiz)
+        v.title("Paso 0 · Qué hay en el disco")
+        ancho, alto = min(1100, self.raiz.winfo_screenwidth() - 60), min(620, self.raiz.winfo_screenheight() - 100)
+        v.geometry("%dx%d" % (ancho, alto))
+        v.configure(bg=tema.FONDO)
+        v.transient(self.raiz)
+        ttk.Label(v, text="Qué hay en cada carpeta de %s (solo se miran nombres y tamaños; no se abre nada). Las carpetas mezcladas "
+                         "se abren para ver qué hay dentro." % "; ".join(origenes), style="TLabel", wraplength=ancho - 40,
+                  padding=(14, 12, 14, 6)).pack(anchor="w")
+        caja = ttk.Frame(v, style="Fondo.TFrame", padding=(14, 0))
+        caja.pack(fill="both", expand=True)
+        cols = ("que", "ficheros", "tam")
+        tv = ttk.Treeview(caja, columns=cols, show="tree headings", selectmode="browse")
+        tv.heading("#0", text="CARPETA")
+        tv.column("#0", width=int(ancho * 0.3), stretch=True)
+        for c, t, w in zip(cols, ("QUÉ HAY", "FICHEROS", "TAMAÑO"), (int(ancho * 0.5), 80, 90)):
+            tv.heading(c, text=t)
+            tv.column(c, width=w, anchor="w" if c == "que" else "e", stretch=c == "que")
+        tv.tag_configure("vacía", foreground=tema.SUAVE)
+        tv.tag_configure("sin vídeo", foreground=tema.SUAVE)
+        tv.tag_configure("mezclado", foreground=tema.ACENTO)
+        tv.tag_configure("Avid", foreground=tema.BIEN)
+        sb = ttk.Scrollbar(caja, orient="vertical", command=tv.yview)
+        tv.configure(yscrollcommand=sb.set)
+        tv.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        pie = ttk.Frame(v, style="Fondo.TFrame", padding=14)
+        pie.pack(fill="x")
+        v.lbl = ttk.Label(pie, text="Leyendo el disco…", style="Suave.TLabel")
+        v.lbl.pack(side="left")
+        ttk.Button(pie, text="Cerrar", style="Fantasma.TButton", command=v.destroy).pack(side="right")
+        v.bt_csv = ttk.Button(pie, text="Guardar como CSV…", command=self.guardar_que_hay)
+        v.bt_csv.pack(side="right", padx=6)
+        v.bt_csv.state(["disabled"])
+        v.tv, v.filas = tv, []
+        return v
+
+    def pintar_que_hay(self, filas, error):
+        v = self.v_que_hay
+        if v is None or not v.winfo_exists():
+            return
+        if error is not None:
+            v.lbl.configure(text="No se ha podido leer el disco: %s" % error, style="Aviso.TLabel")
+            return
+        v.filas = filas
+        varios = len({f["origen"] for f in filas}) > 1
+        for f in filas:
+            nombre = f["carpeta"] + ("   (%s)" % f["origen"] if varios else "")
+            padre = v.tv.insert("", "end", text=nombre, values=(f["texto"], f["ficheros"], self.da._tamano(f["bytes"])), tags=(f["tipo"],),
+                                open=f["tipo"] == "mezclado")
+            for d in f["dentro"]:
+                v.tv.insert(padre, "end", text=d["carpeta"], values=(d["texto"], d["ficheros"], self.da._tamano(d["bytes"])), tags=(d["tipo"],))
+        v.lbl.configure(text=self.da.resumen_que_hay(filas), style="TLabel")
+        v.bt_csv.state(["!disabled"])
+
+    def guardar_que_hay(self):
+        from tkinter import filedialog
+        v = self.v_que_hay
+        if v is None or not v.winfo_exists() or not v.filas:
+            return
+        ruta = filedialog.asksaveasfilename(title="Guardar qué hay en el disco", defaultextension=".csv", parent=v,
+                                            initialfile="que_hay_en_el_disco.csv", filetypes=[("CSV", "*.csv")])
+        if ruta:
+            self.da.guardar_que_hay(v.filas, ruta)
+            v.lbl.configure(text="Guardado en %s" % ruta, style="Suave.TLabel")
+
     def programar_vista_disco(self):
         """Medio segundo después de cambiar la carpeta del disco (para no leer a cada letra si se escribe a mano)."""
         if self.espera_disco:
@@ -404,6 +496,13 @@ class App:
             return
         self.vista_disco.update(origen=origen, lista=lista)
         self.lbl_disco.configure(text=resumen_disco(lista), style="TLabel" if lista else "Aviso.TLabel")
+        # los proyectos marcados como HECHOS no entran salvo que se elijan a mano
+        terminados = self.da.leer_hechos(self.brutos.get()) if self.brutos.get() else {}
+        if terminados and self.estado["proyectos"] is None and lista:
+            todos = [p["nombre"] for p in lista] + ["SIN_PROYECTO"]
+            self.estado["total_proyectos"] = len(todos)
+            self.estado["proyectos"] = [n for n in todos if n not in terminados]
+            self.pintar_proyectos()
 
     def pintar_proyectos(self):
         p = self.estado["proyectos"]
@@ -413,7 +512,9 @@ class App:
             self.bt_analizar.configure(text="Analizar todo el disco")
         else:
             self.bt_proy.configure(text="☰  Elegir proyectos: %d de %d" % (len(p), self.estado.get("total_proyectos", len(p))))
-            texto = "Solo " + ", ".join(p)
+            terminados = self.da.leer_hechos(self.brutos.get()) if self.brutos.get() else {}
+            fuera = len([n for n in terminados if n not in p])
+            texto = ("%d HECHO%s, fuera. " % (fuera, "" if fuera == 1 else "S") if fuera else "") + "Solo " + ", ".join(p)
             self.lbl_proy.configure(text=texto[:90] + ("…" if len(texto) > 90 else ""))
             self.bt_analizar.configure(text="Analizar %d proyecto%s" % (len(p), "" if len(p) == 1 else "s"))
 
@@ -520,8 +621,11 @@ class App:
             media = set()
         lista = [p for p in lista if p["nombre"] not in media]
         hechos = da.brutos_hechos(self.brutos.get()) if self.brutos.get() else set()
+        carpeta_brutos = self.brutos.get()
+        terminados = da.leer_hechos(carpeta_brutos) if carpeta_brutos else {}  # marcados a mano como HECHOS
+        al_marcar = (lambda nombres, hecho: da.marcar_hechos(carpeta_brutos, nombres, hecho)) if carpeta_brutos else None
         elegidos = da.dialogo_proyectos(self.raiz, lista, self.estado["proyectos"], hechos, self.triaje_actual(),
-                                        self.analizados([p["nombre"] for p in lista] + ["SIN_PROYECTO"]))
+                                        self.analizados([p["nombre"] for p in lista] + ["SIN_PROYECTO"]), terminados, al_marcar)
         if elegidos is None:
             return
         todos = [p["nombre"] for p in lista] + ["SIN_PROYECTO"]
@@ -1125,6 +1229,13 @@ class App:
                     continue
                 if tipo == "vista_disco":
                     self.al_leer_disco(*msg)
+                    continue
+                if tipo == "que_hay":
+                    self.pintar_que_hay(*msg)
+                    continue
+                if tipo == "que_hay_avance":
+                    if self.v_que_hay is not None and self.v_que_hay.winfo_exists():
+                        self.v_que_hay.lbl.configure(text=msg)
                     continue
                 if tipo == "actualizacion":
                     if msg == "cambio_lanzado":  # el .bat espera a que se cierre para cambiar de versión y reabrir

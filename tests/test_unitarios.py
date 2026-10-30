@@ -2073,6 +2073,58 @@ class MaterialDeOtraEpoca(unittest.TestCase):
         self.assertEqual(nombres, ["P NOVIEMBRE DE 2002", "P ABRIL DE 2019"])
 
 
+@unittest.skipIf(da is None, "sin pyavb")
+class QueHayEnElDisco(unittest.TestCase):
+    """Paso 0 (30/10/2026): qué hay en cada carpeta de los orígenes, sin abrir ningún fichero."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        for f, tam in (("PANAMA/PANAMA.avp", 10), ("PANAMA/PANAMA Bin.avb", 10), ("PANAMA/SearchData/x.dat", 5),
+                       ("Avid MediaFiles/MXF/1/AV01.mxf", 1000), ("Avid MediaFiles/MXF/1/AA01.mxf", 500),
+                       ("MOVILES/IMG_0001.MOV", 100), ("MOVILES/IMG_0002.mov", 100), ("DESCARGAS/video.mp4", 50),
+                       ("MEZCLA/cosas/a.mov", 10), ("MEZCLA/b.mp4", 10), ("MEZCLA/proyecto/X.avp", 1), ("MEZCLA/proyecto/X.avb", 1),
+                       ("TARJETA/CONTENTS/VIDEO/0001AB.MXF", 300), ("TARJETA/CONTENTS/CLIP/0001AB.XML", 1),
+                       ("DOCS/guion.docx", 3), ("DOCS/.DS_Store", 1), ("suelto.mp4", 20)):
+            (self.tmp / f).parent.mkdir(parents=True, exist_ok=True)
+            (self.tmp / f).write_bytes(b"x" * tam)
+        (self.tmp / "VACIA").mkdir()
+        (self.tmp / "$RECYCLE.BIN").mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_que_hay(self):
+        filas = da.que_hay([str(self.tmp)])
+        por = {f["carpeta"]: f for f in filas}
+        self.assertEqual(list(por), ["Avid MediaFiles", "DESCARGAS", "DOCS", "MEZCLA", "MOVILES", "PANAMA", "TARJETA", "VACIA", "(raíz)"])
+        self.assertEqual({k: f["tipo"] for k, f in por.items()},
+                         {"Avid MediaFiles": "Avid", "DESCARGAS": "MP4", "DOCS": "sin vídeo", "MEZCLA": "mezclado", "MOVILES": "MOV",
+                          "PANAMA": "Avid", "TARJETA": "tarjeta P2", "VACIA": "vacía", "(raíz)": "MP4"})
+        self.assertEqual(por["PANAMA"]["texto"], "Proyecto de Avid (1 bin)")
+        self.assertEqual(por["MOVILES"]["texto"], "2 MOV")
+        self.assertEqual(por["Avid MediaFiles"]["texto"], "Media de Avid (2 ficheros, 2 KB)")
+        self.assertEqual(por["TARJETA"]["texto"], "Tarjeta P2 (1 vídeo)")
+        self.assertEqual(por["VACIA"]["texto"], "No hay nada")
+        self.assertEqual(por["MEZCLA"]["texto"], "Mezclado: proyecto de Avid (1 bin), 1 MOV, 1 MP4")
+        self.assertEqual([(d["carpeta"], d["tipo"]) for d in por["MEZCLA"]["dentro"]],
+                         [("cosas", "MOV"), ("proyecto", "Avid"), ("(sueltos)", "MP4")])
+        self.assertEqual(por["DOCS"]["ficheros"], 1)  # .DS_Store no cuenta
+        self.assertEqual(da.resumen_que_hay(filas), "9 carpetas: 2 de Avid, 2 MP4, 1 sin vídeo, 1 mezclada, 1 MOV, 1 tarjeta P2, 1 vacía")
+        csv_ = self.tmp / "que_hay.csv"
+        da.guardar_que_hay(filas, csv_)
+        lineas = csv_.read_text(encoding="utf-8-sig").splitlines()
+        self.assertEqual(lineas[0], "Origen;Carpeta;Subcarpeta;Tipo;Qué hay;Ficheros;Bytes")
+        self.assertIn("MEZCLA;cosas;MOV;1 MOV;1;10", "\n".join(x.split(";", 1)[1] for x in lineas[1:]))
+
+    def test_proyectos_hechos(self):
+        brutos = self.tmp / "brutos"
+        self.assertEqual(da.leer_hechos(brutos), {})
+        self.assertEqual(sorted(da.marcar_hechos(brutos, ["PANAMA", "CHAVELA VARGAS"])), ["CHAVELA VARGAS", "PANAMA"])
+        self.assertEqual(sorted(da.leer_hechos(brutos)), ["CHAVELA VARGAS", "PANAMA"])
+        self.assertEqual(list(da.marcar_hechos(brutos, ["PANAMA"], hecho=False)), ["CHAVELA VARGAS"])
+        self.assertRegex(da.leer_hechos(brutos)["CHAVELA VARGAS"], r"^\d{4}-\d\d-\d\d \d\d:\d\d$")
+
+
 class SoloSonido(unittest.TestCase):
     """Los clips que solo tienen sonido no van a ningún bruto ni se enseñan: ni en el montaje, ni como descartados, ni en
     el triaje (30/10/2026)."""

@@ -348,6 +348,8 @@ def final():
     # Disco de prueba: con un generador falso (el de verdad son 800 MB y ya se usa para toda esta prueba) se comprueba
     # que deja elegidas sus carpetas (disco, otro origen, informes, brutos) y el origen de DUPLICADO para ver los repetidos
     base = Path(DESTINO) / "programa"
+    ffmpeg = d.localizar_ffmpeg()  # el de bin/ junto al programa de verdad (en Windows no está en el PATH)
+    d.localizar_ffmpeg = lambda: ffmpeg
     d.carpeta_base = lambda: base
 
     class Falso:

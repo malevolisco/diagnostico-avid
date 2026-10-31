@@ -96,6 +96,8 @@ class PantallaMontaje:
         self.ffplay = mj.buscar_ffplay(ffmpeg)
         self.sonando = None  # {"procesos", "n" (clip), "desde" (s del bruto), "t0", "fin"}: "Ver y oír" en marcha
         self.miniaturas = {}  # (clave, segundo) -> imagen pequeña para la tira de la línea de tiempo
+        self.ondas = {}  # clave -> picos del sonido (mj.sacar_onda), para la forma de onda de la línea de tiempo
+        self.ondas_en_curso, self.ondas_fallidas = set(), set()
         self.rango_linea = None
 
         f = self.marco = ttk.Frame(contenedor, style="Fondo.TFrame")
@@ -161,7 +163,7 @@ class PantallaMontaje:
         ctrl = ttk.Frame(visor_caja, style="Fondo.TFrame")
         ctrl.pack(pady=(4, 0) if compacto else (8, 0))
         ttk.Button(ctrl, text="◀◀", width=4, command=lambda: self.mover_cursor(-10)).pack(side="left")
-        self.bt_sonido = ttk.Button(ctrl, text="▶  Ver y oír", style="Elegido.TButton", command=self.ver_y_oir)
+        self.bt_sonido = ttk.Button(ctrl, text="▶", width=4, style="Elegido.TButton", command=self.ver_y_oir)  # con sonido
         self.bt_sonido.pack(side="left", padx=(4, 0))
         if not self.ffplay:
             self.bt_sonido.state(["disabled"])
@@ -179,7 +181,7 @@ class PantallaMontaje:
         self.cb_vel.current(1)
         self.cb_vel.pack(side="left", padx=(12, 0))
         if not compacto:
-            ttk.Label(visor_caja, text="Espacio: ver y oír · ←/→: fotograma · Mayús+←/→: 1 s · Inicio/Fin: clip · J/L: 5 s",
+            ttk.Label(visor_caja, text="Espacio: reproducir · ←/→: fotograma · Mayús+←/→: 1 s · Inicio/Fin: clip · J/L: 5 s",
                       style="Suave.TLabel").pack(pady=(4, 0))
 
         ttk.Label(ficha, text="CLIP", style="Panel.Seccion.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
@@ -234,7 +236,7 @@ class PantallaMontaje:
         # ensancharía la página
         self.ayuda_linea = "Rueda: mover · Ctrl+rueda: zoom · Ctrl+clic: varios"
         if compacto:
-            self.ayuda_linea = "Espacio: ver y oír · ←/→: fotograma · Ctrl+rueda: zoom"
+            self.ayuda_linea = "Espacio: reproducir · ←/→: fotograma · Ctrl+rueda: zoom"
         self.lbl_encima = ttk.Label(leyenda, text=self.ayuda_linea, style="Suave.TLabel", width=38)
         self.lbl_encima.pack(side="left")
         self.lbl_foto = ttk.Label(leyenda, text="", style="Suave.TLabel")
@@ -444,7 +446,8 @@ class PantallaMontaje:
         vx1 = vx0 + max(200, cv.winfo_width())
         self.rango_linea = (round(vx0), round(vx1), round(ancho))
         arriba, abajo = 22, self.alto_linea - 6
-        alto_tira = abajo - arriba - 6
+        alto_onda = 16 if not self.compacto else 10  # la forma de onda, abajo de cada clip
+        alto_tira = abajo - arriba - 6 - alto_onda
         tw = int(alto_tira * 16 / 9)
         for (x0, x1, t0, d), (c, _, _) in zip(sitios, self.tramos()):
             if x1 < vx0 - 2 or x0 > vx1 + 2:
@@ -454,6 +457,8 @@ class PantallaMontaje:
             cv.create_rectangle(x0, arriba, x1, abajo, fill=color, outline="#ffffff" if marcado else tema.CAMPO, width=2 if marcado else 1)
             if PIL_OK and alto_tira >= 18 and x1 - x0 >= tw + 6 and c.get("clave") in self.listos:
                 self.pintar_tira(c, x0, x1, d, arriba + 3, tw, alto_tira, vx0, vx1)
+            if c.get("clave") in self.ondas:
+                self.pintar_onda(self.ondas[c.get("clave")], x0, x1, d, abajo - 2 - alto_onda, abajo - 2, vx0, vx1)
             if x1 - x0 > 50:
                 texto = cv.create_text(x0 + 5, arriba + 3, text=c["nombre"], anchor="nw", font=(tema.LETRA, 8), width=x1 - x0 - 8,
                                        fill=tema.SOBRE_ACENTO if color == tema.ACENTO else "#ffffff")
@@ -504,6 +509,23 @@ class PantallaMontaje:
             if foto:
                 cv.create_image(x, y, image=foto, anchor="nw")
             x += tw
+
+    def pintar_onda(self, picos, x0, x1, d, y0, y1, vx0, vx1):
+        """La forma de onda del clip en su franja de abajo: una raya cada 2 píxeles con el pico de ese tramo (solo lo
+        visible). Se ve dónde hay voz y dónde silencio sin reproducir nada."""
+        if not picos or x1 - x0 < 3 or not d:
+            return
+        cv, n, mitad, alto = self.linea, len(picos), (y0 + y1) / 2, (y1 - y0) / 2
+        cv.create_rectangle(x0 + 1, y0, x1 - 1, y1, fill=self.tema.CAMPO, outline="")
+        x = max(x0 + 1, vx0)
+        fin = min(x1 - 1, vx1)
+        por_px = n / (x1 - x0)
+        while x < fin:
+            a = int((x - x0) * por_px)
+            pico = max(picos[a:max(a + 1, int((x + 2 - x0) * por_px))] or b"\0")
+            h = max(0.5, pico / 255 * alto)
+            cv.create_line(x, mitad - h, x, mitad + h, fill=self.tema.ONDA)
+            x += 2
 
     def miniatura(self, clave, i, jpgs, tw, th):
         k = (clave, i, tw)
@@ -684,7 +706,30 @@ class PantallaMontaje:
                 funcion = mj.sacar_portada if tipo == "portada" else mj.sacar_fotogramas
                 fut = self.pool.submit(funcion, self.ffmpeg, self.origen / por_clave[t[1]]["fichero_video"], self.carpeta_visor, t[1])
                 fut.add_done_callback(lambda f, t=t: self.cola.put((t, f.result() if not f.cancelled() and not f.exception() else None)))
+        self.pedir_onda(cs, i)
         self.estado_fotogramas()
+
+    def pedir_onda(self, cs, i):
+        """La forma de onda del sonido de los clips, de una en una, empezando por el que se mira (la de otra vez se lee de
+        la carpeta del visor)."""
+        if self.ondas_en_curso:
+            return
+        for c in cs[i:] + cs[:i][::-1]:
+            k = c.get("clave")
+            if k in self.ondas or k in self.ondas_fallidas:
+                continue
+            ruta = mj.fichero_onda(self.carpeta_visor, k)
+            if ruta.exists():
+                self.ondas[k] = ruta.read_bytes()
+                continue
+            canales = eb.canales_clip(c, getattr(self.m, "mxf_por_ruta", None) or {})
+            if not canales:
+                self.ondas_fallidas.add(k)
+                continue
+            self.ondas_en_curso.add(k)
+            fut = self.pool.submit(mj.sacar_onda, self.ffmpeg, self.origen, c, canales, self.carpeta_visor, k)
+            fut.add_done_callback(lambda f, k=k: self.cola.put((("onda", k), f.result() if not f.cancelled() and not f.exception() else None)))
+            return
 
     def estado_fotogramas(self):
         cs = [c for c, _, _ in self.tramos() if c.get("fichero_video")]
@@ -699,6 +744,14 @@ class PantallaMontaje:
         try:
             while True:
                 (tipo, k), ruta = self.cola.get_nowait()
+                if tipo == "onda":
+                    self.ondas_en_curso.discard(k)
+                    if ruta:
+                        self.ondas[k] = Path(ruta).read_bytes()
+                    else:
+                        self.ondas_fallidas.add(k)
+                    hubo = True
+                    continue
                 if tipo == "exacto":
                     if ruta:
                         self.exactos[k] = ruta
@@ -860,7 +913,7 @@ class PantallaMontaje:
             self.lbl_foto.configure(text="No se puede reproducir: %s" % e)
             return
         self.sonando = {"procesos": (a, b), "n": n, "inicio": self.t - dentro, "dentro": dentro, "dur": d, "t0": time.monotonic()}
-        self.bt_sonido.configure(text="■  Parar")
+        self.bt_sonido.configure(text="■")
 
     def parar_sonido(self):
         s, self.sonando = self.sonando, None
@@ -877,7 +930,7 @@ class PantallaMontaje:
                 except Exception:
                     pass
         if hasattr(self, "bt_sonido"):
-            self.bt_sonido.configure(text="▶  Ver y oír")
+            self.bt_sonido.configure(text="▶")
 
     def seguir_sonido(self):
         """Mientras suena, el cursor va con el clip; cuando ffplay acaba, sigue con el siguiente clip (si se ha cerrado su

@@ -2817,97 +2817,167 @@ def texto_triaje(t):
 
 
 def dialogo_proyectos(raiz, lista, marcados, hechos=(), triaje=None, analizados=None, terminados=None, al_marcar=None):
-    """Ventana con la lista de proyectos para marcar los que se quieren hacer. Devuelve los nombres elegidos
-    (en el orden de la lista) o None si se cancela. marcados: los elegidos antes (None = todos menos los HECHOS). triaje:
-    {proyecto: fila de triaje.json} del último análisis (qué proyectos restaurar): sale en cada fila y da el botón "Solo
-    los de material". analizados: {proyecto: fecha} de los que ya están en el análisis guardado ("✓ analizado": no hace
+    """Ventana con la tabla de proyectos para marcar los que se quieren hacer. Devuelve los nombres elegidos (en el orden
+    de la lista) o None si se cancela. marcados: los elegidos antes (None = todos menos los HECHOS). triaje: {proyecto:
+    fila de triaje.json} del último análisis (qué proyectos restaurar): sale en la columna Propuesta y da el botón "Solo
+    los de material". analizados: {proyecto: fecha} de los que ya están en el análisis guardado ("analizado": no hace
     falta repetirlo). terminados: {proyecto: fecha} de los marcados a mano como HECHOS: en verde y sin marcar (se pueden
     marcar para hacerlos otra vez). al_marcar(nombres, hecho) guarda la marca y devuelve los terminados nuevos (None: sin
-    carpeta de brutos, no se puede marcar)."""
+    carpeta de brutos, no se puede marcar).
+    Tabla con casilla, proyecto, bins, último cambio, propuesta y estado; clic (o Espacio) marca o desmarca; buscador;
+    clic en el título de una columna ordena por ella."""
     import tkinter as tk
     from tkinter import ttk
     import tema
     triaje, analizados, terminados = triaje or {}, analizados or {}, dict(terminados or {})
-    ya = lambda n: ("   ✓ analizado el %s" % str(analizados[n])[:10] if n in analizados else "") + ("   ✓ ya tiene brutos" if n in hechos else "")
-    filas = [(p["nombre"], "%s   (%s%s)%s%s" % (p["nombre"], "carpeta sin proyecto de Avid" if p.get("sin_avid") else "%d bins" % p["bins"],
-                                                  ", último cambio " + p["modificado"][:10] if p["modificado"] else "",
-                                                  texto_triaje(triaje.get(p["nombre"])), ya(p["nombre"])))
-             for p in lista]
-    filas.append(("SIN_PROYECTO", "SIN_PROYECTO   (clips que no están en ningún bin)%s%s" % (texto_triaje(triaje.get("SIN_PROYECTO")), ya("SIN_PROYECTO"))))
-    hecho_txt = lambda n: ("✔ HECHO el %s/%s/%s   " % (terminados[n][8:10], terminados[n][5:7], terminados[n][:4])) if n in terminados else ""
+    fecha = lambda f: "%s/%s/%s" % (f[8:10], f[5:7], f[:4]) if f and len(f) >= 10 else ""
+    filas = [(p["nombre"], {"bins": "carpeta" if p.get("sin_avid") else str(p["bins"]), "cambio": (p.get("modificado") or "")[:10],
+                            "propuesta": texto_triaje(triaje.get(p["nombre"])).strip(" ·")}) for p in lista]
+    filas.append(("SIN_PROYECTO", {"bins": "—", "cambio": "", "propuesta": texto_triaje(triaje.get("SIN_PROYECTO")).strip(" ·") or
+                                   "clips que no están en ningún bin"}))
+
+    def estado(n):
+        if n in terminados:
+            return "✔ HECHO el %s" % fecha(terminados[n])
+        partes = (["analizado el %s" % fecha(str(analizados[n]))] if n in analizados else []) + (["con brutos"] if n in hechos else [])
+        return " · ".join(partes)
+
     v = tk.Toplevel(raiz)
     v.title("Elegir proyectos")
-    ancho_v = 980 if triaje or analizados else 760
-    v.geometry("%dx%d" % (ancho_v, 580))
+    ancho_v = min(1060, raiz.winfo_screenwidth() - 60)
+    v.geometry("%dx%d" % (ancho_v, min(640, raiz.winfo_screenheight() - 100)))
     v.configure(bg=tema.FONDO)
     v.transient(raiz)
-    ttk.Label(v, text="%d proyectos en el disco. Marca los que quieres hacer ahora (clic para marcar o desmarcar): se analizan\n"
-                      "y exportan solo esos. Los demás se pueden hacer otro día con la misma carpeta de brutos." % len(lista)
-                      + ("\nAl lado, lo que propone el último análisis (Qué proyectos restaurar): \"Solo los de material\" marca los de restaurar."
-                         if triaje else "")
-                      + ("\nLos \"✓ analizado\" están guardados: no hace falta volver a analizarlos, y al analizar otros se suman a ellos."
-                         if analizados else ""),
-              padding=12, wraplength=ancho_v - 30).pack(anchor="w")
-    caja = ttk.Frame(v, padding=(12, 0))
+    cab = ttk.Frame(v, padding=(16, 14, 16, 6))
+    cab.pack(fill="x")
+    ttk.Label(cab, text="Elegir proyectos", font=(tema.LETRA, 14, "bold")).pack(side="left")
+    lbl_cuenta = ttk.Label(cab, text="", style="Suave.TLabel")
+    lbl_cuenta.pack(side="left", padx=14)
+    busca = tk.StringVar()
+    ttk.Entry(cab, textvariable=busca, width=26).pack(side="right")
+    ttk.Label(cab, text="Buscar", style="Suave.TLabel").pack(side="right", padx=6)
+    ttk.Label(v, text="Se analizan y exportan solo los marcados; los demás se pueden hacer otro día con la misma carpeta de brutos."
+                      + (" La propuesta es la del último análisis (Qué proyectos restaurar)." if triaje else "")
+                      + (" Los analizados están guardados: no hace falta repetirlos." if analizados else ""),
+              style="Suave.TLabel", wraplength=ancho_v - 40, padding=(16, 0, 16, 8)).pack(anchor="w")
+
+    caja = ttk.Frame(v, padding=(16, 0))
     caja.pack(fill="both", expand=True)
-    lb = tema.lista(caja, selectmode="multiple", selectbackground=tema.ACENTO, selectforeground=tema.SOBRE_ACENTO)
-    sb = ttk.Scrollbar(caja, orient="vertical", command=lb.yview)
-    lb.configure(yscrollcommand=sb.set)
-    lb.pack(side="left", fill="both", expand=True)
+    cols = ("marca", "proyecto", "bins", "cambio", "propuesta", "estado")
+    tv = ttk.Treeview(caja, columns=cols, show="headings", selectmode="browse")
+    for c, texto, ancho, estira in (("marca", "", 34, False), ("proyecto", "PROYECTO", 260, True), ("bins", "BINS", 70, False),
+                                    ("cambio", "ÚLTIMO CAMBIO", 120, False), ("propuesta", "PROPUESTA", 280, True),
+                                    ("estado", "ESTADO", 190, False)):
+        tv.column(c, width=ancho, minwidth=30, stretch=estira, anchor="center" if c in ("marca", "bins") else "w")
+        if c == "marca":
+            tv.heading(c, text=texto)
+        else:
+            tv.heading(c, text=texto, command=lambda c=c: ordenar(c))
+    tv.tag_configure("hecho", foreground=tema.BIEN)
+    tv.tag_configure("marcado", foreground=tema.TEXTO)
+    tv.tag_configure("libre", foreground=tema.SUAVE)
+    sb = ttk.Scrollbar(caja, orient="vertical", command=tv.yview)
+    tv.configure(yscrollcommand=sb.set)
+    tv.pack(side="left", fill="both", expand=True)
     sb.pack(side="right", fill="y")
+    elegidos = {n for n, _ in filas if (marcados is None and n not in terminados) or (marcados is not None and n in marcados)}
+    orden = {"col": None, "inverso": False}
+
+    def valores(i):
+        n, d = filas[i]
+        return ("☑" if n in elegidos else "☐", n, d["bins"], fecha(d["cambio"]), d["propuesta"], estado(n))
+
     def pintar(i):
-        nombre, texto = filas[i]
-        lb.delete(i)
-        lb.insert(i, hecho_txt(nombre) + texto)
-        lb.itemconfig(i, foreground=tema.BIEN if nombre in terminados else tema.TEXTO)
-    for i, (nombre, texto) in enumerate(filas):
-        lb.insert("end", "")
+        n = filas[i][0]
+        tv.item(str(i), values=valores(i), tags=("hecho",) if n in terminados else ("marcado",) if n in elegidos else ("libre",))
+
+    def pintar_todo():
+        texto = busca.get().strip().lower()
+        visibles = [i for i, (n, d) in enumerate(filas) if not texto or texto in (n + " " + d["propuesta"]).lower()]
+        if orden["col"]:
+            clave = {"proyecto": lambda i: filas[i][0].lower(), "bins": lambda i: int(filas[i][1]["bins"]) if filas[i][1]["bins"].isdigit() else -1,
+                     "cambio": lambda i: filas[i][1]["cambio"], "propuesta": lambda i: filas[i][1]["propuesta"],
+                     "estado": lambda i: estado(filas[i][0])}[orden["col"]]
+            visibles.sort(key=clave, reverse=orden["inverso"])
+        for i in range(len(filas)):
+            if not tv.exists(str(i)):
+                tv.insert("", "end", iid=str(i))
+            pintar(i)
+            tv.detach(str(i))
+        for pos, i in enumerate(visibles):
+            tv.reattach(str(i), "", pos)
+        lbl_cuenta.configure(text="%d de %d marcados" % (len(elegidos), len(filas)))
+        bt_aceptar.configure(text="Aceptar (%d)" % len(elegidos))
+
+    def ordenar(c):
+        orden["inverso"] = not orden["inverso"] if orden["col"] == c else c == "cambio"  # la fecha, de la más nueva
+        orden["col"] = c
+        pintar_todo()
+
+    def cambiar(i):
+        n = filas[i][0]
+        elegidos.symmetric_difference_update({n})
         pintar(i)
-        if (marcados is None and nombre not in terminados) or (marcados is not None and nombre in marcados):
-            lb.selection_set(i)
-    resultado = {"elegidos": None}
+        lbl_cuenta.configure(text="%d de %d marcados" % (len(elegidos), len(filas)))
+        bt_aceptar.configure(text="Aceptar (%d)" % len(elegidos))
+
+    def al_pulsar(e):
+        fila = tv.identify_row(e.y)
+        if fila and tv.identify_region(e.x, e.y) == "cell":
+            tv.selection_set(fila)
+            cambiar(int(fila))
+            return "break"
+
+    def poner(nombres):
+        elegidos.clear()
+        elegidos.update(nombres)
+        pintar_todo()
 
     def marcar(hecho):
-        """Los elegidos pasan a HECHOS (en verde y sin marcar) o dejan de serlo."""
-        sel = list(lb.curselection())
-        if not sel or al_marcar is None:
+        """Los marcados pasan a HECHOS (en verde y sin marcar) o dejan de serlo."""
+        if not elegidos or al_marcar is None:
             return
+        cuales = [n for n, _ in filas if n in elegidos]
         terminados.clear()
-        terminados.update(al_marcar([filas[i][0] for i in sel], hecho))
-        for i in sel:
-            pintar(i)
-            if hecho:
-                lb.selection_clear(i)
-            else:
-                lb.selection_set(i)
+        terminados.update(al_marcar(cuales, hecho))
+        if hecho:
+            elegidos.difference_update(cuales)
+        pintar_todo()
+
+    resultado = {"elegidos": None}
 
     def aceptar():
-        resultado["elegidos"] = [filas[i][0] for i in lb.curselection()]
+        resultado["elegidos"] = [n for n, _ in filas if n in elegidos]
         v.destroy()
-    pie = ttk.Frame(v, padding=12)
+    tv.bind("<Button-1>", al_pulsar)
+    tv.bind("<space>", lambda e: tv.focus() and cambiar(int(tv.focus())))
+    busca.trace_add("write", lambda *a: pintar_todo())
+
+    pie = ttk.Frame(v, padding=(16, 10, 16, 6))
     pie.pack(fill="x")
-    ttk.Button(pie, text="Todos", command=lambda: [lb.selection_clear(0, "end")] + [  # los HECHOS no: se marcan uno a uno
-        lb.selection_set(i) for i, (n, _) in enumerate(filas) if n not in terminados]).pack(side="left")
-    ttk.Button(pie, text="Ninguno", command=lambda: lb.selection_clear(0, "end")).pack(side="left", padx=6)
-    ttk.Button(pie, text="Solo los que faltan", command=lambda: [lb.selection_clear(0, "end")] + [lb.selection_set(i) for i, (n, _) in enumerate(filas) if n not in hechos]).pack(side="left")
+    ttk.Button(pie, text="Todos", command=lambda: poner(n for n, _ in filas if n not in terminados)).pack(side="left")  # los HECHOS no
+    ttk.Button(pie, text="Ninguno", command=lambda: poner(())).pack(side="left", padx=6)
+    ttk.Button(pie, text="Solo los que faltan", command=lambda: poner(n for n, _ in filas if n not in hechos and n not in terminados)).pack(side="left")
     if triaje:  # qué proyectos restaurar, según el último análisis
-        ttk.Button(pie, text="Solo los de material", command=lambda: [lb.selection_clear(0, "end")] + [
-            lb.selection_set(i) for i, (n, _) in enumerate(filas) if (triaje.get(n) or {}).get("veredicto") == "restaurar"]).pack(side="left", padx=6)
-    ttk.Button(pie, text="Aceptar", style="Elegido.TButton", command=aceptar).pack(side="right")
+        ttk.Button(pie, text="Solo los de material", command=lambda: poner(
+            n for n, _ in filas if (triaje.get(n) or {}).get("veredicto") == "restaurar")).pack(side="left", padx=6)
+    bt_aceptar = ttk.Button(pie, text="Aceptar", style="Elegido.TButton", command=aceptar)
+    bt_aceptar.pack(side="right")
     ttk.Button(pie, text="Cancelar", style="Fantasma.TButton", command=v.destroy).pack(side="right", padx=6)
-    pie2 = ttk.Frame(v, padding=(12, 0, 12, 12))
+    pie2 = ttk.Frame(v, padding=(16, 0, 16, 14))
     pie2.pack(fill="x")
-    bt_hecho = ttk.Button(pie2, text="✔  Marcar los elegidos como HECHOS", style="Hecho.TButton", command=lambda: marcar(True))
+    bt_hecho = ttk.Button(pie2, text="✔  Marcar los marcados como HECHOS", style="Hecho.TButton", command=lambda: marcar(True))
     bt_hecho.pack(side="left")
     bt_quitar = ttk.Button(pie2, text="Quitar HECHO", style="Fantasma.TButton", command=lambda: marcar(False))
     bt_quitar.pack(side="left", padx=6)
     if al_marcar is None:
         for b in (bt_hecho, bt_quitar):
             b.state(["disabled"])
-    ttk.Label(v, text="Para marcar proyectos como HECHOS, elige antes la carpeta de brutos." if al_marcar is None else
-              "Los HECHOS salen en verde y sin marcar: no se vuelven a hacer salvo que los marques.", style="Suave.TLabel",
-              wraplength=ancho_v - 30, padding=(12, 0, 12, 12)).pack(anchor="w")
-    v.lb, v.filas, v.marcar = lb, filas, marcar  # para las pruebas
+    ttk.Label(pie2, text="Para marcar proyectos como HECHOS, elige antes la carpeta de brutos." if al_marcar is None else
+              "En verde y sin marcar: no se repiten salvo que los marques.", style="Suave.TLabel",
+              wraplength=ancho_v - 420).pack(side="left", padx=12)
+    pintar_todo()
+    v.tv, v.filas, v.marcar, v.poner, v.elegidos, v.cambiar = tv, filas, marcar, poner, elegidos, cambiar  # para las pruebas
     v.grab_set()
     raiz.wait_window(v)
     return resultado["elegidos"]

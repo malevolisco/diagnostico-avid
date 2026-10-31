@@ -361,6 +361,27 @@ class Visor(unittest.TestCase):
         self.assertEqual(montaje.orden_ffplay("ffplay", "1. CLIP")[-2:], ["nut", "-"])
 
 
+    def test_forma_de_onda(self):
+        """Un valor por fotograma (1/25 s) con el pico del sonido: donde hay sonido sube, donde hay silencio es 0. Se
+        guarda junto a los fotogramas del visor y no se repite."""
+        import subprocess
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=f=300:d=2,apad=pad_dur=2", "-ac", "1", "-c:a",
+                        "pcm_s16le", str(self.tmp / "A01.wav")], check=True)
+        clip = {"nombre": "X", "fichero_video": "V01.mxf", "ficheros": ["V01.mxf", "A01.wav"]}
+        canales = [{"ruta": "A01.wav", "flujo": 0, "canal": 0, "de": 1}]
+        ruta = montaje.sacar_onda("ffmpeg", self.tmp, clip, canales, self.tmp / "visor", "K:1")
+        picos = ruta.read_bytes()
+        self.assertEqual(len(picos), 4 * montaje.ONDA_POR_SEGUNDO)
+        self.assertTrue(all(p > 50 for p in picos[:45]) and all(p == 0 for p in picos[55:]), list(picos))
+        self.assertEqual(montaje.sacar_onda("no-existe-ffmpeg", self.tmp, clip, canales, self.tmp / "visor", "K:1"), ruta)
+        self.assertIsNone(montaje.sacar_onda("ffmpeg", self.tmp, clip, [], self.tmp / "visor", "K:2"))  # sin sonido
+
+    def test_picos(self):
+        import array
+        m = array.array("h", [0] * 160 + [32767] * 10 + [0] * 150 + [-8192] * 160)
+        self.assertEqual(list(montaje.picos(m.tobytes())), [0, 255, 128])
+
+
 class Regla(unittest.TestCase):
     def test_paso_regla(self):
         """Timecodes a intervalos redondos, sin pisarse (90 px), y marcas pequeñas entre ellos; con mucho zoom, cada

@@ -137,6 +137,9 @@ class App:
         self.destino.trace_add("write", lambda *a: self.cambio_carpetas())
         self.brutos.trace_add("write", lambda *a: self.cambio_carpetas())
         raiz.protocol("WM_DELETE_WINDOW", self.al_cerrar)
+        # Ajuste de desarrollo, sin botón: crear el disco de prueba (para probar el programa sin un disco real)
+        raiz.bind_all("<Control-Shift-KeyPress-D>", self.disco_de_prueba)
+        raiz.bind_all("<Control-Shift-KeyPress-d>", self.disco_de_prueba)
         self.escribe("Programa de diagnóstico de discos Avid (solo lectura). pyavb: %s. ffmpeg: %s."
                      % ("OK" if da.PYAVB_OK else "NO INSTALADO", "OK" if da.localizar_ffmpeg()[0] else "no encontrado"))
         self.ir("disco")
@@ -205,7 +208,7 @@ class App:
                   "actualizacion": "Buscando actualización…", "prueba": "Trabajando… creando el disco de prueba"}
         self.lbl_trabajo.configure(text=textos.get(que, ""))
         libre = ["!disabled"] if que is None else ["disabled"]
-        for b in (self.bt_analizar, self.bt_proy, self.bt_act, self.bt_prueba, self.bt_que_hay):
+        for b in (self.bt_analizar, self.bt_proy, self.bt_act, self.bt_que_hay):
             b.state(libre)
         self.bt_parar.state(["!disabled"] if que == "analisis" else ["disabled"])
         self.bt_parar_exp.state(["!disabled"] if que == "exportacion" else ["disabled"])
@@ -291,13 +294,16 @@ class App:
         self.pintar_media_extra()
         t.columnconfigure(1, weight=1)
 
-        self.lbl_disco = ttk.Label(izq, text="", style="TLabel")
-        self.lbl_disco.pack(anchor="w", pady=(12, 0))
+        # Lo que hay en el disco, y al lado el informe preliminar (qué hay en cada carpeta), antes de elegir y analizar
+        fila = ttk.Frame(izq, style="Fondo.TFrame")
+        fila.pack(fill="x", pady=(12, 0))
+        self.lbl_disco = ttk.Label(fila, text="", style="TLabel")
+        self.lbl_disco.pack(side="left")
+        self.bt_que_hay = ttk.Button(fila, text="⌕  Informe preliminar", style="Preliminar.TButton", command=self.ver_que_hay)
+        self.bt_que_hay.pack(side="right")
 
         fila = ttk.Frame(izq, style="Fondo.TFrame")
         fila.pack(fill="x", pady=(10, 0))
-        self.bt_que_hay = ttk.Button(fila, text="▤  Informe preliminar", style="Proyectos.TButton", command=self.ver_que_hay)
-        self.bt_que_hay.pack(side="left", padx=(0, 8))
         self.bt_proy = ttk.Button(fila, text="☰  Elegir proyectos: todos", style="Proyectos.TButton", command=self.elegir_proyectos)
         self.bt_proy.pack(side="left")
         self.lbl_proy = ttk.Label(fila, text="", style="Suave.TLabel")
@@ -312,8 +318,6 @@ class App:
         self.bt_parar.state(["disabled"])  # solo con algo en marcha
         self.bt_avanzadas = ttk.Button(fila, text="Opciones avanzadas ▸", style="Fantasma.TButton", command=self.plegar)
         self.bt_avanzadas.pack(side="right")
-        self.bt_prueba = ttk.Button(fila, text="Disco de prueba", style="Fantasma.TButton", command=self.disco_de_prueba)
-        self.bt_prueba.pack(side="right", padx=(0, 6))
         self.avanzadas = ttk.Frame(izq, style="Panel.TFrame", padding=(14, 10))
         for texto, var in (("Miniaturas de cada clip para el informe (más lento; el visor del montaje no las necesita)", self.minis),
                            ("Sin miniaturas, al menos una captura de cada clip de cámara para decidir qué proyectos restaurar", self.capturas),
@@ -380,8 +384,8 @@ class App:
         disco = base / "Disco de prueba"
         return disco, Path(str(disco) + "_media2"), base / "Disco de prueba - informes", base / "Disco de prueba - brutos"
 
-    def disco_de_prueba(self):
-        """Crea junto al programa un disco de Avid simulado (el de las pruebas automáticas: proyectos, bins, tarjetas, NTSC,
+    def disco_de_prueba(self, _=None):
+        """Ajuste de desarrollo, sin botón (Ctrl+Mayús+D): crea junto al programa un disco de Avid simulado (el de las pruebas automáticas: proyectos, bins, tarjetas, NTSC,
         agencias, efectos, trozos repetidos en DV y en HD, material de dos épocas, rutas con chino...) y deja elegidas sus
         carpetas, para probar Disco, Montaje y Exportar sin un disco real. Nada de él sale del PC."""
         from tkinter import messagebox

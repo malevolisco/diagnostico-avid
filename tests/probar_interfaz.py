@@ -81,6 +81,15 @@ def cabe(pagina, tambien_alto=False):
         comprobar(not d.barra_v.winfo_ismapped(), "%s no cabe de alto: pide %d px y hay %d" % (pagina, d.interior.winfo_reqheight(), d.lienzo.winfo_height()))
 
 
+def maximizar(si):
+    for orden in (lambda: app.raiz.state("zoomed" if si else "normal"), lambda: app.raiz.attributes("-zoomed", si)):
+        try:
+            orden()
+        except Exception:
+            pass
+    app.raiz.update()
+
+
 def todos(w):
     yield w
     for h in w.winfo_children():
@@ -274,6 +283,31 @@ def montar():
     comprobar(pm.escala()[0] >= vm.PPS_MAX * 0.75, "con el zoom máximo se debe llegar a los fotogramas: %.0f px/s" % pm.escala()[0])
     captura("3b_linea_zoom.png")
     pm.ajustar()
+    # Adaptable: maximizada (pensada para 1080p) el visor es grande; en una ventana más pequeña se recoloca (visor más
+    # pequeño, la ficha del clip fuera; en Disco, el panel de la derecha abajo) y todo sigue cabiendo de ancho
+    grande = (pm.vw, pm.vh)
+    for ancho, alto in ((1280, 760), (1100, 700)):
+        maximizar(False)  # maximizada, Windows no cambia el tamaño: como "Restaurar" en la barra de la ventana
+        app.raiz.geometry("%dx%d" % (ancho, alto))
+        app.raiz.update()
+        app.recolocar()
+        app.raiz.update()
+        cabe("montaje")
+        comprobar((pm.vw, pm.vh) < grande and not pm.ficha_vista, "en %dx%d el visor (%dx%d) debe encoger y la ficha salir"
+                  % (ancho, alto, pm.vw, pm.vh))
+        captura("3c_montaje_%dx%d.png" % (ancho, alto))
+    app.ir("disco")
+    app.raiz.update()
+    cabe("disco")
+    comprobar(app.disco_estrecha, "en una ventana estrecha el panel de la derecha de Disco debe ir abajo")
+    captura("3d_disco_estrecha.png")
+    app.raiz.geometry("%dx%d+0+0" % (app.raiz.winfo_screenwidth() - 16, app.raiz.winfo_screenheight() - 90))
+    maximizar(True)
+    app.raiz.update()
+    app.recolocar()
+    app.ir("montaje")
+    app.raiz.update()
+    comprobar((pm.vw, pm.vh) == grande and pm.ficha_vista, "al volver a agrandar, el visor y la ficha deben volver")
     # Fotograma a fotograma: la flecha avanza 1/25 s y el visor pide el fotograma exacto
     pm.t = 1.0
     pm.paso_fotograma(1)

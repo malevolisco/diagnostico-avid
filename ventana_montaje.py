@@ -109,7 +109,8 @@ class PantallaMontaje:
             pestanas(cab)
         if not compacto:
             ttk.Label(cab, text="Proyecto", style="Tarjeta.Suave.TLabel").pack(side="left")
-        self.cb_p = ttk.Combobox(cab, state="readonly", width=(22 if compacto else 26) if pestanas else 56)
+        self.ancho_cb_p = (22 if compacto else 26) if pestanas else 56
+        self.cb_p = ttk.Combobox(cab, state="readonly", width=self.ancho_cb_p)
         self.cb_p.pack(side="left", padx=8)
         self.lbl_p = ttk.Label(cab, text="", style="Tarjeta.Suave.TLabel", wraplength=150 if compacto else 200)
         self.lbl_p.pack(side="left", padx=6)
@@ -153,15 +154,19 @@ class PantallaMontaje:
         # dice nombre, fecha, duración y origen): así el visor, la línea de tiempo y la lista caben sin desplazar.
         arriba = ttk.Frame(centro, style="Fondo.TFrame")
         arriba.pack(fill="both" if compacto else "x", expand=compacto)
-        ficha = ttk.Frame(arriba, style="Panel.TFrame", padding=(14, 12))
+        ficha = self.ficha_caja = ttk.Frame(arriba, style="Panel.TFrame", padding=(14, 12))
         if not compacto:
             ficha.pack(side="right", fill="y")
-        visor_caja = ttk.Frame(arriba, style="Fondo.TFrame", padding=(8, 6, 8, 4) if compacto else (16, 10, 16, 6))
+        self.ficha_vista = not compacto
+        visor_caja = self.visor_caja = ttk.Frame(arriba, style="Fondo.TFrame", padding=(8, 6, 8, 4) if compacto else (16, 10, 16, 6))
         visor_caja.pack(side="left", fill="y" if compacto else "both", expand=not compacto)
         self.visor = tk.Canvas(visor_caja, width=self.vw, height=self.vh, bg="#0b0b0c", highlightthickness=1, highlightbackground=tema.BORDE)
         self.visor.pack()
-        ctrl = ttk.Frame(visor_caja, style="Fondo.TFrame")
-        ctrl.pack(pady=(4, 0) if compacto else (8, 0))
+        # Mandos y timecode: en una fila; en una ventana estrecha (o pantalla pequeña), el timecode debajo (adaptar)
+        mandos = self.mandos = ttk.Frame(visor_caja, style="Fondo.TFrame")
+        mandos.pack(pady=(4, 0) if compacto else (8, 0))
+        ctrl = ttk.Frame(mandos, style="Fondo.TFrame")
+        ctrl.grid(row=0, column=0)
         ttk.Button(ctrl, text="◀◀", width=4, command=lambda: self.mover_cursor(-10)).pack(side="left")
         self.bt_sonido = ttk.Button(ctrl, text="▶", width=4, style="Elegido.TButton", command=self.ver_y_oir)  # con sonido
         self.bt_sonido.pack(side="left", padx=(4, 0))
@@ -170,19 +175,20 @@ class PantallaMontaje:
         self.bt_play = ttk.Button(ctrl, text="⏩ Avance", command=self.reproducir)
         self.bt_play.pack(side="left", padx=4)
         ttk.Button(ctrl, text="▶▶", width=4, command=lambda: self.mover_cursor(10)).pack(side="left")
-        if compacto:  # el timecode, debajo: en una fila no cabe con un visor pequeño
-            ctrl = ttk.Frame(visor_caja, style="Fondo.TFrame")
-            ctrl.pack(pady=(2, 0))
+        ctrl = self.ctrl_tc = ttk.Frame(mandos, style="Fondo.TFrame")
+        self.tc_debajo = None
+        self.poner_tc(debajo=compacto)  # en una fila no cabe con un visor pequeño
         self.lbl_tc = ttk.Label(ctrl, text="00:00:00:00", style="TC.TLabel")
-        self.lbl_tc.pack(side="left", padx=(0 if compacto else 16, 8))
+        self.lbl_tc.pack(side="left", padx=(0, 8))
         self.lbl_total = ttk.Label(ctrl, text="", style="Suave.TLabel")
         self.lbl_total.pack(side="left")
         self.cb_vel = ttk.Combobox(ctrl, state="readonly", width=5, values=["x4", "x10", "x60"])
         self.cb_vel.current(1)
         self.cb_vel.pack(side="left", padx=(12, 0))
         if not compacto:
-            ttk.Label(visor_caja, text="Espacio: reproducir · ←/→: fotograma · Mayús+←/→: 1 s · Inicio/Fin: clip · J/L: 5 s",
-                      style="Suave.TLabel").pack(pady=(4, 0))
+            self.lbl_teclas = ttk.Label(visor_caja, text="Espacio: reproducir · ←/→: fotograma · Mayús+←/→: 1 s · Inicio/Fin: clip · J/L: 5 s",
+                                        style="Suave.TLabel", justify="center", wraplength=self.vw + 40)
+            self.lbl_teclas.pack(pady=(4, 0))
 
         ttk.Label(ficha, text="CLIP", style="Panel.Seccion.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
         self.lbl_nombre = ttk.Label(ficha, text="", style="Panel.Grande.TLabel", wraplength=200 if compacto else 270)
@@ -201,8 +207,15 @@ class PantallaMontaje:
         else:
             self.lbl_bruto.grid(row=20, column=0, columnspan=2, sticky="w", pady=(12, 0))
 
-        acc = ttk.Frame(centro, style="Panel.TFrame", padding=(8, 4) if compacto else (12, 6))
-        acc.pack(fill="x")
+        # Acciones y zoom: en una fila; en una ventana estrecha, el zoom debajo, a la derecha (adaptar)
+        filas_acc = ttk.Frame(centro, style="Panel.TFrame", padding=(8, 4) if compacto else (12, 6))
+        filas_acc.pack(fill="x")
+        filas_acc.columnconfigure(1, weight=1)
+        acc = ttk.Frame(filas_acc, style="Panel.TFrame")
+        acc.grid(row=0, column=0, sticky="w")
+        zoom = self.caja_zoom = ttk.Frame(filas_acc, style="Panel.TFrame")
+        self.zoom_debajo = None
+        self.poner_zoom(debajo=False)
         self.botones = []
         for texto, orden in (("Quitar", self.quitar), ("Subir", lambda: self.accion("subir")), ("Bajar", lambda: self.accion("bajar")),
                              ("← Bruto anterior" if not compacto else "← Bruto", lambda: self.accion("mover", -1)),
@@ -211,9 +224,10 @@ class PantallaMontaje:
             b = ttk.Button(acc, text=texto, style=accion, command=orden)
             b.pack(side="left", padx=(0, 4))
             self.botones.append(b)
-        ttk.Button(acc, text="+", width=3, style=fantasma, command=lambda: self.ampliar(2)).pack(side="right")
-        ttk.Button(acc, text="−", width=3, style=fantasma, command=lambda: self.ampliar(0.5)).pack(side="right", padx=4)
-        ttk.Button(acc, text="Todo", width=5, style=fantasma, command=self.ajustar).pack(side="right")  # el bruto entero
+        self.textos_bruto = {self.botones[3]: ("← Bruto anterior", "← Bruto"), self.botones[4]: ("Bruto siguiente →", "Bruto →")}
+        ttk.Button(zoom, text="+", width=3, style=fantasma, command=lambda: self.ampliar(2)).pack(side="right")
+        ttk.Button(zoom, text="−", width=3, style=fantasma, command=lambda: self.ampliar(0.5)).pack(side="right", padx=4)
+        ttk.Button(zoom, text="Todo", width=5, style=fantasma, command=self.ajustar).pack(side="right")  # el bruto entero
 
         lt = ttk.Frame(centro, style="Fondo.TFrame", padding=(8, 4, 8, 0) if compacto else (12, 6, 12, 0))
         lt.pack(fill="x")
@@ -228,10 +242,12 @@ class PantallaMontaje:
         self.linea.configure(xscrollcommand=self.al_desplazar_linea)
         leyenda = ttk.Frame(lt, style="Fondo.TFrame")
         leyenda.pack(fill="x", pady=(4, 0))
-        for color, texto in ((tema.CLIP, "cronológico" if compacto else "en orden cronológico"),
-                             (tema.ACENTO, "movido" if compacto else "movido a mano")):
+        self.textos_leyenda = {}
+        for color, largo, corto in ((tema.CLIP, "en orden cronológico", "cronológico"), (tema.ACENTO, "movido a mano", "movido")):
             tk.Frame(leyenda, bg=color, width=10, height=10).pack(side="left", padx=(0, 4))
-            ttk.Label(leyenda, text=texto, style="Suave.TLabel").pack(side="left", padx=(0, 14))
+            etiqueta = ttk.Label(leyenda, text=corto if compacto else largo, style="Suave.TLabel")
+            etiqueta.pack(side="left", padx=(0, 14))
+            self.textos_leyenda[etiqueta] = (largo, corto)
         # La ayuda, o el clip que hay bajo el ratón (en los cortos no cabe el nombre). Ancho fijo: si no, un nombre largo
         # ensancharía la página
         self.ayuda_linea = "Rueda: mover · Ctrl+rueda: zoom · Ctrl+clic: varios"
@@ -735,7 +751,8 @@ class PantallaMontaje:
         cs = [c for c, _, _ in self.tramos() if c.get("fichero_video")]
         hechos = sum(1 for c in cs if c.get("clave") in self.listos)
         if PIL_OK and self.ffmpeg:
-            self.lbl_foto.configure(text=("Fotogramas %d/%d" if self.compacto else "Fotogramas: %d de %d clips") % (hechos, len(cs)))
+            corta = self.compacto or getattr(self, "muy_estrecha", False)
+            self.lbl_foto.configure(text=("Fotogramas %d/%d" if corta else "Fotogramas: %d de %d clips") % (hechos, len(cs)))
 
     def vaciar_cola(self):
         if not self.vivo:
@@ -881,6 +898,61 @@ class PantallaMontaje:
 
     # --- ver y oír (ffplay) ------------------------------------------------------------------------------------
 
+    def poner_tc(self, debajo):
+        if debajo != self.tc_debajo:
+            self.tc_debajo = debajo
+            self.ctrl_tc.grid_forget()
+            self.ctrl_tc.grid(row=1, column=0, pady=(2, 0)) if debajo else self.ctrl_tc.grid(row=0, column=1, padx=(16, 0))
+
+    def poner_zoom(self, debajo):
+        if debajo != self.zoom_debajo:
+            self.zoom_debajo = debajo
+            self.caja_zoom.grid_forget()
+            self.caja_zoom.grid(row=1, column=0, columnspan=2, sticky="e", pady=(4, 0)) if debajo else \
+                self.caja_zoom.grid(row=0, column=1, sticky="e")
+
+    def adaptar(self, ancho, alto):
+        """Se recoloca para la ventana de ancho x alto (al abrir y al cambiar su tamaño): el visor, del tamaño que quepa
+        (tema.tamano_visor), y la ficha del clip, a la derecha si hay sitio (si no, lo mismo lo dice la lista de clips).
+        En una pantalla pequeña (compacto) ya va todo apretado y no cambia."""
+        if self.compacto or not self.vivo:
+            return
+        vw, vh = self.tema.tamano_visor(ancho, alto)
+        if (vw, vh) != (self.vw, self.vh):
+            self.vw, self.vh = vw, vh
+            self.visor.configure(width=vw, height=vh)
+            self.fotos.clear()
+            self.exactos.clear()
+            self.pedido_exacto = None
+            self.pintar_visor()
+        self.lbl_teclas.configure(wraplength=vw + 40)
+        self.poner_tc(debajo=ancho < 1350)
+        self.poner_zoom(debajo=ancho < 1350)
+        muy = self.muy_estrecha = ancho < 1200  # muy estrecha: textos y columnas más cortos
+        for etiqueta, (largo, corto) in self.textos_leyenda.items():
+            etiqueta.configure(text=corto if muy else largo)
+        self.lbl_encima.configure(width=28 if muy else 38)
+        self.estado_fotogramas()
+        for b, (largo, corto) in self.textos_bruto.items():
+            b.configure(text=corto if muy else largo)
+        self.cb_p.configure(width=18 if muy else self.ancho_cb_p)
+        self.lbl_p.configure(wraplength=110 if muy else 200)
+        for b in self.botones:
+            b.configure(style="Compacta.TButton" if muy else "Accion.TButton")
+        for lb in (self.lb_b, self.lb_q, self.lb_n, self.lb_f):
+            lb.configure(width=24 if muy else 34)
+        for c, w in zip(("n", "clip", "fecha", "dur", "origen", "montaje"),
+                        (36, 150, 126, 76, 120, 120) if muy else (44, 240, 150, 90, 170, 120)):
+            self.tv.column(c, width=w)
+        self.tv["displaycolumns"] = ("n", "clip", "fecha", "dur", "origen") if muy else ("n", "clip", "fecha", "dur", "origen", "montaje")
+        quiere = ancho >= 1350
+        if quiere != self.ficha_vista:
+            self.ficha_vista = quiere
+            if quiere:
+                self.ficha_caja.pack(side="right", fill="y", before=self.visor_caja)
+            else:
+                self.ficha_caja.pack_forget()
+
     def ver_y_oir(self):
         if self.sonando:
             self.parar_sonido()
@@ -976,7 +1048,7 @@ class PantallaMontaje:
                 return
             self.pedido_exacto = clave
             ruta = self.origen / c["fichero_video"]
-            fut = self.pool_exacto.submit(mj.fotograma_exacto, self.ffmpeg, ruta, clave[1] / FPS_BRUTO)
+            fut = self.pool_exacto.submit(mj.fotograma_exacto, self.ffmpeg, ruta, clave[1] / FPS_BRUTO, tamano=(self.vw, self.vh))
             fut.add_done_callback(lambda f: self.cola.put((("exacto", clave), f.result() if not f.cancelled() and not f.exception() else None)))
         self.espera_exacto = self.marco.after(150, lanzar)
 

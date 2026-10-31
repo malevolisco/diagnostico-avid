@@ -34,6 +34,8 @@ BIEN = "#6fdc9b"
 CLIP = "#3d6fa8"
 CABEZAL = "#ff5252"
 HECHO = BIEN  # proyectos marcados como HECHOS: en verde
+PRELIMINAR = "#4ec3c0"  # el informe preliminar: turquesa con borde, distinto del azul de Elegir proyectos
+ONDA = "#8fd3b0"  # la forma de onda del sonido en la línea de tiempo
 DETENER = "#9e3434"  # rojo apagado: se ve sin competir con el naranja de la acción principal
 
 LETRA = "Segoe UI"
@@ -107,6 +109,11 @@ def aplicar(raiz):
     e.map("Detener.TButton", background=[("disabled", PANEL), ("pressed", "#7d2626"), ("active", "#b54545")],
           foreground=[("disabled", "#6b6f75")], bordercolor=[("disabled", BORDE)], lightcolor=[("disabled", PANEL)],
           darkcolor=[("disabled", PANEL)])
+    # El informe preliminar: va antes de todo y no analiza nada; con borde turquesa y sin relleno, para no confundirlo
+    e.configure("Preliminar.TButton", background=FONDO, foreground=PRELIMINAR, bordercolor=PRELIMINAR, lightcolor=FONDO,
+                darkcolor=FONDO, font=letras["negrita"], padding=(12, 5))
+    e.map("Preliminar.TButton", background=[("disabled", FONDO), ("pressed", "#1d3a3a"), ("active", "#16302f")],
+          foreground=[("disabled", "#6b6f75")], bordercolor=[("disabled", BORDE)])
     # Marcar un proyecto como HECHO: verde, como "HECHO" en la lista
     e.configure("Hecho.TButton", background=HECHO, foreground=SOBRE_ACENTO, bordercolor=HECHO, lightcolor=HECHO, darkcolor=HECHO,
                 font=letras["negrita"], padding=(14, 6))

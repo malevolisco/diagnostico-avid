@@ -59,8 +59,8 @@ Página 1 · Disco
      Sus proyectos salen en "Elegir proyectos" junto a los del primero y
      su media se usa para los dos. También se lee sin modificarla. Si el informe dice que hay clips enlazados a ficheros que
      no están en el disco, es aquí donde se añade la carpeta donde estén.
-   INFORME PRELIMINAR (opcional, antes de analizar): el botón
-   "Informe preliminar" recorre el disco de Avid y los otros
+   INFORME PRELIMINAR (opcional, antes de analizar): el botón turquesa
+   "Informe preliminar", a la derecha del resumen del disco, recorre el disco de Avid y los otros
    orígenes (las carpetas y lo que tienen dentro) y dice, carpeta por
    carpeta, qué hay: proyecto de Avid, ficheros MOV, MP4, MXF, tarjeta
    de cámara, nada, sin vídeo o mezclado. Solo mira nombres y tamaños,
@@ -71,11 +71,13 @@ Página 1 · Disco
    segundos, sin abrir nada) y lo dice debajo de las carpetas, por ejemplo
    "7 proyectos · 11 bins · último cambio 15/09/2021". Sirve para ver de un
    vistazo si es el disco que esperabas.
-   "Elegir proyectos" (el botón azul) sirve para no hacerlos todos de una vez: sale la
-   lista de proyectos del disco y marcas los que quieres ahora. Los que ya tienen brutos en esa carpeta salen con
-   "✓ ya tiene brutos"; el botón "Solo los que faltan" marca el resto.
+   "Elegir proyectos" (el botón azul) sirve para no hacerlos todos de una vez: sale una
+   tabla con los proyectos del disco (bins, último cambio, la propuesta del último análisis y el estado) y
+   marcas los que quieres ahora con un clic en su fila (☑). Arriba, un buscador; un clic en el título
+   de una columna ordena por ella. Los que ya tienen brutos en esa carpeta dicen "con brutos" en Estado;
+   el botón "Solo los que faltan" marca el resto.
    PROYECTO TERMINADO: en esa misma ventana, marca el proyecto y pulsa
-   "✔ Marcar los elegidos como HECHOS". Sale en verde, "✔ HECHO el
+   "✔ Marcar los marcados como HECHOS". Sale en verde, "✔ HECHO el
    30/10/2026", y ya no se marca solo: ni al abrir la lista, ni con
    "Todos", ni al analizar. Si hay que hacerlo otra vez, se marca a mano
    como cualquier otro, o se le quita con "Quitar HECHO". Se guarda en
@@ -157,21 +159,6 @@ Página 1 · Disco
    empezar y desmarca "Incluir las miniaturas en el zip para enviar".
    Al final del informe hay una tabla "Brutos exportados" con el estado de cada uno.
 
-Probar sin un disco real: "Disco de prueba"
--------------------------------------------
-En la página Disco, el botón "Disco de prueba" (junto a "Opciones
-avanzadas") crea un disco de Avid simulado junto al programa, en la
-carpeta "Disco de prueba", y deja elegidas sus carpetas: disco, otro
-origen, informe y brutos. Tarda un par de minutos y ocupa unos 800 MB.
-Sirve para aprender y probar todas las páginas en cualquier PC. Trae
-casos difíciles: clips repetidos en DV y en HD (proyecto DUPLICADO, que
-además mezcla material de 2002 y de 2021), tarjetas, NTSC, agencias,
-efectos de Avid, media enlazada y nombres en chino. La imagen es una
-carta de ajuste y el sonido, tonos. Después: "Analizar todo el disco",
-Montaje (en DUPLICADO los trozos repetidos están en la papelera) y
-Exportar. Para volver a un disco real, elige otra vez sus carpetas. Se
-puede borrar cuando quieras; volver a pulsar el botón lo rehace.
-
 Página 2 · Montaje (revisar los brutos antes de exportar; opcional)
 Usa el último análisis del disco: no lo repite.
 - Arriba eliges el proyecto; a la izquierda, sus brutos (en rojo los que
@@ -180,11 +167,11 @@ Usa el último análisis del disco: no lo repite.
   naranja. La primera vez que abres un bruto tarda un poco en preparar los
   fotogramas (1 por segundo, sin sonido); se puede ir mirando mientras.
   Cuando paras el cursor, sale el fotograma exacto de ese punto.
-  VER Y OÍR: el botón "Ver y oír" (o la barra espaciadora) reproduce el
-  clip de verdad, con imagen y todo su sonido, desde donde está el cursor,
-  en una ventana aparte. Al acabar el clip sigue con el siguiente, y el
-  cursor de la línea de tiempo va con lo que suena. Espacio otra vez (o
-  "Parar", o cerrar esa ventana) lo para. "Avance" sigue pasando la tira
+  REPRODUCIR: el botón ▶ (o la barra espaciadora) reproduce el clip de
+  verdad, con imagen y todo su sonido, desde donde está el cursor, en una
+  ventana aparte. Al acabar el clip sigue con el siguiente, y el cursor de
+  la línea de tiempo va con lo que suena. Espacio otra vez (o ■, o cerrar
+  esa ventana) lo para. "Avance" sigue pasando la tira
   de fotogramas rápido (x4, x10, x60), sin sonido.
   Prepara primero el clip que estás mirando: al momento sale una imagen
   suya y enseguida el resto. Si te vas a otro clip, ese pasa delante.
@@ -193,8 +180,9 @@ Usa el último análisis del disco: no lo repite.
   A la derecha, la ficha del clip (fecha de grabación, TC, formato, audio);
   en una pantalla pequeña, en su lugar, la lista de clips.
 - Debajo, la línea de tiempo: cada bloque es un clip, con sus fotogramas
-  dentro en cuanto están preparados, y encima una regla con el timecode del
-  bruto. "Todo" enseña el bruto entero; con "+" o Ctrl + rueda (amplía
+  dentro en cuanto están preparados, debajo la forma de onda de su sonido
+  (se ve dónde hablan y dónde hay silencio sin reproducir nada) y encima
+  una regla con el timecode del bruto. "Todo" enseña el bruto entero; con "+" o Ctrl + rueda (amplía
   donde está el ratón) se llega hasta ver cada fotograma, y la regla se
   hace más fina. La rueda sola mueve la línea de lado. Al pasar el ratón,
   abajo sale el nombre y la duración del clip. Al elegir un clip en la

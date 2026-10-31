@@ -166,15 +166,18 @@ def que_hay():
 def hecho_en_selector():
     v = next(w for w in app.raiz.winfo_children() if w.winfo_class() == "Toplevel" and w.title() == "Elegir proyectos")
     i = next(n for n, (nombre, _) in enumerate(v.filas) if nombre == "ABORTO")
-    v.lb.selection_clear(0, "end")
-    v.lb.selection_set(i)
+    fila = lambda: v.tv.item(str(i), "values")
+    comprobar(len(v.tv.get_children()) == len(v.filas) and fila()[0] == "☑", "la tabla de proyectos: %s" % (fila(),))
+    v.cambiar(i)  # un clic en la fila la desmarca
+    comprobar(fila()[0] == "☐" and "ABORTO" not in v.elegidos, "un clic debe desmarcar: %s" % (fila(),))
+    v.poner(["ABORTO"])
     v.marcar(True)
-    comprobar(v.lb.get(i).startswith("✔ HECHO") and i not in v.lb.curselection(), "ABORTO marcado HECHO: %r %s" % (v.lb.get(i), v.lb.curselection()))
+    comprobar(fila()[5].startswith("✔ HECHO") and fila()[0] == "☐", "ABORTO marcado HECHO: %s" % (fila(),))
     comprobar("ABORTO" in d.leer_hechos(BRUTOS), "HECHO no guardado en la carpeta de brutos: %s" % d.leer_hechos(BRUTOS))
     captura("1b_hecho.png", v)
-    v.lb.selection_set(i)
+    v.poner(["ABORTO"])
     v.marcar(False)
-    comprobar(not v.lb.get(i).startswith("✔") and "ABORTO" not in d.leer_hechos(BRUTOS), "Quitar HECHO: %r" % v.lb.get(i))
+    comprobar(not fila()[5].startswith("✔") and "ABORTO" not in d.leer_hechos(BRUTOS), "Quitar HECHO: %s" % (fila(),))
     v.destroy()
     app.raiz.after(100, analizar)
 
@@ -284,7 +287,7 @@ def ver_y_oir():
     comprobar(pm.ffplay, "no se encuentra ffplay junto a ffmpeg")
     pm.t = 0.0
     pm.ver_y_oir()
-    comprobar(pm.sonando is not None and pm.bt_sonido.cget("text").startswith("■"), "Ver y oír no ha arrancado")
+    comprobar(pm.sonando is not None and pm.bt_sonido.cget("text") == "■", "Ver y oír no ha arrancado")
     # a mitad del clip (los del disco de prueba duran 2 s): más tarde ffplay ya puede haber acabado, y con razón
     app.raiz.after(1000, sonando)
 

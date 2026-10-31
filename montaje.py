@@ -486,6 +486,77 @@ def paso_regla(pps, separacion=90):
     return paso, menor
 
 
+# ---------------------------------------------------------------------------
+# Forma de onda del sonido (línea de tiempo)
+# ---------------------------------------------------------------------------
+
+ONDA_POR_SEGUNDO = 25  # un valor por fotograma del bruto
+ONDA_TASA = 4000  # muestras por segundo con que se mira el sonido (sobra para ver dónde hay voz y dónde silencio)
+
+
+def fichero_onda(carpeta_visor, clave):
+    return fichero_visor(carpeta_visor, clave).with_suffix(".onda")
+
+
+def orden_onda(ffmpeg, origen, clip, canales):
+    """Orden de ffmpeg que saca todo el sonido del clip junto (como orden_sonido), en mono a ONDA_TASA muestras por
+    segundo, en PCM de 16 bits por la salida estándar."""
+    rutas = list(dict.fromkeys(c["ruta"] for c in canales))
+    entrada = {r: i for i, r in enumerate(rutas)}
+    cmd = [ffmpeg, "-v", "error", "-nostdin"]
+    for r in rutas:
+        cmd += ["-i", eb.ruta_larga(Path(origen) / r)]
+    filtros = ["[%d:a:%d]pan=mono|c0=c%d[c%d]" % (entrada[c["ruta"]], c["flujo"], c["canal"], k) for k, c in enumerate(canales)]
+    filtros.append("%samix=inputs=%d:normalize=0:dropout_transition=0[a]" % ("".join("[c%d]" % k for k in range(len(canales))),
+                                                                           len(canales)))
+    return cmd + ["-filter_complex", ";".join(filtros), "-map", "[a]", "-ac", "1", "-ar", str(ONDA_TASA), "-f", "s16le", "pipe:1"]
+
+
+def picos(pcm):
+    """De PCM de 16 bits mono a ONDA_TASA, el pico de cada 1/ONDA_POR_SEGUNDO s, de 0 a 255 (raíz cuadrada del nivel,
+    para que la voz baja también se vea)."""
+    import array
+    m = array.array("h")
+    m.frombytes(pcm[:len(pcm) // 2 * 2])
+    if __import__("sys").byteorder == "big":
+        m.byteswap()
+    paso = ONDA_TASA // ONDA_POR_SEGUNDO
+    salida = bytearray()
+    for i in range(0, len(m), paso):
+        trozo = m[i:i + paso]
+        pico = max(max(trozo), -min(trozo)) if trozo else 0
+        salida.append(min(255, int(round((min(pico, 32767) / 32767) ** 0.5 * 255))))
+    return bytes(salida)
+
+
+def sacar_onda(ffmpeg, origen, clip, canales, carpeta_visor, clave, timeout=1800):
+    """La forma de onda del clip (picos) en un .onda junto a sus fotogramas del visor. Si ya está hecha, no se repite.
+    Devuelve la ruta, o None si no tiene sonido o ffmpeg falla."""
+    salida = fichero_onda(carpeta_visor, clave)
+    if salida.exists():
+        return salida
+    if not canales:
+        return None
+    try:
+        r = subprocess.run(orden_onda(ffmpeg, origen, clip, canales[:16]), capture_output=True, timeout=timeout, **eb.flags_subproceso())
+    except Exception as e:
+        LOG.warning("Onda: no se pudo leer el sonido de %s (%s)", clip.get("nombre"), e)
+        return None
+    if r.returncode != 0 or not r.stdout:
+        LOG.warning("Onda: ffmpeg falló con %s: %s", clip.get("nombre"), r.stderr.decode("utf-8", "replace")[-300:])
+        return None
+    salida.parent.mkdir(parents=True, exist_ok=True)
+    tmp = salida.with_name("%s.%s.tmp" % (salida.stem, uuid.uuid4().hex[:8]))
+    tmp.write_bytes(picos(r.stdout))
+    try:
+        tmp.replace(salida)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        if not salida.exists():
+            return None
+    return salida
+
+
 def siguiente_preparacion(claves, actual, hechos, portadas, en_curso, fallidos, tipos=("portada", "tira")):
     """Qué preparar ahora para el visor. Primero el clip que se mira: su portada (una imagen, al momento) y luego todos
     sus fotogramas; después los clips siguientes y por último los de antes. Antes se preparaban todos en orden desde el

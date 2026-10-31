@@ -412,11 +412,16 @@ def sacar_portada(ffmpeg, ruta_video, carpeta_visor, clave, timeout=120):
     return _ffmpeg_a_fichero(cmd, fichero_portada(carpeta_visor, clave), ruta_video, timeout)
 
 
-def fotograma_exacto(ffmpeg, ruta_video, segundo, timeout=30):
+def vf_tamano(ancho, alto):
+    """El filtro del visor (como VF_VISOR) para otro tamaño: imagen entera, con bandas si el aspecto no es 16:9."""
+    return VF_VISOR.replace("480:270", "%d:%d" % (ancho, alto))
+
+
+def fotograma_exacto(ffmpeg, ruta_video, segundo, timeout=30, tamano=(480, 270)):
     """El fotograma del segundo pedido del clip (con decimales: el fotograma exacto, no el de la tira de 1 por segundo),
-    a 480x270, en JPEG (bytes), o None. Para el visor cuando se avanza fotograma a fotograma o se para el cursor."""
+    al tamaño del visor, en JPEG (bytes), o None. Para el visor cuando se avanza fotograma a fotograma o se para el cursor."""
     cmd = [ffmpeg, "-v", "error", "-nostdin", "-ss", "%.3f" % max(0.0, segundo), "-i", eb.ruta_larga(ruta_video), "-map", "0:v:0",
-           "-an", "-frames:v", "1", "-vf", VF_VISOR, "-q:v", "4", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"]
+           "-an", "-frames:v", "1", "-vf", vf_tamano(*tamano), "-q:v", "4", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"]
     try:
         r = subprocess.run(cmd, capture_output=True, timeout=timeout, **eb.flags_subproceso())
     except Exception as e:

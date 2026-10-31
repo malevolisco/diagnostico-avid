@@ -87,17 +87,22 @@ class App:
         self.da, self.tk, self.ttk = da, tk, ttk
         raiz = self.raiz = tk.Tk()
         raiz.title("DiagnosticoAvid — v%s (%s)" % (da.VERSION, da.BUILD))
-        # La ventana cabe en la pantalla: en un portátil con Windows ampliando al 125-150 % (≈1100x600 útiles) se abre
-        # maximizada y en modo compacto; antes medía 1280x800 y las pestañas de abajo quedaban fuera (26/10/2026).
+        # La ventana se abre maximizada, en cualquier pantalla (31/10/2026; antes, 1280x800 salvo en pantallas pequeñas, y
+        # en un 1080p el montaje no cabía de ancho). Pensada para un 1080p; al cambiar su tamaño, las páginas se recolocan
+        # (al_redimensionar). En un portátil con Windows ampliando al 125-150 % (≈1100x600 útiles), además, modo compacto.
         self.compacto = tema.pantalla_pequena(raiz)
         an, al = raiz.winfo_screenwidth(), raiz.winfo_screenheight()
-        raiz.geometry("%dx%d+0+0" % (min(1280, an - 16), min(800, al - 90)))
+        raiz.geometry("%dx%d+0+0" % (an - 16, al - 90))
         raiz.minsize(min(900, an - 16), min(520, al - 90))
-        if self.compacto:
+        try:
+            raiz.state("zoomed")  # Windows
+        except tk.TclError:
             try:
-                raiz.state("zoomed")  # Windows; en Linux no existe y se queda del tamaño de la pantalla
+                raiz.attributes("-zoomed", True)  # Linux
             except tk.TclError:
                 pass
+        self.tamano_visto = None
+        raiz.bind("<Configure>", self.al_redimensionar, add="+")
         self.letras = tema.aplicar(raiz)
 
         # Las carpetas de la última vez (config_ventana.json): así se encuentran los análisis guardados sin elegirlas otra vez
@@ -265,9 +270,9 @@ class App:
     def pagina_disco(self):
         ttk = self.ttk
         p = self.paginas["disco"]
-        der = ttk.Frame(p, style="Panel.TFrame", padding=(12, 12) if self.compacto else (18, 18))
+        der = self.disco_der = ttk.Frame(p, style="Panel.TFrame", padding=(12, 12) if self.compacto else (18, 18))
         der.pack(side="right", fill="y")
-        izq = ttk.Frame(p, style="Fondo.TFrame", padding=(14, 10) if self.compacto else (22, 18))
+        izq = self.disco_izq = ttk.Frame(p, style="Fondo.TFrame", padding=(14, 10) if self.compacto else (22, 18))
         izq.pack(side="left", fill="both", expand=True)
 
         t = tema.Tarjeta(izq)
@@ -375,6 +380,38 @@ class App:
         else:
             self.avanzadas.pack(fill="x", pady=(12, 0), before=self.barra)
             self.bt_avanzadas.configure(text="Opciones avanzadas ▾")
+
+    # --- tamaño de la ventana ----------------------------------------------------------------------------------------
+
+    def al_redimensionar(self, e):
+        """Al cambiar el tamaño de la ventana (o al abrirla), las páginas se recolocan, un momento después de que pare."""
+        if e.widget is not self.raiz:
+            return
+        if getattr(self, "espera_tamano", None):
+            self.raiz.after_cancel(self.espera_tamano)
+        self.espera_tamano = self.raiz.after(250, self.recolocar)
+
+    def recolocar(self):
+        """Disco: el panel de la derecha (último análisis, siguiente paso) pasa abajo si la ventana es estrecha. Montaje: el
+        visor y la ficha del clip, al tamaño que quepa (PantallaMontaje.adaptar)."""
+        self.espera_tamano = None
+        an, al = self.raiz.winfo_width(), self.raiz.winfo_height()
+        if an <= 1 or (an, al) == self.tamano_visto:
+            return
+        self.tamano_visto = (an, al)
+        estrecha = an < 1150
+        if hasattr(self, "disco_der") and estrecha != getattr(self, "disco_estrecha", False):
+            self.disco_estrecha = estrecha
+            self.disco_der.pack_forget()
+            self.disco_izq.pack_forget()
+            if estrecha:
+                self.disco_izq.pack(side="top", fill="both", expand=True)
+                self.disco_der.pack(side="top", fill="x")
+            else:
+                self.disco_der.pack(side="right", fill="y")
+                self.disco_izq.pack(side="left", fill="both", expand=True)
+        if self.montaje:
+            self.montaje.adaptar(an, al)
 
     # --- disco de prueba -------------------------------------------------------------------------------------------
 
@@ -865,6 +902,7 @@ class App:
         self.montaje = vm.PantallaMontaje(self.cajas_montaje["brutos"], m, resumen["origen"], Path(carpeta) / "visor", self.brutos.get(),
                                           da.localizar_ffmpeg()[0], da.exportar_brutos.clips_a_la_vez(cfg), self.estado["proyectos"],
                                           al_cambiar=self.montaje_cambiado, pestanas=pestanas, compacto=self.compacto)
+        self.montaje.adaptar(self.raiz.winfo_width(), self.raiz.winfo_height())
         self.pantalla_origen = vo.PantallaOrigen(self.cajas_montaje["origen"], clips, cfg, self.brutos.get(), al_guardar=self.origen_guardado,
                                                  recordar=da.recordar_reglas_origen, pestanas=pestanas, aprendizaje=da.ruta_aprendizaje(cfg),
                                                  compacto=self.compacto)

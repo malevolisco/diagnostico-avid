@@ -42,7 +42,10 @@ Pasos
    la configuración.
    La ventana tiene tres páginas, que se eligen en las pestañas de arriba:
    1 · Disco, 2 · Montaje y 3 · Exportar. Se va de izquierda a derecha.
-   En una pantalla pequeña (portátil) se abre maximizada y más compacta;
+   Se abre maximizada; está pensada para una pantalla 1080p. Si la ventana
+   se hace más pequeña, se recoloca sola: el visor del montaje encoge, la
+   ficha del clip se quita y algunos textos se acortan; en una pantalla
+   grande, el visor crece. En un portátil pequeño va además más compacta;
    si algo no cupiera, la página se desplaza con la rueda del ratón.
 
 Página 1 · Disco

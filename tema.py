@@ -265,6 +265,18 @@ def pantalla_pequena(raiz):
     return raiz.winfo_screenwidth() < 1300 or raiz.winfo_screenheight() < 800
 
 
+def tamano_visor(ancho, alto):
+    """El visor del montaje según lo que mide la ventana (16:9): pensado para un 1080p (640x360), más grande en pantallas
+    mayores y más pequeño en ventanas pequeñas, para que todo quepa sin desplazar."""
+    if ancho >= 2200 and alto >= 1250:
+        return 854, 480
+    if ancho >= 1600 and alto >= 950:
+        return 640, 360
+    if alto >= 850:
+        return 480, 270
+    return 384, 216
+
+
 class Desplazable(ttk.Frame):
     """Marco para una página entera: si su contenido cabe, lo ocupa todo como siempre (lo que se estira, se estira); si
     no cabe (pantalla pequeña), salen barras de desplazamiento y la rueda del ratón lo mueve. Así nunca queda nada

@@ -121,7 +121,7 @@ class App:
         # Proyectos del disco elegido, leídos solos al elegirlo (listar_proyectos): el botón "Elegir proyectos" los reutiliza
         self.vista_disco = {"origen": None, "lista": None, "turno": 0}
         self.espera_disco = None
-        self.v_que_hay = None  # ventana del paso 0 (qué hay en el disco)
+        self.v_que_hay = None  # ventana del informe preliminar (qué hay en el disco)
         self.cronometro = None
 
         self.cabecera()
@@ -202,14 +202,14 @@ class App:
         """que: None (libre), "analisis", "exportacion" o "actualizacion"."""
         self.estado["ocupado"] = que
         textos = {"analisis": "Trabajando… analizando el disco", "exportacion": "Trabajando… exportando brutos",
-                  "actualizacion": "Buscando actualización…"}
+                  "actualizacion": "Buscando actualización…", "prueba": "Trabajando… creando el disco de prueba"}
         self.lbl_trabajo.configure(text=textos.get(que, ""))
         libre = ["!disabled"] if que is None else ["disabled"]
-        for b in (self.bt_analizar, self.bt_proy, self.bt_act):
+        for b in (self.bt_analizar, self.bt_proy, self.bt_act, self.bt_prueba, self.bt_que_hay):
             b.state(libre)
         self.bt_parar.state(["!disabled"] if que == "analisis" else ["disabled"])
         self.bt_parar_exp.state(["!disabled"] if que == "exportacion" else ["disabled"])
-        if que in ("analisis", "exportacion"):
+        if que in ("analisis", "exportacion", "prueba"):
             self.barra.start(12)
         else:
             self.barra.stop()
@@ -296,7 +296,7 @@ class App:
 
         fila = ttk.Frame(izq, style="Fondo.TFrame")
         fila.pack(fill="x", pady=(10, 0))
-        self.bt_que_hay = ttk.Button(fila, text="0 · Qué hay en el disco", command=self.ver_que_hay)
+        self.bt_que_hay = ttk.Button(fila, text="▤  Informe preliminar", style="Proyectos.TButton", command=self.ver_que_hay)
         self.bt_que_hay.pack(side="left", padx=(0, 8))
         self.bt_proy = ttk.Button(fila, text="☰  Elegir proyectos: todos", style="Proyectos.TButton", command=self.elegir_proyectos)
         self.bt_proy.pack(side="left")
@@ -312,6 +312,8 @@ class App:
         self.bt_parar.state(["disabled"])  # solo con algo en marcha
         self.bt_avanzadas = ttk.Button(fila, text="Opciones avanzadas ▸", style="Fantasma.TButton", command=self.plegar)
         self.bt_avanzadas.pack(side="right")
+        self.bt_prueba = ttk.Button(fila, text="Disco de prueba", style="Fantasma.TButton", command=self.disco_de_prueba)
+        self.bt_prueba.pack(side="right", padx=(0, 6))
         self.avanzadas = ttk.Frame(izq, style="Panel.TFrame", padding=(14, 10))
         for texto, var in (("Miniaturas de cada clip para el informe (más lento; el visor del montaje no las necesita)", self.minis),
                            ("Sin miniaturas, al menos una captura de cada clip de cámara para decidir qué proyectos restaurar", self.capturas),
@@ -370,10 +372,73 @@ class App:
             self.avanzadas.pack(fill="x", pady=(12, 0), before=self.barra)
             self.bt_avanzadas.configure(text="Opciones avanzadas ▾")
 
-    # --- paso 0: qué hay en el disco -------------------------------------------------------------------------------
+    # --- disco de prueba -------------------------------------------------------------------------------------------
+
+    def carpetas_de_prueba(self):
+        """(disco, otro origen, informes, brutos) del disco de prueba, junto al programa."""
+        base = self.da.carpeta_base()
+        disco = base / "Disco de prueba"
+        return disco, Path(str(disco) + "_media2"), base / "Disco de prueba - informes", base / "Disco de prueba - brutos"
+
+    def disco_de_prueba(self):
+        """Crea junto al programa un disco de Avid simulado (el de las pruebas automáticas: proyectos, bins, tarjetas, NTSC,
+        agencias, efectos, trozos repetidos en DV y en HD, material de dos épocas, rutas con chino...) y deja elegidas sus
+        carpetas, para probar Disco, Montaje y Exportar sin un disco real. Nada de él sale del PC."""
+        from tkinter import messagebox
+        if self.estado["ocupado"]:
+            return
+        ffmpeg, ffprobe = self.da.localizar_ffmpeg()
+        if not ffmpeg:
+            return messagebox.showwarning("Falta ffmpeg", "Para crear el disco de prueba hace falta ffmpeg (carpeta bin).", parent=self.raiz)
+        disco, media2, informes, brutos = self.carpetas_de_prueba()
+        if not messagebox.askyesno(
+                "Disco de prueba",
+                "Se crea un disco de Avid simulado para probar el programa sin un disco real, en:\n%s\n\n"
+                "Lleva varios proyectos con casos difíciles: clips repetidos (en DV y en HD), material de dos épocas, "
+                "tarjetas, agencias, efectos de Avid, NTSC y nombres en chino. La imagen es una carta de ajuste y el "
+                "sonido, tonos.\n\nOcupa unos 800 MB y tarda unos minutos. Las carpetas de disco, informe y brutos "
+                "pasan a ser las de prueba; para volver a un disco real, elígelas otra vez.\n\n¿Crearlo?" % disco,
+                parent=self.raiz):
+            return
+        self.ocupar("prueba")
+        da = self.da
+
+        def crear():
+            try:
+                cdp = da.importar_disco_prueba()
+                cdp.crear(disco, ffmpeg, ffprobe, progreso=lambda m: self.cola.put(("log", m)))
+                # Los clips capturados sin pista de cámara son dudosos y no entran: en estos dos proyectos, como si se
+                # hubiera elegido "Entra" en Origen del material, para ver los trozos repetidos en el montaje
+                da.exportar_brutos.guardar_decisiones_origen(brutos, [
+                    {"carpeta": "", "bin": "DUPLICADO Bin.avb", "clase": "propio"},
+                    {"carpeta": "", "bin": "15 SEPT CENTROAMERICA Bin.avb", "clase": "propio"}])
+                informes.mkdir(parents=True, exist_ok=True)
+                self.cola.put(("disco_prueba", None))
+            except Exception as e:
+                da.LOG.exception("No se ha podido crear el disco de prueba")
+                self.cola.put(("disco_prueba", str(e)))
+        threading.Thread(target=crear, daemon=True).start()
+
+    def al_crear_prueba(self, error):
+        from tkinter import messagebox
+        self.ocupar(None)
+        if error:
+            return messagebox.showerror("Disco de prueba", "No se ha podido crear el disco de prueba:\n%s" % error, parent=self.raiz)
+        disco, media2, informes, brutos = self.carpetas_de_prueba()
+        self.origen.set(str(disco))
+        self.destino.set(str(informes))
+        self.brutos.set(str(brutos))
+        self.estado["media_extra"] = [str(media2)]
+        self.pintar_media_extra()
+        self.cambio_carpetas(proyectos=True)
+        self.escribe("Disco de prueba listo. Pulsa \"Analizar todo el disco\"; luego Montaje y Exportar.")
+        messagebox.showinfo("Disco de prueba", "Disco de prueba listo y elegido.\n\nPulsa \"Analizar todo el disco\"; después "
+                            "puedes probar Montaje (DUPLICADO tiene trozos repetidos en la papelera) y Exportar.", parent=self.raiz)
+
+    # --- informe preliminar: qué hay en el disco --------------------------------------------------------------------
 
     def ver_que_hay(self):
-        """Paso 0: recorre las carpetas del disco y de los otros orígenes y dice qué hay en cada una (proyecto de Avid,
+        """Informe preliminar: recorre las carpetas del disco y de los otros orígenes y dice qué hay en cada una (proyecto de Avid,
         MOV, MP4, tarjetas, vacía, mezclado), sin abrir ningún fichero. Se lee por detrás; la ventana se rellena al acabar."""
         from tkinter import messagebox
         if not self.origen.get() or not Path(self.origen.get()).is_dir():
@@ -394,7 +459,7 @@ class App:
     def ventana_que_hay(self, origenes):
         tk, ttk = self.tk, self.ttk
         v = tk.Toplevel(self.raiz)
-        v.title("Paso 0 · Qué hay en el disco")
+        v.title("Informe preliminar del disco")
         ancho, alto = min(1100, self.raiz.winfo_screenwidth() - 60), min(620, self.raiz.winfo_screenheight() - 100)
         v.geometry("%dx%d" % (ancho, alto))
         v.configure(bg=tema.FONDO)
@@ -1232,6 +1297,9 @@ class App:
                     continue
                 if tipo == "que_hay":
                     self.pintar_que_hay(*msg)
+                    continue
+                if tipo == "disco_prueba":
+                    self.al_crear_prueba(msg)
                     continue
                 if tipo == "que_hay_avance":
                     if self.v_que_hay is not None and self.v_que_hay.winfo_exists():

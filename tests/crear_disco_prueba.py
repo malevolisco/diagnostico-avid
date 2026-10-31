@@ -28,6 +28,8 @@ cuya media de Avid está en otra carpeta (CARPETA_DESTINO_media2), como si estuv
 otro disco: solo se encuentra si se añade esa carpeta de media (--media-extra).
 
 Uso:  python tests/crear_disco_prueba.py CARPETA_DESTINO [--ffmpeg RUTA_FFMPEG --ffprobe RUTA_FFPROBE]
+
+La ventana también lo crea ("Disco de prueba", en la página Disco) para probar el programa sin un disco real: crear().
 """
 
 import argparse
@@ -40,6 +42,13 @@ import sys
 from pathlib import Path
 
 import avb
+
+MARCA = ".disco_de_prueba"  # solo se borra una carpeta que la lleve (la crea este programa)
+FLAGS = {"creationflags": 0x08000000} if os.name == "nt" else {}  # en Windows, sin una consola por cada ffmpeg
+
+
+def ejecutar(cmd, **kw):
+    return subprocess.run(cmd, **dict(FLAGS, **kw))
 
 
 def larga(ruta):
@@ -62,13 +71,28 @@ def main():
     args = ap.parse_args()
     if not args.ffmpeg or not args.ffprobe:
         sys.exit("Hace falta ffmpeg y ffprobe (en el PATH o con --ffmpeg/--ffprobe)")
+    crear(args.destino, args.ffmpeg, args.ffprobe, forzar=True)
 
+
+def borrar_si_es_de_prueba(carpeta, forzar=False):
+    """Una carpeta de antes se borra solo si la creó este programa (lleva MARCA) o está vacía; si no, error: nunca se
+    borra una carpeta de verdad por equivocación. forzar: la línea de comandos de las pruebas, que siempre la rehace."""
+    if not carpeta.exists():
+        return
+    if not forzar and not (carpeta / MARCA).exists() and any(carpeta.iterdir()):
+        raise ValueError("%s ya existe y no es un disco de prueba: no se toca" % carpeta)
+    shutil.rmtree(larga(carpeta))
+
+
+def crear(destino, ffmpeg, ffprobe, progreso=print, forzar=False):
+    """Crea el disco de prueba en destino y su "otro disco" de media en destino + "_media2". Devuelve (destino, media2)."""
+    from types import SimpleNamespace
+    args = SimpleNamespace(destino=str(destino), ffmpeg=ffmpeg, ffprobe=ffprobe)
     D = Path(args.destino)
-    if D.exists():
-        shutil.rmtree(D)
     D2 = Path(args.destino + "_media2")  # "otro disco" con más media de Avid
-    if D2.exists():
-        shutil.rmtree(D2)
+    borrar_si_es_de_prueba(D, forzar)
+    borrar_si_es_de_prueba(D2, forzar)
+    progreso("Creando el disco de prueba en %s (proyectos, bins y media simulada; unos minutos)..." % D)
     M2 = D2 / "Avid MediaFiles" / "MXF" / "1"
     M2.mkdir(parents=True)
     M = D / "Avid MediaFiles" / "MXF" / "101"
@@ -77,7 +101,7 @@ def main():
     (M / "Creating").mkdir()
 
     def umid(f):
-        out = subprocess.run([args.ffprobe, "-v", "error", "-print_format", "json", "-show_format", str(f)],
+        out = ejecutar([args.ffprobe, "-v", "error", "-print_format", "json", "-show_format", str(f)],
                              capture_output=True, text=True, check=True).stdout
         return json.loads(out)["format"]["tags"]["material_package_umid"][2:]
 
@@ -85,12 +109,12 @@ def main():
         extra = ["-profile:v", "0", "-level:v", "2"] if codec == "mpeg2video" else []  # MPEG-2 4:2:2 (tipo IMX)
         if entrelazado:  # 1080i50, primero el campo superior (como el DNxHD 120 de los discos de China)
             extra += ["-vf", "setfield=tff", "-flags", "+ildct+ilme", "-top", "1"]
-        subprocess.run([args.ffmpeg, "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=%s:rate=%s" % (size, fps),
+        ejecutar([args.ffmpeg, "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=%s:rate=%s" % (size, fps),
                         "-t", str(dur), "-c:v", codec, "-b:v", br, "-pix_fmt", "yuv422p"] + extra + ["-f", "mxf_opatom",
                         "-metadata", "material_package_name=%s" % nombre, str(out)], check=True)
 
     def mka(nombre, out, dur, freq, umid_v):
-        subprocess.run([args.ffmpeg, "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=%d:sample_rate=48000" % freq,
+        ejecutar([args.ffmpeg, "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=%d:sample_rate=48000" % freq,
                         "-t", str(dur), "-c:a", "pcm_s16le", "-f", "mxf_opatom",
                         "-metadata", "material_package_name=%s" % nombre, str(out)], check=True)
         # Avid: V y A del mismo clip comparten UMID. ffmpeg genera uno distinto por fichero; se sustituye.
@@ -109,7 +133,7 @@ def main():
         return u
 
     def ff(*a):
-        subprocess.run([args.ffmpeg, "-loglevel", "error", "-y"] + list(a), check=True)
+        ejecutar([args.ffmpeg, "-loglevel", "error", "-y"] + list(a), check=True)
 
     def bin_con(path, clips, secs=(), renders=()):
         """clips: (nombre, umid[, frames[, fichero_origen[, columnas]]]). columnas: columnas de usuario del bin
@@ -305,7 +329,7 @@ def main():
     v_ent = next(M.glob("ENTREVISTA DVV01.6D00F001.mxf"))
     dv_prueba.poner_subcodigo(v_ent, "17:35:48:11", dt.datetime(2002, 11, 13, 23, 27, 26))
     v_trozo = M / "ENTREVISTA DV TROZOV01.6D00F002.mxf"
-    subprocess.run([args.ffmpeg, "-loglevel", "error", "-y", "-ss", "2.0", "-i", str(v_ent), "-frames:v", "40", "-c", "copy",
+    ejecutar([args.ffmpeg, "-loglevel", "error", "-y", "-ss", "2.0", "-i", str(v_ent), "-frames:v", "40", "-c", "copy",
                     "-metadata", "material_package_name=ENTREVISTA DV TROZO", "-f", "mxf_opatom", str(v_trozo)], check=True)
     ut = umid(v_trozo)
     mka("ENTREVISTA DV TROZO", M / "ENTREVISTA DV TROZOA01.6D00F0020.mxf", 40 / (30000 / 1001), 440, ut)
@@ -315,19 +339,19 @@ def main():
         fuente = ["-ss", str(desde), "-i", str(entrada)] if entrada else [
             "-f", "lavfi", "-i", "anoisesrc=d=%s:c=pink:r=48000:a=0.5:seed=5" % dur, "-f", "lavfi",
             "-i", "aevalsrc='0.05+0.95*abs(sin(2.1*t)*sin(5.3*t+1))':d=%s:s=48000" % dur, "-filter_complex", "[0][1]amultiply[a]", "-map", "[a]"]
-        subprocess.run([args.ffmpeg, "-loglevel", "error", "-y"] + fuente + ["-t", str(dur), "-c:a", "pcm_s16le", "-timecode", tc,
+        ejecutar([args.ffmpeg, "-loglevel", "error", "-y"] + fuente + ["-t", str(dur), "-c:a", "pcm_s16le", "-timecode", tc,
                         "-f", "mxf_opatom", "-metadata", "material_package_name=%s" % nombre, str(out)], check=True)
         datos = out.read_bytes()
         out.write_bytes(datos.replace(bytes.fromhex(umid(out)), bytes.fromhex(umid_v)))
     v_hd = M / "ENTREVISTA HDV01.6D00F101.mxf"
-    subprocess.run([args.ffmpeg, "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=25", "-t", "6",
+    ejecutar([args.ffmpeg, "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=25", "-t", "6",
                     "-c:v", "dnxhd", "-b:v", "120M", "-pix_fmt", "yuv422p", "-timecode", "10:00:00:00", "-f", "mxf_opatom",
                     "-metadata", "material_package_name=ENTREVISTA HD", str(v_hd)], check=True)
     uh = umid(v_hd)
     a_hd = M / "ENTREVISTA HDA01.6D00F1010.mxf"
     sonido_avid("ENTREVISTA HD", a_hd, uh, "10:00:00:00")
     v_hd_trozo = M / "ENTREVISTA HD TROZOV01.6D00F102.mxf"
-    subprocess.run([args.ffmpeg, "-loglevel", "error", "-y", "-ss", "2.0", "-i", str(v_hd), "-frames:v", "60", "-c", "copy",
+    ejecutar([args.ffmpeg, "-loglevel", "error", "-y", "-ss", "2.0", "-i", str(v_hd), "-frames:v", "60", "-c", "copy",
                     "-timecode", "10:00:02:00", "-metadata", "material_package_name=ENTREVISTA HD TROZO", "-f", "mxf_opatom",
                     str(v_hd_trozo)], check=True)
     uht = umid(v_hd_trozo)
@@ -352,7 +376,10 @@ def main():
         os.utime(f, (t, t))
     (M / "msmMMOB.mdb").write_bytes(b"\0" * 100)
     (M / "msmFMID.pmr").write_bytes(b"\0" * 100)
-    print("Disco de prueba creado en %s (%d ficheros)" % (D, sum(1 for _ in D.rglob("*") if _.is_file())))
+    for carpeta in (D, D2):
+        (carpeta / MARCA).write_text("Disco de Avid simulado para probar DiagnosticoAvid. Se puede borrar.\n", encoding="utf-8")
+    progreso("Disco de prueba creado en %s (%d ficheros)" % (D, sum(1 for _ in D.rglob("*") if _.is_file())))
+    return D, D2
 
 
 if __name__ == "__main__":

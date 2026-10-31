@@ -60,7 +60,7 @@ echo.
 echo [4/5] Construyendo el ejecutable (1-3 minutos)...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
-%PY% -m PyInstaller --noconfirm --clean --noconsole --onedir --name DiagnosticoAvid --add-data "bin;bin" --hidden-import interfaz --hidden-import tema --hidden-import ventana_montaje --hidden-import ventana_origen --hidden-import aprendizaje --hidden-import montaje --hidden-import mxf_util --hidden-import lecturas diagnostico_avid.py
+%PY% -m PyInstaller --noconfirm --clean --noconsole --onedir --name DiagnosticoAvid --add-data "bin;bin" --hidden-import interfaz --hidden-import tema --hidden-import ventana_montaje --hidden-import ventana_origen --hidden-import aprendizaje --hidden-import montaje --hidden-import mxf_util --hidden-import lecturas --paths tests --hidden-import crear_disco_prueba --hidden-import dv_prueba diagnostico_avid.py
 if not %errorlevel%==0 (
   echo   PyInstaller ha fallado. Copia el texto de arriba y enviaselo a Adrian.
   pause & exit /b 1

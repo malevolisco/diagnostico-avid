@@ -172,6 +172,16 @@ def carpeta_base():
     return Path(__file__).resolve().parent
 
 
+def importar_disco_prueba():
+    """El generador del disco de prueba (tests/crear_disco_prueba.py; en el .exe va dentro)."""
+    try:
+        import crear_disco_prueba
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).resolve().parent / "tests"))
+        import crear_disco_prueba
+    return crear_disco_prueba
+
+
 def localizar_ffmpeg():
     """Devuelve (ffmpeg, ffprobe) buscando primero en bin/ y luego en el PATH."""
     exe = ".exe" if os.name == "nt" else ""
@@ -474,7 +484,7 @@ def que_hay(origenes, progreso=None):
             en_media = any(x.lower() in CARPETAS_MEDIA for x in partes)
             tarjeta = next((NOMBRES_TARJETA[x.upper()] for x in partes if x.upper() in NOMBRES_TARJETA), None)
             for nombre in nombres:
-                if nombre.lower() in FICHEROS_DE_SISTEMA or nombre.startswith("._"):
+                if nombre.lower() in FICHEROS_DE_SISTEMA or nombre.startswith("."):  # ocultos (._ de Mac, marcas)
                     continue
                 try:
                     tam = os.stat(os.path.join(dirpath, nombre)).st_size
@@ -2930,7 +2940,8 @@ def main():
     ap.add_argument("--media-extra", help='Otras carpetas con media del disco (media repartida en varios discos), separadas por ";". Solo se leen')
     ap.add_argument("--sin-cache", action="store_true", help="Volver a leer todos los MXF aunque ya se leyeran en un análisis anterior")
     ap.add_argument("--listar-proyectos", action="store_true", help="Lista los proyectos de --origen (lectura rápida) y sale")
-    ap.add_argument("--que-hay", action="store_true", help="Paso 0: dice qué hay en cada carpeta de --origen (y de --media-extra) y sale")
+    ap.add_argument("--que-hay", action="store_true", help="Informe preliminar: dice qué hay en cada carpeta de --origen (y de --media-extra) y sale")
+    ap.add_argument("--disco-prueba", metavar="CARPETA", help="Crea en CARPETA (y CARPETA_media2) un disco de Avid simulado para probar el programa sin un disco real, y sale")
     ap.add_argument("--usar-analisis", metavar="CARPETA", help="Exporta los brutos (--brutos) con un análisis ya hecho (carpeta Diagnostico_...), sin repetirlo")
     ap.add_argument("--sin-actualizar", action="store_true", help="Sin efecto (se mantiene por compatibilidad): ya no se busca versión nueva al abrir")
     ap.add_argument("--actualizar-ahora", action="store_true", help="Solo .exe: buscar e instalar la última versión sin abrir la ventana ni reabrir")
@@ -2948,6 +2959,12 @@ def main():
         r = actualizar.actualizar(BUILD, carpeta_base(), progreso=print, relanzar=False)
         print(r)
         sys.exit(0 if r in ("al_dia", "cambio_lanzado") else 1)
+    if args.disco_prueba:
+        ff, fp = localizar_ffmpeg()
+        if not ff:
+            ap.error("--disco-prueba necesita ffmpeg y ffprobe (carpeta bin o PATH)")
+        importar_disco_prueba().crear(args.disco_prueba, ff, fp)
+        return
     if args.que_hay:
         if not args.origen:
             ap.error("--que-hay requiere --origen")

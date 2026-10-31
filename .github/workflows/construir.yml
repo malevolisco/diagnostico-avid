@@ -64,10 +64,14 @@ jobs:
           Get-Content build.txt
 
       - name: Construir ejecutable
-        run: pyinstaller --noconfirm --clean --noconsole --onedir --name DiagnosticoAvid --add-data "bin;bin" --add-data "build.txt;." --hidden-import interfaz --hidden-import tema --hidden-import ventana_montaje --hidden-import ventana_origen --hidden-import aprendizaje --hidden-import montaje --hidden-import mxf_util --hidden-import lecturas diagnostico_avid.py
+        run: pyinstaller --noconfirm --clean --noconsole --onedir --name DiagnosticoAvid --add-data "bin;bin" --add-data "build.txt;." --hidden-import interfaz --hidden-import tema --hidden-import ventana_montaje --hidden-import ventana_origen --hidden-import aprendizaje --hidden-import montaje --hidden-import mxf_util --hidden-import lecturas --paths tests --hidden-import crear_disco_prueba --hidden-import dv_prueba diagnostico_avid.py
 
       - name: Disco de prueba simulado
-        run: python tests/crear_disco_prueba.py disco_prueba --ffmpeg bin/ffmpeg.exe --ffprobe bin/ffprobe.exe
+        shell: pwsh
+        run: |
+          # con el propio .exe (botón "Disco de prueba" de la ventana): así se comprueba que el generador va dentro
+          $p = Start-Process -FilePath "dist/DiagnosticoAvid/DiagnosticoAvid.exe" -ArgumentList "--disco-prueba disco_prueba" -PassThru -Wait -NoNewWindow
+          if ($p.ExitCode -ne 0 -or -not (Test-Path disco_prueba/.disco_de_prueba)) { throw "El .exe no ha creado el disco de prueba (código $($p.ExitCode))" }
 
       - name: Probar el .exe (análisis + brutos) en Windows
         shell: pwsh

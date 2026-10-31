@@ -59,8 +59,8 @@ Página 1 · Disco
      Sus proyectos salen en "Elegir proyectos" junto a los del primero y
      su media se usa para los dos. También se lee sin modificarla. Si el informe dice que hay clips enlazados a ficheros que
      no están en el disco, es aquí donde se añade la carpeta donde estén.
-   PASO 0 · QUÉ HAY EN EL DISCO (opcional, antes de analizar): el botón
-   "0 · Qué hay en el disco" recorre el disco de Avid y los otros
+   INFORME PRELIMINAR (opcional, antes de analizar): el botón
+   "Informe preliminar" recorre el disco de Avid y los otros
    orígenes (las carpetas y lo que tienen dentro) y dice, carpeta por
    carpeta, qué hay: proyecto de Avid, ficheros MOV, MP4, MXF, tarjeta
    de cámara, nada, sin vídeo o mezclado. Solo mira nombres y tamaños,
@@ -156,6 +156,21 @@ Página 1 · Disco
    Si te piden enviarlo sin imágenes, abre "Opciones avanzadas" antes de
    empezar y desmarca "Incluir las miniaturas en el zip para enviar".
    Al final del informe hay una tabla "Brutos exportados" con el estado de cada uno.
+
+Probar sin un disco real: "Disco de prueba"
+-------------------------------------------
+En la página Disco, el botón "Disco de prueba" (junto a "Opciones
+avanzadas") crea un disco de Avid simulado junto al programa, en la
+carpeta "Disco de prueba", y deja elegidas sus carpetas: disco, otro
+origen, informe y brutos. Tarda un par de minutos y ocupa unos 800 MB.
+Sirve para aprender y probar todas las páginas en cualquier PC. Trae
+casos difíciles: clips repetidos en DV y en HD (proyecto DUPLICADO, que
+además mezcla material de 2002 y de 2021), tarjetas, NTSC, agencias,
+efectos de Avid, media enlazada y nombres en chino. La imagen es una
+carta de ajuste y el sonido, tonos. Después: "Analizar todo el disco",
+Montaje (en DUPLICADO los trozos repetidos están en la papelera) y
+Exportar. Para volver a un disco real, elige otra vez sus carpetas. Se
+puede borrar cuando quieras; volver a pulsar el botón lo rehace.
 
 Página 2 · Montaje (revisar los brutos antes de exportar; opcional)
 Usa el último análisis del disco: no lo repite.

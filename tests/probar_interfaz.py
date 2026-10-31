@@ -17,6 +17,7 @@ tampoco de arriba abajo), con la pantalla que haya: en una pequeña la ventana v
    Bajar un clip, deshacer, volver a bajar; al cambiar de página pregunta y guarda montaje.json.
 3 · Exportar: piezas sin marcar; un TC no válido desactiva el botón y dice por qué; exportar; cada bruto acaba en
    "Terminado" y "Conforme · MD5".
+Al final, "Disco de prueba" (con un generador falso): deja elegidas sus carpetas y el origen de DUPLICADO.
 Deja capturas de cada página en CARPETA_CAPTURAS. Los diálogos se contestan solos (sí). Sale con 1 si algo no cuadra.
 En Linux necesita una pantalla (xvfb); en Windows, el escritorio normal.
 """
@@ -139,7 +140,8 @@ def disco_leido():
     # 8 proyectos de Avid y 2 carpetas sin proyecto (RODAJE y material: antes de analizar no se sabe que son media enlazada)
     comprobar(not llamadas and len(r.get("selector") or []) == 10, "Proyectos… debe reutilizar la lectura: %s, %s" % (llamadas, r.get("selector")))
     captura("1_disco.png")
-    # Paso 0: qué hay en el disco
+    # Informe preliminar: qué hay en cada carpeta del disco
+    comprobar(app.bt_que_hay.cget("text").strip().endswith("Informe preliminar"), "el botón debe llamarse Informe preliminar")
     app.bt_que_hay.invoke()
     esperar(lambda: app.v_que_hay is not None and app.v_que_hay.filas, que_hay, limite=60)
 
@@ -343,6 +345,31 @@ def final():
     for v in marcadas:
         comprobar(v[3] == "Terminado" and v[4] == "Conforme · MD5", "%s acaba en %s / %s" % (v[1], v[3], v[4]))
     captura("7_exportado.png")
+    # Disco de prueba: con un generador falso (el de verdad son 800 MB y ya se usa para toda esta prueba) se comprueba
+    # que deja elegidas sus carpetas (disco, otro origen, informes, brutos) y el origen de DUPLICADO para ver los repetidos
+    base = Path(DESTINO) / "programa"
+    d.carpeta_base = lambda: base
+
+    class Falso:
+        @staticmethod
+        def crear(destino, ffmpeg, ffprobe, progreso=print):
+            Path(destino).mkdir(parents=True, exist_ok=True)
+            r.setdefault("disco_prueba", []).append(str(destino))
+    d.importar_disco_prueba = lambda: Falso
+    app.disco_de_prueba()
+    esperar(lambda: r.get("disco_prueba") and not app.estado["ocupado"], disco_de_prueba, limite=60)
+
+
+@seguro
+def disco_de_prueba():
+    disco = Path(DESTINO) / "programa" / "Disco de prueba"
+    comprobar(app.origen.get() == str(disco) and app.estado["media_extra"] == [str(disco) + "_media2"],
+              "el disco de prueba debe quedar elegido: %s, %s" % (app.origen.get(), app.estado["media_extra"]))
+    comprobar(app.brutos.get().endswith("Disco de prueba - brutos") and app.destino.get().endswith("Disco de prueba - informes"),
+              "carpetas de prueba: %s, %s" % (app.brutos.get(), app.destino.get()))
+    origen = json.loads((Path(app.brutos.get()) / "origen.json").read_text(encoding="utf-8"))
+    comprobar({x["bin"] for x in origen["decisiones"] if x["clase"] == "propio"} >= {"DUPLICADO Bin.avb"},
+              "en el disco de prueba DUPLICADO debe entrar: %s" % origen)
     app.al_cerrar()
 
 

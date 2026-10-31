@@ -101,7 +101,7 @@ class App:
                 raiz.attributes("-zoomed", True)  # Linux
             except tk.TclError:
                 pass
-        self.tamano_visto = None
+        self.tamano_visto, self.disco_estrecha = None, False
         raiz.bind("<Configure>", self.al_redimensionar, add="+")
         self.letras = tema.aplicar(raiz)
 

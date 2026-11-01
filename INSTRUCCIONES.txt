@@ -128,10 +128,14 @@ Página 1 · Disco
    CON PROYECTOS ELEGIDOS NO SE LEE TODO EL DISCO: el programa busca en
    Avid MediaFiles solo los ficheros de esos proyectos, por su nombre, y
    abre solo esos (y, si falta alguno, los de sus mismas carpetas). Es
-   mucho más rápido que mirar todos los MXF del disco. Si un clip sale
-   sin media y sabes que está en el disco (Avid lo guardó en otro sitio),
-   vuelve a analizar con "Opciones avanzadas" > "Si falta media del
-   proyecto, buscarla en todo el disco" (más lento).
+   mucho más rápido que mirar todos los MXF del disco. Si algún clip de
+   sus bins se queda sin media, al terminar el programa lo dice (cuántos
+   y de qué proyecto) y pregunta si buscarlos en todo el disco, con lo
+   que tardaría. Si dices que no, el aviso queda en "Último análisis"
+   con el botón "Buscar en todo el disco..." para hacerlo cuando quieras.
+   Lo ya mirado no se repite. Si después de buscar en todo el disco
+   siguen sin media, no están en él (offline): el aviso dice en qué
+   disco estaban según los bins.
    Usa siempre la misma carpeta de informe (mejor una del ordenador, por
    ejemplo Documentos\Analisis Avid) para que los encuentre.
 5. Al terminar se abre el informe en el navegador y aparece un mensaje con dos

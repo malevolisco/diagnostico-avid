@@ -1078,7 +1078,7 @@ class CacheMXF:
 
     @staticmethod
     def clave(f):
-        return "%s|%s|%s" % (f["ruta"], f["bytes"], f["modificado"])
+        return "%s|%s|%s" % (f["ruta"], f.get("bytes"), f.get("modificado"))
 
     def leer(self, f):
         r = self.datos.get(self.clave(f))
@@ -1094,9 +1094,20 @@ class CacheMXF:
         if time.time() - self.ultimo > 60:
             self.guardar()
 
+    def cabecera(self, f):
+        """Lo leído de la cabecera de un MXF (mxf_de_proyectos), o None."""
+        return self.datos.get("cab|" + self.clave(f))
+
+    def poner_cabecera(self, f, c):
+        self.datos["cab|" + self.clave(f)] = c
+        self.nuevos += 1
+        if time.time() - self.ultimo > 60:
+            self.guardar()
+
     def quedarse(self, ficheros):
         """Olvida lo que ya no está en el disco (o ha cambiado), para que la caché no crezca sin fin."""
         vivas = {self.clave(f) for f in ficheros}
+        vivas |= {"cab|" + k for k in vivas}
         antes = len(self.datos)
         self.datos = {k: v for k, v in self.datos.items() if k in vivas}
         self.nuevos += antes - len(self.datos)
@@ -1211,7 +1222,10 @@ def carpeta_de(ruta):
     return str(ruta).replace("/", "\\").rpartition("\\")[0]
 
 
-def mxf_de_proyectos(ficheros, origen, bins, progreso, todo_el_disco=False):
+CABECERAS_POR_SEGUNDO = 70  # medido en un disco USB real (133.753 cabeceras de MXF en 31 min), para estimar lo que falta
+
+
+def mxf_de_proyectos(ficheros, origen, bins, progreso, todo_el_disco=False, cache=None, info=None):
     """Análisis de solo algunos proyectos: los MXF del inventario que pueden ser de sus bins, sin ffprobe. Entran los que
     llevan en la cabecera (mxf_util.paquetes) el UMID de algún clip o fuente de esos bins, los que se llaman como alguno
     (para el cruce aproximado por nombre y duración) y, por si acaso, los que no se pueden leer así.
@@ -1223,8 +1237,14 @@ def mxf_de_proyectos(ficheros, origen, bins, progreso, todo_el_disco=False):
       1. se abren solo los MXF cuyo nombre lleva uno de esos trozos o nombres;
       2. si queda algún clip de los bins sin su MXF, los demás MXF de las carpetas donde ya ha salido alguno (Avid guarda
          la media de una sesión junta); si no ha salido ninguno, todos los del disco (como antes);
-      3. con todo_el_disco, también todos los demás: para media que Avid guardó con otros nombres y en otras carpetas.
-    Lo que sigue sin aparecer suele ser media que no está en el disco (offline): el cruce lo cuenta como huérfano.
+      3. si aún falta alguno, los MXF cuya cabecera ya se leyó en otra búsqueda de este disco (está en la caché: no se
+         abren);
+      4. con todo_el_disco, también todos los demás: para media que Avid guardó con otros nombres y en otras carpetas
+         (el botón "Buscar en todo el disco" de la página Disco, cuando el análisis deja clips sin media).
+    Lo que sigue sin aparecer suele ser media que no está en el disco (offline). Lo leído de cada cabecera queda en la
+    caché del disco (CacheMXF, "cab|..."): después de buscar una vez en todo el disco, los análisis siguientes ya lo
+    tienen todo mirado y no vuelven a preguntar.
+    info (dict): se rellena con cabeceras leídas, sacadas de la caché, MXF sin mirar, segundos y si se ha mirado todo.
     Devuelve (los que hay que analizar, número de MXF del disco)."""
     import mxf_util
     ids, nombres, por_clip = set(), set(), []
@@ -1247,37 +1267,58 @@ def mxf_de_proyectos(ficheros, origen, bins, progreso, todo_el_disco=False):
         n, nn = nombre.upper(), nombre_normal(nombre)
         return any(n[i:i + 8] in trozos for i in range(len(n) - 7)) or any(nn[:k] in prefijos for k in largos)
 
-    def leer(f):
-        """(f, materiales de su cabecera o None si no se puede leer así, ¿es de estos proyectos?)"""
+    def cabecera(f):
+        """{"m": materiales, "n": nombres} de la cabecera, {"m": None} si no se puede leer así; None si ha fallado algo
+        raro (no se recuerda: se vuelve a intentar)."""
         try:
             p = mxf_util.paquetes(ruta_larga(Path(origen) / f["ruta"]))
         except Exception as e:  # algo raro en un fichero no para el análisis: se analiza entero con ffprobe
             LOG.warning("Cabecera de %s: %s", f["ruta"], e)
-            return f, None, True
-        if p is None:
-            return f, None, True
-        mats = {material(u) for u in p["umids"]}
-        return f, mats, bool(mats & ids) or any(nombre_normal(n) in nombres for n in p["nombres"])
+            return None
+        return {"m": None} if p is None else {"m": sorted({material(u) for u in p["umids"]}), "n": sorted(p["nombres"])}
 
-    elegidos, vistos, encontrados = [], set(), set()
+    def suyo(c):
+        if not c or c.get("m") is None:
+            return True  # no se sabe: se analiza entero con ffprobe
+        return bool(set(c["m"]) & ids) or any(nombre_normal(n) in nombres for n in c.get("n") or ())
+
+    elegidos, vistos, encontrados, cuenta = [], set(), set(), Counter()
+
+    def anotar(f, c):
+        vistos.add(f["ruta"])
+        if suyo(c):
+            elegidos.append(f)
+            encontrados.update((c or {}).get("m") or ())
 
     def mirar(lista, que):
-        hechos, antes = 0, len(elegidos)
+        antes = len(elegidos)
+        leer = []
+        for f in lista:
+            c = cache.cabecera(f) if cache is not None else None
+            if c is None:
+                leer.append(f)
+            else:
+                anotar(f, c)
+                cuenta["cache"] += 1
+        hechos = 0
         with ThreadPoolExecutor(max_workers=NUM_HILOS) as ex:
-            futuros = [ex.submit(leer, f) for f in lista]
+            futuros = {ex.submit(cabecera, f): f for f in leer}
             for fut in as_completed(futuros):
                 if PARAR.is_set():
                     ex.shutdown(wait=False, cancel_futures=True)
+                    if cache is not None:
+                        cache.guardar()
                     raise Detenido()
-                f, mats, suyo = fut.result()
-                vistos.add(f["ruta"])
-                if suyo:
-                    elegidos.append(f)
-                    encontrados.update(mats or ())
+                f, c = futuros[fut], fut.result()
+                anotar(f, c)
+                if c is not None and cache is not None:
+                    cache.poner_cabecera(f, c)
+                cuenta["leidas"] += 1
                 hechos += 1
-                if hechos % 200 == 0 or hechos == len(lista):
-                    progreso("3/6 MXF %s: %d/%d mirados, %d de estos proyectos" % (que, hechos, len(lista), len(elegidos) - antes))
-        LOG.info("Análisis parcial, MXF %s: %d mirados, %d de los proyectos elegidos", que, len(lista), len(elegidos) - antes)
+                if hechos % 200 == 0 or hechos == len(leer):
+                    progreso("3/6 MXF %s: %d/%d mirados, %d de estos proyectos" % (que, hechos, len(leer), len(elegidos) - antes))
+        LOG.info("Análisis parcial, MXF %s: %d mirados (%d ya en la caché), %d de los proyectos elegidos", que, len(lista),
+                 len(lista) - len(leer), len(elegidos) - antes)
 
     t0 = time.monotonic()
     mirar([f for f in todos if por_nombre(f)], "por el nombre")
@@ -1288,13 +1329,64 @@ def mxf_de_proyectos(ficheros, origen, bins, progreso, todo_el_disco=False):
         LOG.info("Análisis parcial: %d clips de los bins sin su MXF por el nombre; se miran %d MXF %s", faltan(), len(resto),
                  "de sus carpetas" if carpetas else "del disco (ninguno por el nombre)")
         mirar(resto, "de sus carpetas" if carpetas else "del disco")
+    if faltan() and cache is not None:  # lo mirado en búsquedas anteriores de este disco no cuesta nada: también
+        ya = [f for f in todos if f["ruta"] not in vistos and cache.cabecera(f) is not None]
+        if ya:
+            mirar(ya, "ya mirados en otra búsqueda")
     if todo_el_disco and faltan():
         mirar([f for f in todos if f["ruta"] not in vistos], "del resto del disco")
+    if cache is not None:
+        cache.guardar()
     elegidos.sort(key=lambda f: f["ruta"])
-    LOG.info("Análisis parcial: %d de %d MXF son de los proyectos elegidos (%d cabeceras leídas, %.0f s); %d clips de los bins "
-             "sin MXF en lo mirado (media offline, o en otro sitio: buscar en todo el disco)", len(elegidos), len(todos), len(vistos),
-             time.monotonic() - t0, faltan())
+    segundos = time.monotonic() - t0
+    if info is not None:
+        info.update({"cabeceras_leidas": cuenta["leidas"], "cabeceras_cache": cuenta["cache"], "mxf_sin_mirar": len(todos) - len(vistos),
+                     "segundos": round(segundos, 1), "todo_el_disco": len(vistos) == len(todos),
+                     "por_segundo": round(cuenta["leidas"] / segundos, 1) if cuenta["leidas"] >= 200 and segundos >= 2 else None})
+    LOG.info("Análisis parcial: %d de %d MXF son de los proyectos elegidos (%d cabeceras: %d leídas, %d de la caché; %.0f s); "
+             "%d clips de los bins sin MXF en lo mirado; %d MXF del disco sin mirar", len(elegidos), len(todos), len(vistos),
+             cuenta["leidas"], cuenta["cache"], segundos, faltan(), len(todos) - len(vistos))
     return elegidos, len(todos)
+
+
+def media_que_falta(busqueda, cruce, proyectos):
+    """Para la página Disco y el informe: qué clips de los bins de estos proyectos se han quedado sin media y dónde se ha
+    buscado. busqueda: lo que rellena mxf_de_proyectos. {"todo_el_disco", "sin_media": {proyecto: n}, "ejemplos":
+    {proyecto: [clip, ...]}, "volumenes": [[disco según los bins, n], ...], "mxf_sin_mirar", "minutos" (lo que tardaría
+    buscar en el resto del disco)}."""
+    sin, ejemplos, vols = {}, {}, Counter()
+    for p in cruce.get("por_proyecto") or []:
+        if p["proyecto"] not in proyectos:
+            continue
+        faltan = [o for o in p.get("offline_detalle", []) if not o.get("omf")]  # la media OMF sí está (marcar_offline_en_omf)
+        n = (p.get("clips_offline") or 0) - sum(1 for o in p.get("offline_detalle", []) if o.get("omf"))
+        if n > 0:
+            sin[p["proyecto"]] = n
+            ejemplos[p["proyecto"]] = [o["nombre"] for o in faltan[:8]]
+            for o in faltan:
+                vols.update(o.get("volumenes") or [])
+    ritmo = busqueda.get("por_segundo") or CABECERAS_POR_SEGUNDO
+    return dict(busqueda, sin_media=sin, ejemplos=ejemplos, volumenes=[list(kv) for kv in vols.most_common(4)],
+                minutos=max(1, int(round(busqueda.get("mxf_sin_mirar", 0) / ritmo / 60))) if busqueda.get("mxf_sin_mirar") else 0)
+
+
+def texto_minutos(n):
+    return "un minuto o menos" if n <= 1 else "unos %d minutos" % n
+
+
+def avisar_media_que_falta(avisos, b):
+    """Completa el aviso de clips offline del informe con dónde se ha buscado su media."""
+    if not b.get("sin_media"):
+        return
+    extra = (" Se ha buscado su media en todo el disco." if b.get("todo_el_disco") else
+             " Se ha buscado su media por el nombre y en las carpetas de estos proyectos, no en todo el disco: si alguno "
+             "estaba en este disco, en el programa, página Disco, \"Buscar en todo el disco\" (%s)." % texto_minutos(b.get("minutos", 0)))
+    for a in avisos:
+        if "no tienen media en este disco (offline)" in a.get("texto", ""):
+            a["texto"] += extra
+            return
+    avisos.append({"nivel": "aviso", "texto": "%d clips de bin no tienen media en este disco (offline).%s"
+                   % (sum(b["sin_media"].values()), extra)})
 
 
 def fuera_del_analisis(resumen, elegidos):
@@ -2389,8 +2481,9 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
         guardar_json(destino, "bins.json", bins)
 
         progreso("3/6 Analizando ficheros MXF...")
-        objetivo, mxf_disco = (mxf_de_proyectos(ficheros, origen, bins, progreso, buscar_en_todo_el_disco) if solo and ffmpeg_ok
-                               else (None, sum(1 for f in ficheros if f["ext"] == ".mxf")))
+        busqueda = {}
+        objetivo, mxf_disco = (mxf_de_proyectos(ficheros, origen, bins, progreso, buscar_en_todo_el_disco, cache, busqueda)
+                               if solo and ffmpeg_ok else (None, sum(1 for f in ficheros if f["ext"] == ".mxf")))
         mxf = analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=objetivo, cache=cache) if ffmpeg_ok else []
         enlazados, enlaces, faltan = buscar_enlazados(bins, ficheros, mxf) if ffmpeg_ok else ([], {}, [])
         # Una carpeta sin proyecto de Avid cuyos vídeos enlazan los bins de otro proyecto (media AMA) es media de ese
@@ -2494,6 +2587,9 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
             resumen["parcial"] = {"proyectos": [p["nombre"] for p in proyectos], "proyectos_disco": del_disco,
                                   "mxf_analizados": len(objetivo or []), "mxf_disco": mxf_disco, "gb_media_disco": resumen["gb_media"],
                                   "de_antes": sumados, "cambiados": cambiados}
+            if busqueda:
+                resumen["parcial"]["busqueda"] = media_que_falta(busqueda, cruce, del_informe or resumen["parcial"]["proyectos"])
+                avisar_media_que_falta(resumen["avisos"], resumen["parcial"]["busqueda"])
             resumen["gb_media"] = gb(sum(c["bytes"] for c in clips))  # la media de estos proyectos, no la del disco
             resumen["avisos"].insert(0, {"nivel": "info", "texto": "Análisis solo de %d de %d proyectos (%s): %d de los %d MXF del disco. "
                                          "Los demás proyectos y los clips que no están en ningún bin no salen en este informe."

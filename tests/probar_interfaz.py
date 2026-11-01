@@ -382,6 +382,55 @@ def final():
     for v in marcadas:
         comprobar(v[3] == "Terminado" and v[4] == "Conforme · MD5", "%s acaba en %s / %s" % (v[1], v[3], v[4]))
     captura("7_exportado.png")
+    media_que_falta()
+
+
+@seguro
+def media_que_falta():
+    # Analizar un proyecto con un clip sin media (CLIP OFFLINE): sus MXF se buscan por el nombre y en sus carpetas; al
+    # terminar se pregunta si buscar en todo el disco (aquí: no) y la tarjeta lo avisa con el botón para hacerlo luego
+    r["si_no"] = []
+    messagebox.askyesno = lambda titulo, *a, **k: r["si_no"].append(titulo) or titulo != "Terminado"
+    app.ir("disco")
+    app.estado["proyectos"] = ["15 SEPT CENTROAMERICA"]
+    app.bt_analizar.invoke()
+    esperar(lambda: app.estado["ocupado"] is None, falta_avisada)
+
+
+def busqueda_actual():
+    return ((json.loads((app.ultimo / "resumen.json").read_text(encoding="utf-8")).get("parcial") or {}).get("busqueda") or {})
+
+
+@seguro
+def falta_avisada():
+    app.raiz.update()
+    b = busqueda_actual()
+    comprobar(b.get("sin_media", {}).get("15 SEPT CENTROAMERICA") and not b.get("todo_el_disco") and b.get("mxf_sin_mirar"),
+              "un clip sin media buscado solo por el nombre y en sus carpetas: %s" % b)
+    comprobar("Terminado" in r["si_no"], "al terminar debe preguntar si buscar en todo el disco: %s" % r["si_no"])
+    comprobar(app.lbl_falta.winfo_ismapped() and "15 SEPT CENTROAMERICA: 1" in app.lbl_falta.cget("text")
+              and app.bt_buscar_todo.winfo_ismapped(), "la tarjeta debe avisar de la media que falta, con el botón: %r"
+              % app.lbl_falta.cget("text"))
+    captura("8_falta_media.png")
+    cabe("disco")
+    messagebox.askyesno = lambda *a, **k: True
+    app.bt_buscar_todo.invoke()
+    comprobar(app.estado["ocupado"] == "analisis", "el botón debe buscar en todo el disco")
+    esperar(lambda: app.estado["ocupado"] is None, buscado_en_todo)
+
+
+@seguro
+def buscado_en_todo():
+    app.raiz.update()
+    b = busqueda_actual()
+    comprobar(b.get("todo_el_disco") and b.get("cabeceras_cache", 0) > 0, "buscado en todo el disco, sin repetir lo ya mirado: %s" % b)
+    comprobar("todo el disco" in app.lbl_falta.cget("text") and not app.bt_buscar_todo.winfo_ismapped(),
+              "después de buscar en todo el disco, sin botón: %r" % app.lbl_falta.cget("text"))
+    disco_prueba_falso()
+
+
+@seguro
+def disco_prueba_falso():
     # Disco de prueba: con un generador falso (el de verdad son 800 MB y ya se usa para toda esta prueba) se comprueba
     # que deja elegidas sus carpetas (disco, otro origen, informes, brutos) y el origen de DUPLICADO para ver los repetidos
     base = Path(DESTINO) / "programa"

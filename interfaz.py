@@ -113,6 +113,7 @@ class App:
         self.minis = tk.BooleanVar(value=True)
         self.zip_minis = tk.BooleanVar(value=True)
         self.capturas = tk.BooleanVar(value=True)
+        self.todo_disco = tk.BooleanVar(value=False)
         self.seguido = tk.BooleanVar(value=False)
         self.cola = queue.Queue()
         self.estado = {"ocupado": None, "cerrar": False, "proyectos": None,
@@ -326,6 +327,8 @@ class App:
         self.avanzadas = ttk.Frame(izq, style="Panel.TFrame", padding=(14, 10))
         for texto, var in (("Miniaturas de cada clip para el informe (más lento; el visor del montaje no las necesita)", self.minis),
                            ("Sin miniaturas, al menos una captura de cada clip de cámara para decidir qué proyectos restaurar", self.capturas),
+                           ("Si falta media del proyecto, buscarla en todo el disco (mucho más lento: solo si Avid la guardó en otro sitio)",
+                            self.todo_disco),
                            ("Incluir las miniaturas en el zip para enviar (desmarcado: el zip solo lleva texto)", self.zip_minis),
                            ("Analizar y exportar seguido: exporta los brutos sin pasar por Montaje ni Exportar", self.seguido)):
             ttk.Checkbutton(self.avanzadas, text=texto, variable=var, style="Panel.TCheckbutton").pack(anchor="w", pady=1)
@@ -780,7 +783,7 @@ class App:
         datos = dict(origen=self.origen.get(), destino_base=self.destino.get(), hacer_miniaturas=self.minis.get(), capturas_camara=self.capturas.get(),
                      brutos=self.brutos.get() if seguido else None, zip_miniaturas=self.zip_minis.get(),
                      proyectos_brutos=self.estado["proyectos"] if seguido else None, carpetas_media=list(self.estado["media_extra"]),
-                     solo_proyectos=self.estado["proyectos"])
+                     solo_proyectos=self.estado["proyectos"], buscar_en_todo_el_disco=self.todo_disco.get())
         threading.Thread(target=self.hilo_analisis, args=(datos,), daemon=True).start()
 
     def hilo_analisis(self, datos):

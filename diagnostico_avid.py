@@ -1207,43 +1207,93 @@ def nombre_normal(t):
     return " ".join(str(t or "").lower().split())
 
 
-def mxf_de_proyectos(ficheros, origen, bins, progreso):
-    """Análisis de solo algunos proyectos: los MXF del inventario que pueden ser de sus bins, mirando solo la cabecera de
-    cada uno (mxf_util.paquetes, sin ffprobe, mucho más rápido). Entran los que llevan el UMID de algún clip o fuente de esos
-    bins, los que se llaman como alguno (para el cruce aproximado por nombre y duración) y, por si acaso, los que no se
-    pueden leer así. Devuelve (los que hay que analizar, número de MXF del disco)."""
+def carpeta_de(ruta):
+    return str(ruta).replace("/", "\\").rpartition("\\")[0]
+
+
+def mxf_de_proyectos(ficheros, origen, bins, progreso, todo_el_disco=False):
+    """Análisis de solo algunos proyectos: los MXF del inventario que pueden ser de sus bins, sin ffprobe. Entran los que
+    llevan en la cabecera (mxf_util.paquetes) el UMID de algún clip o fuente de esos bins, los que se llaman como alguno
+    (para el cruce aproximado por nombre y duración) y, por si acaso, los que no se pueden leer así.
+
+    No se abre cada MXF del disco (31/10/2026: mirar la cabecera de 133.753 MXF para encontrar los 651 de un proyecto
+    tardó 31 minutos). Avid pone en el nombre de cada MXF el principio del número de material de su clip
+    (V01.5CB6A863_5CB6A85CB6A861.mxf) o el principio del nombre del clip (Video_1555339722.mp5CB4D632.mxf); en ese disco
+    salían así, sin abrir nada, 484 de los 486 MXF que usaba el proyecto. Por eso:
+      1. se abren solo los MXF cuyo nombre lleva uno de esos trozos o nombres;
+      2. si queda algún clip de los bins sin su MXF, los demás MXF de las carpetas donde ya ha salido alguno (Avid guarda
+         la media de una sesión junta); si no ha salido ninguno, todos los del disco (como antes);
+      3. con todo_el_disco, también todos los demás: para media que Avid guardó con otros nombres y en otras carpetas.
+    Lo que sigue sin aparecer suele ser media que no está en el disco (offline): el cruce lo cuenta como huérfano.
+    Devuelve (los que hay que analizar, número de MXF del disco)."""
     import mxf_util
-    ids, nombres = set(), set()
+    ids, nombres, por_clip = set(), set(), []
     for b in bins:
         for clip in b["clips"] if b.get("ok") else []:
-            for mob in [clip.get("mob_id") or {}] + [fu.get("mob_id") or {} for fu in clip.get("fuentes", [])]:
-                ids.update(material(mob[k]).upper() for k in ("le", "be") if mob.get(k))
+            suyos = {material(mob[k]).upper() for mob in [clip.get("mob_id") or {}] + [fu.get("mob_id") or {} for fu in clip.get("fuentes", [])]
+                     for k in ("le", "be") if mob.get(k)}
+            ids |= suyos
+            if suyos:
+                por_clip.append(suyos)
             if clip.get("nombre"):
                 nombres.add(nombre_normal(clip["nombre"]))
     todos = [f for f in ficheros if f["ext"] == ".mxf" and not es_proxy(f["ruta"])]
+    trozos = {i[:8] for i in ids if len(i) >= 8}
+    prefijos = {n[:12] for n in nombres if len(n) >= 8}  # Avid corta el nombre del clip para el del fichero
+    largos = {len(p) for p in prefijos}
 
-    def es_suyo(f):
+    def por_nombre(f):
+        nombre = Path(f["ruta"]).name
+        n, nn = nombre.upper(), nombre_normal(nombre)
+        return any(n[i:i + 8] in trozos for i in range(len(n) - 7)) or any(nn[:k] in prefijos for k in largos)
+
+    def leer(f):
+        """(f, materiales de su cabecera o None si no se puede leer así, ¿es de estos proyectos?)"""
         try:
             p = mxf_util.paquetes(ruta_larga(Path(origen) / f["ruta"]))
         except Exception as e:  # algo raro en un fichero no para el análisis: se analiza entero con ffprobe
             LOG.warning("Cabecera de %s: %s", f["ruta"], e)
-            return True
-        return p is None or any(material(u) in ids for u in p["umids"]) or any(nombre_normal(n) in nombres for n in p["nombres"])
+            return f, None, True
+        if p is None:
+            return f, None, True
+        mats = {material(u) for u in p["umids"]}
+        return f, mats, bool(mats & ids) or any(nombre_normal(n) in nombres for n in p["nombres"])
 
-    elegidos, hechos = [], 0
-    with ThreadPoolExecutor(max_workers=NUM_HILOS) as ex:
-        futuros = {ex.submit(es_suyo, f): f for f in todos}
-        for fut in as_completed(futuros):
-            if PARAR.is_set():
-                ex.shutdown(wait=False, cancel_futures=True)
-                raise Detenido()
-            if fut.result():
-                elegidos.append(futuros[fut])
-            hechos += 1
-            if hechos % 200 == 0 or hechos == len(todos):
-                progreso("MXF del disco: %d/%d mirados, %d de estos proyectos" % (hechos, len(todos), len(elegidos)))
+    elegidos, vistos, encontrados = [], set(), set()
+
+    def mirar(lista, que):
+        hechos, antes = 0, len(elegidos)
+        with ThreadPoolExecutor(max_workers=NUM_HILOS) as ex:
+            futuros = [ex.submit(leer, f) for f in lista]
+            for fut in as_completed(futuros):
+                if PARAR.is_set():
+                    ex.shutdown(wait=False, cancel_futures=True)
+                    raise Detenido()
+                f, mats, suyo = fut.result()
+                vistos.add(f["ruta"])
+                if suyo:
+                    elegidos.append(f)
+                    encontrados.update(mats or ())
+                hechos += 1
+                if hechos % 200 == 0 or hechos == len(lista):
+                    progreso("3/6 MXF %s: %d/%d mirados, %d de estos proyectos" % (que, hechos, len(lista), len(elegidos) - antes))
+        LOG.info("Análisis parcial, MXF %s: %d mirados, %d de los proyectos elegidos", que, len(lista), len(elegidos) - antes)
+
+    t0 = time.monotonic()
+    mirar([f for f in todos if por_nombre(f)], "por el nombre")
+    faltan = lambda: sum(1 for s in por_clip if not s & encontrados)
+    if faltan():
+        carpetas = {carpeta_de(f["ruta"]) for f in elegidos}
+        resto = [f for f in todos if f["ruta"] not in vistos and (not carpetas or carpeta_de(f["ruta"]) in carpetas)]
+        LOG.info("Análisis parcial: %d clips de los bins sin su MXF por el nombre; se miran %d MXF %s", faltan(), len(resto),
+                 "de sus carpetas" if carpetas else "del disco (ninguno por el nombre)")
+        mirar(resto, "de sus carpetas" if carpetas else "del disco")
+    if todo_el_disco and faltan():
+        mirar([f for f in todos if f["ruta"] not in vistos], "del resto del disco")
     elegidos.sort(key=lambda f: f["ruta"])
-    LOG.info("Análisis parcial: %d de %d MXF son de los proyectos elegidos (por la cabecera)", len(elegidos), len(todos))
+    LOG.info("Análisis parcial: %d de %d MXF son de los proyectos elegidos (%d cabeceras leídas, %.0f s); %d clips de los bins "
+             "sin MXF en lo mirado (media offline, o en otro sitio: buscar en todo el disco)", len(elegidos), len(todos), len(vistos),
+             time.monotonic() - t0, faltan())
     return elegidos, len(todos)
 
 
@@ -2250,11 +2300,13 @@ def guardar_json(destino, nombre, datos):
 
 def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_miniaturas=0, abrir=True, brutos=None,
              zip_miniaturas=True, proyectos_brutos=None, carpetas_media=(), solo_proyectos=None, usar_cache=True, capturas_camara=True,
-             acumular=True):
+             acumular=True, buscar_en_todo_el_disco=False):
     """proyectos_brutos: nombres de los proyectos de los que hacer brutos (None = todos; "SIN_PROYECTO" = clips sin bin);
     las miniaturas, solo de sus clips.
     solo_proyectos: analizar solo estos proyectos (None = el disco entero): se leen solo sus bins y, de los MXF, solo los
-    suyos (se reconocen por la cabecera, sin ffprobe). Con SIN_PROYECTO, o sin pyavb, se analiza el disco entero: para
+    suyos (se buscan por el nombre y se reconocen por la cabecera, sin ffprobe: mxf_de_proyectos).
+    buscar_en_todo_el_disco: con solo_proyectos, si falta media de sus bins, mirar también la cabecera de los MXF de todo el
+    disco (lento: para media que Avid guardó con otros nombres y en otras carpetas). Con SIN_PROYECTO, o sin pyavb, se analiza el disco entero: para
     saber qué clips no están en ningún bin hay que mirarlos todos.
     usar_cache: lo ya leído con ffprobe en un análisis anterior del mismo disco no se repite (CacheMXF).
     capturas_camara: sin hacer_miniaturas, una captura de cada clip de cámara para proyectos.html (qué proyectos restaurar).
@@ -2337,7 +2389,7 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
         guardar_json(destino, "bins.json", bins)
 
         progreso("3/6 Analizando ficheros MXF...")
-        objetivo, mxf_disco = (mxf_de_proyectos(ficheros, origen, bins, progreso) if solo and ffmpeg_ok
+        objetivo, mxf_disco = (mxf_de_proyectos(ficheros, origen, bins, progreso, buscar_en_todo_el_disco) if solo and ffmpeg_ok
                                else (None, sum(1 for f in ficheros if f["ext"] == ".mxf")))
         mxf = analizar_mxf(ficheros, origen, ffprobe, progreso, objetivo=objetivo, cache=cache) if ffmpeg_ok else []
         enlazados, enlaces, faltan = buscar_enlazados(bins, ficheros, mxf) if ffmpeg_ok else ([], {}, [])
@@ -3009,6 +3061,8 @@ def main():
                                         'con él se analiza el disco entero). Por defecto, todos')
     ap.add_argument("--media-extra", help='Otras carpetas con media del disco (media repartida en varios discos), separadas por ";". Solo se leen')
     ap.add_argument("--sin-cache", action="store_true", help="Volver a leer todos los MXF aunque ya se leyeran en un análisis anterior")
+    ap.add_argument("--buscar-en-todo-el-disco", action="store_true",
+                    help="Con --proyectos, si falta media de sus bins, mirar también los MXF de todo el disco (lento)")
     ap.add_argument("--listar-proyectos", action="store_true", help="Lista los proyectos de --origen (lectura rápida) y sale")
     ap.add_argument("--que-hay", action="store_true", help="Informe preliminar: dice qué hay en cada carpeta de --origen (y de --media-extra) y sale")
     ap.add_argument("--disco-prueba", metavar="CARPETA", help="Crea en CARPETA (y CARPETA_media2) un disco de Avid simulado para probar el programa sin un disco real, y sale")
@@ -3065,6 +3119,7 @@ def main():
                  max_miniaturas=args.max_miniaturas, abrir=not args.no_abrir, brutos=args.brutos,
                  zip_miniaturas=not args.zip_sin_miniaturas, proyectos_brutos=elegidos, solo_proyectos=elegidos,
                  usar_cache=not args.sin_cache, capturas_camara=not args.sin_capturas,
+                 buscar_en_todo_el_disco=args.buscar_en_todo_el_disco,
                  carpetas_media=[x.strip() for x in args.media_extra.split(";") if x.strip()] if args.media_extra else ())
         return
     try:

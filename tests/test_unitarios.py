@@ -2311,5 +2311,34 @@ class TextosDeLaCola(unittest.TestCase):
         self.assertEqual(interfaz.texto_calidad(None), "—")
 
 
+
+class MediaQueFalta(unittest.TestCase):
+    """Análisis de proyectos: qué clips de sus bins se quedan sin media y dónde se ha buscado (página Disco e informe)."""
+
+    def test_resumen_y_aviso(self):
+        import diagnostico_avid as da
+        cruce = {"por_proyecto": [
+            {"proyecto": "A", "clips_offline": 3, "offline_detalle": [
+                {"nombre": "ENTREVISTA", "volumenes": ["TOSHIBA (J:)"]}, {"nombre": "VIEJO", "volumenes": [], "omf": True},
+                {"nombre": "PLANO", "volumenes": ["TOSHIBA (J:)", "OTRO"]}]},
+            {"proyecto": "B", "clips_offline": 5, "offline_detalle": []},  # de un análisis anterior: no cuenta
+            {"proyecto": "C", "clips_offline": 0, "offline_detalle": []}]}
+        b = da.media_que_falta({"mxf_sin_mirar": 126000, "por_segundo": 70, "todo_el_disco": False}, cruce, ["A", "C"])
+        self.assertEqual((b["sin_media"], b["ejemplos"], b["volumenes"], b["minutos"]),
+                         ({"A": 2}, {"A": ["ENTREVISTA", "PLANO"]}, [["TOSHIBA (J:)", 2], ["OTRO", 1]], 30))
+        self.assertEqual(da.media_que_falta({"mxf_sin_mirar": 10}, cruce, ["A"])["minutos"], 1)
+        self.assertEqual((da.texto_minutos(1), da.texto_minutos(30)), ("un minuto o menos", "unos 30 minutos"))
+        avisos = [{"nivel": "aviso", "texto": "3 clips de bin no tienen media en este disco (offline)."}]
+        da.avisar_media_que_falta(avisos, b)
+        self.assertIn("no en todo el disco", avisos[0]["texto"])
+        self.assertIn("Buscar en todo el disco\" (unos 30 minutos)", avisos[0]["texto"])
+        avisos = [{"nivel": "aviso", "texto": "3 clips de bin no tienen media en este disco (offline)."}]
+        da.avisar_media_que_falta(avisos, dict(b, todo_el_disco=True))
+        self.assertTrue(avisos[0]["texto"].endswith("Se ha buscado su media en todo el disco."))
+        avisos = []
+        da.avisar_media_que_falta(avisos, da.media_que_falta({}, {"por_proyecto": []}, ["A"]))
+        self.assertEqual(avisos, [])  # nada sin media: nada que avisar
+
+
 if __name__ == "__main__":
     unittest.main()

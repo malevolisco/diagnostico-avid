@@ -323,6 +323,30 @@ class AcabadoProfesional(unittest.TestCase):
         self.assertEqual([f["ruta"] for f in elegidos], ["MXF/1/A01.sin_trozo.mxf", "MXF/1/V01.%s_00.mxf" % trozo,
                                                           "MXF/2/ajeno.mxf", "MXF/9/A02.otra_carpeta.mxf"])
 
+        # lo leído de cada cabecera queda en la caché del disco: buscar otra vez no abre ningún fichero
+        cache = da.CacheMXF(self.tmp / "cache.json")
+        for i, f in enumerate(ficheros):
+            f.update(bytes=1000 + i, modificado="2026-11-01 10:00:00")
+        info = {}
+        with mock.patch.object(mxf_util, "paquetes", contar):
+            da.mxf_de_proyectos(ficheros, self.tmp, [{"ok": True, "clips": [clip, otro]}], lambda m: None, todo_el_disco=True,
+                                cache=cache, info=info)
+        self.assertEqual((info["cabeceras_leidas"], info["cabeceras_cache"], info["mxf_sin_mirar"], info["todo_el_disco"]), (4, 0, 0, True))
+        leidos.clear()
+        info = {}
+        cache = da.CacheMXF(self.tmp / "cache.json")
+        with mock.patch.object(mxf_util, "paquetes", contar):
+            elegidos2, _ = da.mxf_de_proyectos(ficheros, self.tmp, [{"ok": True, "clips": [clip, otro]}], lambda m: None,
+                                               todo_el_disco=True, cache=cache, info=info)
+        self.assertEqual((leidos, info["cabeceras_cache"]), ([], 4))
+        self.assertEqual(elegidos2, elegidos)
+        info = {}  # sin pedir todo el disco: lo de la caché se mira igual (no cuesta nada) y cuenta como todo mirado
+        with mock.patch.object(mxf_util, "paquetes", contar):
+            da.mxf_de_proyectos(ficheros, self.tmp, [{"ok": True, "clips": [clip, otro]}], lambda m: None, cache=cache, info=info)
+        self.assertEqual((leidos, info["mxf_sin_mirar"], info["todo_el_disco"]), ([], 0, True))
+        cache.quedarse(ficheros)  # las cabeceras de lo que sigue en el disco no se olvidan
+        self.assertEqual(sum(1 for k in cache.datos if k.startswith("cab|")), 4)
+
     def test_md5(self):
         h = mxf_util.escribir_md5(self.mxf)
         self.assertEqual(h, hashlib.md5(self.mxf.read_bytes()).hexdigest())

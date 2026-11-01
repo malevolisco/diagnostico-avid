@@ -113,7 +113,6 @@ class App:
         self.minis = tk.BooleanVar(value=True)
         self.zip_minis = tk.BooleanVar(value=True)
         self.capturas = tk.BooleanVar(value=True)
-        self.todo_disco = tk.BooleanVar(value=False)
         self.seguido = tk.BooleanVar(value=False)
         self.cola = queue.Queue()
         self.estado = {"ocupado": None, "cerrar": False, "proyectos": None,
@@ -327,8 +326,6 @@ class App:
         self.avanzadas = ttk.Frame(izq, style="Panel.TFrame", padding=(14, 10))
         for texto, var in (("Miniaturas de cada clip para el informe (más lento; el visor del montaje no las necesita)", self.minis),
                            ("Sin miniaturas, al menos una captura de cada clip de cámara para decidir qué proyectos restaurar", self.capturas),
-                           ("Si falta media del proyecto, buscarla en todo el disco (mucho más lento: solo si Avid la guardó en otro sitio)",
-                            self.todo_disco),
                            ("Incluir las miniaturas en el zip para enviar (desmarcado: el zip solo lleva texto)", self.zip_minis),
                            ("Analizar y exportar seguido: exporta los brutos sin pasar por Montaje ni Exportar", self.seguido)):
             ttk.Checkbutton(self.avanzadas, text=texto, variable=var, style="Panel.TCheckbutton").pack(anchor="w", pady=1)
@@ -343,6 +340,10 @@ class App:
         t.pack(fill="x")
         self.lbl_ultimo = ttk.Label(t, text="", style="Tarjeta.TLabel", wraplength=ancho, justify="left")
         self.lbl_ultimo.pack(anchor="w")
+        # media de los bins que no ha salido (análisis de proyectos: se busca por el nombre y en sus carpetas)
+        self.lbl_falta = ttk.Label(t, text="", style="Tarjeta.Aviso.TLabel", wraplength=ancho, justify="left")
+        self.bt_buscar_todo = ttk.Button(t, text="Buscar en todo el disco…", command=self.buscar_en_todo_el_disco)
+        self.falta = None
         self.bt_informe = ttk.Button(t, text="Abrir el informe", command=self.abrir_informe)
         self.bt_informe.pack(anchor="w", pady=(10, 0))
         self.bt_triaje = ttk.Button(t, text="Qué proyectos restaurar", command=self.abrir_triaje)
@@ -643,6 +644,7 @@ class App:
         if not carpeta:
             self.lbl_ultimo.configure(text="Todavía no hay análisis de este disco en la carpeta del informe."
                                       if self.origen.get() else "Elige el disco de Avid.")
+            self.pintar_falta({})
             self.bt_informe.state(["disabled"])
             self.bt_triaje.state(["disabled"])
             self.lbl_siguiente.configure(text="Pulsa \"Analizar disco\". Tarda de minutos a horas según el disco; se puede detener.")
@@ -663,6 +665,7 @@ class App:
         self.lbl_ultimo.configure(text="%s\n\n%s%s proyectos · %s clips · %s de material\n%s GB de media · %s bins (%s ilegibles)%s\nCarpeta: %s"
                                   % (r.get("fecha", "?"), solo[:200], r.get("proyectos", "?"), r.get("clips_fisicos", "?"), horas,
                                      r.get("gb_media", "?"), r.get("bins", "?"), r.get("bins_ilegibles", 0), tri, carpeta.name))
+        self.pintar_falta((parcial or {}).get("busqueda") or {})
         self.bt_informe.state(["!disabled"])
         self.bt_triaje.state(["!disabled"] if (carpeta / "proyectos.html").exists() else ["disabled"])
         if self.brutos.get():
@@ -676,6 +679,19 @@ class App:
         else:
             self.lbl_siguiente.configure(text="Elige la carpeta de brutos para seguir con Montaje y Exportar.")
             self.bt_siguiente.state(["disabled"])
+
+    def pintar_falta(self, b):
+        """Aviso de media que falta y, si no se ha buscado en todo el disco, el botón para hacerlo."""
+        self.falta = b if b.get("sin_media") and not b.get("todo_el_disco") and b.get("mxf_sin_mirar") else None
+        if b.get("sin_media"):
+            self.lbl_falta.configure(text=self.texto_falta(b))
+            self.lbl_falta.pack(anchor="w", pady=(10, 0), before=self.bt_informe)
+        else:
+            self.lbl_falta.pack_forget()
+        if self.falta:
+            self.bt_buscar_todo.pack(anchor="w", pady=(6, 0), before=self.bt_informe)
+        else:
+            self.bt_buscar_todo.pack_forget()
 
     def abrir_informe(self):
         if self.ultimo and (self.ultimo / "informe.html").exists():
@@ -776,15 +792,55 @@ class App:
                     return
                 if not r:
                     return self.ir("montaje")
+        self.lanzar_analisis(self.estado["proyectos"], seguido)
+
+    def lanzar_analisis(self, proyectos, seguido=False, todo_el_disco=False):
+        da = self.da
         da.PARAR.clear()
         self.ocupar("analisis")
         self.escribe("— %s —" % da.ahora_txt())
+        if todo_el_disco:
+            self.escribe("Buscando en todo el disco la media que falta de: %s" % "; ".join(proyectos))
         # las variables de tkinter se leen aquí: el hilo no puede tocarlas
         datos = dict(origen=self.origen.get(), destino_base=self.destino.get(), hacer_miniaturas=self.minis.get(), capturas_camara=self.capturas.get(),
                      brutos=self.brutos.get() if seguido else None, zip_miniaturas=self.zip_minis.get(),
-                     proyectos_brutos=self.estado["proyectos"] if seguido else None, carpetas_media=list(self.estado["media_extra"]),
-                     solo_proyectos=self.estado["proyectos"], buscar_en_todo_el_disco=self.todo_disco.get())
+                     proyectos_brutos=proyectos if seguido else None, carpetas_media=list(self.estado["media_extra"]),
+                     solo_proyectos=proyectos, buscar_en_todo_el_disco=todo_el_disco)
         threading.Thread(target=self.hilo_analisis, args=(datos,), daemon=True).start()
+
+    def texto_falta(self, b):
+        """Aviso de la tarjeta "Último análisis" con los clips de los bins que se han quedado sin media."""
+        sin = b.get("sin_media") or {}
+        n = sum(sin.values())
+        por = ", ".join("%s: %d" % kv for kv in sorted(sin.items())[:3]) + (" …" if len(sin) > 3 else "")
+        donde = ("Se ha buscado en todo el disco: no están (offline)." if b.get("todo_el_disco") else
+                 "Se ha buscado por el nombre y en las carpetas del proyecto, no en todo el disco.")
+        vols = b.get("volumenes") or []
+        antes = ("\nSegún los bins estaban en: %s." % ", ".join("%s (%d)" % (v, k) for v, k in vols[:3])) if vols else ""
+        return "⚠ %d clip%s de los bins sin media (%s).\n%s%s" % (n, "" if n == 1 else "s", por, donde, antes)
+
+    def buscar_en_todo_el_disco(self, preguntar=True):
+        """La media que falta de los proyectos del último análisis, en el resto del disco (lo ya mirado no se repite)."""
+        from tkinter import messagebox
+        if self.estado["ocupado"] or not self.falta:
+            return
+        b = self.falta
+        if not self.origen.get() or not Path(self.origen.get()).exists():
+            return messagebox.showwarning("Falta el disco", "Conecta el disco del análisis para buscar en él.", parent=self.raiz)
+        ejemplos = "; ".join("%s: %s" % (p, ", ".join(e[:4]) + (" …" if len(e) > 4 else "")) for p, e in sorted((b.get("ejemplos") or {}).items())[:3])
+        vols = b.get("volumenes") or []
+        if preguntar and not messagebox.askyesno(
+                "Buscar en todo el disco",
+                "%d clips de los bins no tienen media en lo que se ha mirado: %s.\n\n"
+                "Se ha buscado por el nombre de los ficheros y en las carpetas del proyecto. Puede que estén en otro sitio de "
+                "este disco, o que no estén en él (offline)%s.\n\n"
+                "Buscar en todo el disco mira los %d ficheros de media que faltan por mirar: %s. Lo ya leído no se repite "
+                "y se puede detener.\n\n¿Buscar ahora?"
+                % (sum(b["sin_media"].values()), ejemplos,
+                   (": según los bins estaban en %s" % ", ".join(v for v, _ in vols[:3])) if vols else "",
+                   b.get("mxf_sin_mirar", 0), self.da.texto_minutos(b.get("minutos", 0))), parent=self.raiz):
+            return
+        self.lanzar_analisis(sorted(b["sin_media"]), todo_el_disco=True)
 
     def hilo_analisis(self, datos):
         da = self.da
@@ -1367,7 +1423,16 @@ class App:
                     self.pintar_ultimo()
                     if self.exp:
                         self.exp["clave"] = None  # análisis nuevo: la cola se rehace al entrar (se conservan ajustes y casillas)
-                if tipo == "fin":
+                if tipo == "fin" and self.falta:  # quedan clips sin media y no se ha mirado todo el disco: se pregunta ya
+                    b = self.falta
+                    if messagebox.askyesno("Terminado", "Diagnóstico terminado.\n\nInforme: %s\n\nZIP para enviar: %s\n\n"
+                                           "⚠ %d clips de los bins no tienen media en lo que se ha mirado (por el nombre y en las "
+                                           "carpetas del proyecto).\n\n¿Buscarlos ahora en todo el disco? Tarda %s; se puede "
+                                           "detener. Si no, puedes hacerlo luego con \"Buscar en todo el disco…\" en \"Último análisis\"."
+                                           % (msg + (sum(b["sin_media"].values()), self.da.texto_minutos(b.get("minutos", 0)))),
+                                           parent=self.raiz):
+                        self.buscar_en_todo_el_disco(preguntar=False)
+                elif tipo == "fin":
                     messagebox.showinfo("Terminado", "Diagnóstico terminado.\n\nInforme: %s\n\nZIP para enviar: %s\n\n"
                                         "Siguiente paso: 2 · Montaje (opcional) y 3 · Exportar." % msg, parent=self.raiz)
                 elif tipo == "detenido_brutos":

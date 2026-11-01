@@ -281,6 +281,48 @@ class AcabadoProfesional(unittest.TestCase):
         elegidos, _ = da.mxf_de_proyectos([{"ruta": "sobra.mxf", "ext": ".mxf"}], self.tmp, bins, lambda m: None)
         self.assertEqual(elegidos, [])  # ni su UMID ni su nombre: es de otro proyecto
 
+    def test_mxf_del_proyecto_por_el_nombre_sin_abrir_el_disco_entero(self):
+        """Avid pone en el nombre del MXF el principio del número de material de su clip: se abren solo esos. Si falta
+        algún clip, se miran las demás MXF de las carpetas donde ya ha salido alguno; las otras carpetas, solo si se pide
+        buscar en todo el disco."""
+        import diagnostico_avid as da
+        from unittest import mock
+        umid = sorted(mxf_util.paquetes(self.mxf)["umids"])[0]
+        trozo = da.material(umid)[:8]
+        for carpeta in ("MXF/1", "MXF/2", "MXF/9"):
+            (self.tmp / carpeta).mkdir(parents=True, exist_ok=True)
+        shutil.copy(self.mxf, self.tmp / "MXF/1" / ("V01.%s_00.mxf" % trozo))
+        shutil.copy(self.mxf, self.tmp / "MXF/1/A01.sin_trozo.mxf")  # del mismo clip, en la misma carpeta
+        shutil.copy(self.mxf, self.tmp / "MXF/9/A02.otra_carpeta.mxf")  # del mismo clip, en otra carpeta
+        (self.tmp / "MXF/2/ajeno.mxf").write_bytes(b"\x00" * 4096)
+        ficheros = [{"ruta": r, "ext": ".mxf"} for r in ("MXF/1/V01.%s_00.mxf" % trozo, "MXF/1/A01.sin_trozo.mxf",
+                                                          "MXF/9/A02.otra_carpeta.mxf", "MXF/2/ajeno.mxf")]
+        leidos = []
+        original = mxf_util.paquetes
+
+        def contar(ruta, *a):
+            leidos.append(Path(ruta).name)
+            return original(ruta, *a)
+
+        clip = {"nombre": "ENTREVISTA", "mob_id": {"le": umid, "be": None}}
+        with mock.patch.object(mxf_util, "paquetes", contar):
+            elegidos, total = da.mxf_de_proyectos(ficheros, self.tmp, [{"ok": True, "clips": [clip]}], lambda m: None)
+        self.assertEqual(([f["ruta"] for f in elegidos], total, leidos), (["MXF/1/V01.%s_00.mxf" % trozo], 4, ["V01.%s_00.mxf" % trozo]))
+
+        otro = {"nombre": "OFFLINE", "mob_id": {"le": "00" * 32}}  # no está en el disco: se mira su carpeta, no las demás
+        leidos.clear()
+        with mock.patch.object(mxf_util, "paquetes", contar):
+            elegidos, _ = da.mxf_de_proyectos(ficheros, self.tmp, [{"ok": True, "clips": [clip, otro]}], lambda m: None)
+        self.assertEqual(sorted(leidos), sorted(["V01.%s_00.mxf" % trozo, "A01.sin_trozo.mxf"]))
+        self.assertEqual(len(elegidos), 2)
+        leidos.clear()
+        with mock.patch.object(mxf_util, "paquetes", contar):
+            elegidos, _ = da.mxf_de_proyectos(ficheros, self.tmp, [{"ok": True, "clips": [clip, otro]}], lambda m: None,
+                                              todo_el_disco=True)
+        self.assertEqual(len(leidos), 4)
+        self.assertEqual([f["ruta"] for f in elegidos], ["MXF/1/A01.sin_trozo.mxf", "MXF/1/V01.%s_00.mxf" % trozo,
+                                                          "MXF/2/ajeno.mxf", "MXF/9/A02.otra_carpeta.mxf"])
+
     def test_md5(self):
         h = mxf_util.escribir_md5(self.mxf)
         self.assertEqual(h, hashlib.md5(self.mxf.read_bytes()).hexdigest())

@@ -149,6 +149,23 @@ def disco_leido():
     # 8 proyectos de Avid y 2 carpetas sin proyecto (RODAJE y material: antes de analizar no se sabe que son media enlazada)
     comprobar(not llamadas and len(r.get("selector") or []) == 10, "Proyectos… debe reutilizar la lectura: %s, %s" % (llamadas, r.get("selector")))
     captura("1_disco.png")
+    # Con el disco aún leyéndose (un disco lento: 2 s), "Elegir proyectos" no bloquea la ventana: vuelve enseguida y la
+    # lista se abre sola al terminar de leer
+    d.listar_proyectos = lambda o: time.sleep(2) or listar(o)
+    d.dialogo_proyectos = lambda raiz, lista, *a, **k: r.setdefault("selector_luego", [p["nombre"] for p in lista]) and None
+    app.programar_vista_disco()
+    t0 = time.monotonic()
+    app.elegir_proyectos()
+    comprobar(time.monotonic() - t0 < 0.5 and app.abrir_selector and "selector_luego" not in r,
+              "con el disco leyéndose, Elegir proyectos no debe esperar: %.1f s" % (time.monotonic() - t0))
+    esperar(lambda: "selector_luego" in r, lambda: selector_abierto(listar, dialogo), limite=30)
+
+
+@seguro
+def selector_abierto(listar, dialogo):
+    d.listar_proyectos, d.dialogo_proyectos = listar, dialogo
+    comprobar(len(r["selector_luego"]) == 10 and not app.abrir_selector and app.raiz.cget("cursor") == "",
+              "la lista debe abrirse sola al terminar de leer: %s" % r["selector_luego"])
     # Informe preliminar: qué hay en cada carpeta del disco
     comprobar(app.bt_que_hay.cget("text").strip().endswith("Informe preliminar"), "el botón debe llamarse Informe preliminar")
     app.bt_que_hay.invoke()

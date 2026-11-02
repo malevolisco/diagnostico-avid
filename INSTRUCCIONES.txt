@@ -110,6 +110,9 @@ Página 1 · Disco
    apareciendo lo que hace. De minutos a una hora según el número de
    ficheros. El programa impide que el ordenador se suspenda mientras
    trabaja, pero si es un portátil déjalo enchufado.
+   Mientras trabaja cede el ordenador a lo que estés haciendo (va con
+   prioridad baja) y, al cerrar la ventana, no queda nada suyo abierto
+   por detrás.
    Si se para a medias (Detener, un error, el disco que se desconecta) o
    vuelves a analizar el mismo disco, no empieza de cero: recuerda los
    vídeos que ya había leído y solo lee los nuevos o los cambiados. Lo

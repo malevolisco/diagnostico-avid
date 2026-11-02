@@ -2340,5 +2340,33 @@ class MediaQueFalta(unittest.TestCase):
         self.assertEqual(avisos, [])  # nada sin media: nada que avisar
 
 
+class Procesos(unittest.TestCase):
+    """Nada vivo al cerrar y sin molestar al ordenador (procesos.py)."""
+
+    def test_prioridad_del_sonido(self):
+        self.assertEqual(eb.flags_subproceso(prioridad_normal=True), {"creationflags": 0x08000020} if os.name == "nt" else {})
+        self.assertEqual(eb.flags_subproceso(), {"creationflags": 0x08000000} if os.name == "nt" else {})
+
+    @unittest.skipUnless(os.name == "nt", "el trabajo de Windows solo existe en Windows")
+    def test_hijos_con_prioridad_baja_y_terminados_al_cerrar(self):
+        import ctypes
+        import procesos
+        self.assertTrue(procesos.contener())
+        hijo = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], **eb.flags_subproceso())
+        normal = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], **eb.flags_subproceso(prioridad_normal=True))
+        try:
+            k32 = ctypes.WinDLL("kernel32")
+            k32.GetPriorityClass.argtypes = (ctypes.c_void_p,)
+            clase = lambda p: k32.GetPriorityClass(int(p._handle))
+            self.assertEqual((clase(hijo), clase(normal)), (procesos.PRIORIDAD_BAJA, procesos.PRIORIDAD_NORMAL))
+            procesos.terminar_hijos()  # lo que hace salir() al cerrar la ventana (y Windows si el programa muere)
+            self.assertIsNotNone(hijo.wait(timeout=20))
+            self.assertIsNotNone(normal.wait(timeout=20))
+        finally:
+            for p in (hijo, normal):
+                if p.poll() is None:
+                    p.kill()
+
+
 if __name__ == "__main__":
     unittest.main()

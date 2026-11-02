@@ -197,9 +197,10 @@ MAX_PISTAS = 8
 # Utilidades
 # ---------------------------------------------------------------------------
 
-def flags_subproceso():
+def flags_subproceso(prioridad_normal=False):
+    """Sin ventana de consola. Con procesos.contener(), van con prioridad baja salvo que se pida la normal (el sonido)."""
     if os.name == "nt":
-        return {"creationflags": 0x08000000}
+        return {"creationflags": 0x08000000 | (0x00000020 if prioridad_normal else 0)}
     return {}
 
 

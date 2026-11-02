@@ -183,7 +183,8 @@ def lanzar_cambio(carpeta_app, carpeta_nueva, trabajo, tag, relanzar=True):
                    DA_LOG=str(carpeta_registro() / "actualizacion.log"), DA_FALLO=str(marca_fallo(tag)))
     if relanzar:  # el programa reabierto mira GitHub de verdad
         entorno.pop("DIAGNOSTICO_URL_ACTUALIZACION", None)
-    subprocess.Popen(["cmd", "/c", str(bat)], env=entorno, cwd=str(carpeta_registro()), close_fds=True,
+    import procesos  # el .bat tiene que seguir vivo al cerrarse el programa: fuera de su trabajo de Windows
+    procesos.suelto(["cmd", "/c", str(bat)], env=entorno, cwd=str(carpeta_registro()), close_fds=True,
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      creationflags=0x08000000 | 0x00000200)  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
 

@@ -117,6 +117,7 @@ Python 3.12 con tkinter. Las lecturas pesadas se hacen con [pyavb](https://githu
 | `mxf_util.py` | Lectura de cabeceras MXF sin ffprobe, timecode, ficha técnica XDCAM HD422 (con la envoltura RDD 9) y MD5. |
 | `montaje.py` | Modelo del montaje (quitar, mover, cortar, renombrar, deshacer) y fotogramas del visor. No tiene ventana, así que se puede probar solo. |
 | `lecturas.py` | Lo que el análisis lee del vídeo y del sonido para decidir (posiciones de timecode, huellas MD5 de fotogramas, dónde está un trozo de sonido), guardado en `lecturas.json`. Permite repetir las decisiones sin el disco. |
+| `procesos.py` | Que el programa no deje nada vivo ni moleste al ordenador: ffmpeg y compañía con prioridad baja y cerrados con el programa (trabajo de Windows); al cerrar la ventana, sale sin esperar a tareas de fondo. |
 | `interfaz.py`, `ventana_montaje.py`, `ventana_origen.py`, `tema.py` | La ventana: páginas, montaje, origen del material y tema. Se adapta a pantallas pequeñas. |
 | `aprendizaje.py` | Sugerencias de origen aprendidas de decisiones anteriores (Bayes ingenuo sobre palabras y formas de nombre; nunca imágenes). |
 | `actualizar.py` | Actualización manual desde las releases de GitHub. Solo se usa al pulsar "Buscar actualización". |

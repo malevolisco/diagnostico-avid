@@ -3135,7 +3135,9 @@ def lanzar_gui(sin_actualizar=False):
     """Ventana con las páginas Disco, Montaje y Exportar (interfaz.py). sin_actualizar: se mantiene por compatibilidad;
     la actualización ya solo se busca a mano."""
     import interfaz
+    import procesos
     interfaz.lanzar(sys.modules[__name__])
+    procesos.salir(0)  # cerrada la ventana, no queda nada: ni procesos hijos ni tareas de fondo
 
 
 # ---------------------------------------------------------------------------
@@ -3143,6 +3145,8 @@ def lanzar_gui(sin_actualizar=False):
 # ---------------------------------------------------------------------------
 
 def main():
+    import procesos
+    procesos.contener()  # ffmpeg y compañía, con prioridad baja y cerrados con el programa (procesos.py)
     ap = argparse.ArgumentParser(description="Diagnóstico de disco Avid (solo lectura).")
     ap.add_argument("--origen", help="Disco o carpeta de Avid a analizar")
     ap.add_argument("--destino", help="Carpeta donde dejar el informe")

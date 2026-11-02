@@ -71,6 +71,11 @@ class PantallaMontaje:
         import tema
         self.tk, self.ttk, self.tema = tk, ttk, tema
         self.m, self.origen, self.carpeta_visor, self.carpeta_brutos, self.ffmpeg = m, Path(origen), Path(carpeta_visor), carpeta_brutos, ffmpeg
+        for resto in self.carpeta_visor.glob("*.tmp") if self.carpeta_visor.is_dir() else ():  # de una sesión que se cortó
+            try:
+                resto.unlink()
+            except OSError:
+                pass
         self.proyectos = [p for p in m.proyectos() if proyectos is None or p in proyectos]
         self.al_cambiar = al_cambiar
         self.cambios = False
@@ -977,9 +982,9 @@ class PantallaMontaje:
         titulo = "%d. %s  (Espacio en el programa: parar)" % (n + 1, c["nombre"])
         try:
             a = subprocess.Popen(mj.orden_sonido(self.ffmpeg, self.origen, c, dentro, canales), stdin=subprocess.DEVNULL,
-                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **eb.flags_subproceso())
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **eb.flags_subproceso(prioridad_normal=True))
             b = subprocess.Popen(mj.orden_ffplay(self.ffplay, titulo), stdin=a.stdout, stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL, **eb.flags_subproceso())
+                                 stderr=subprocess.DEVNULL, **eb.flags_subproceso(prioridad_normal=True))
             a.stdout.close()
         except OSError as e:
             self.lbl_foto.configure(text="No se puede reproducir: %s" % e)

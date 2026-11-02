@@ -124,7 +124,8 @@ class App:
         self.clave_montaje = None
         self.exp = None  # datos de la página Exportar: clave, resumen, cfg, marcados, estados, resultados
         # Proyectos del disco elegido, leídos solos al elegirlo (listar_proyectos): el botón "Elegir proyectos" los reutiliza
-        self.vista_disco = {"origen": None, "lista": None, "turno": 0}
+        self.vista_disco = {"origen": None, "lista": None, "turno": 0, "leyendo": False}
+        self.abrir_selector = False  # "Elegir proyectos" pulsado mientras se leían: la lista se abre sola al terminar
         self.espera_disco = None
         self.v_que_hay = None  # ventana del informe preliminar (qué hay en el disco)
         self.cronometro = None
@@ -570,23 +571,29 @@ class App:
             v.lbl.configure(text="Guardado en %s" % ruta, style="Suave.TLabel")
 
     def programar_vista_disco(self):
-        """Medio segundo después de cambiar la carpeta del disco (para no leer a cada letra si se escribe a mano)."""
+        """Medio segundo después de cambiar la carpeta del disco (para no leer a cada letra si se escribe a mano). La
+        lista de antes ya no vale (otro disco u otros orígenes): "Elegir proyectos" espera a la nueva."""
         if self.espera_disco:
             self.raiz.after_cancel(self.espera_disco)
+        self.vista_disco.update(origen=None, lista=None, leyendo=True)
         self.espera_disco = self.raiz.after(500, self.leer_vista_disco)
 
     def leer_vista_disco(self):
         """Lee los proyectos del disco por detrás (solo nombres de .avp y .avb: segundos) y los resume en la página Disco."""
         self.espera_disco = None
         origen = self.origen.get()
-        self.vista_disco.update(origen=None, lista=None, turno=self.vista_disco["turno"] + 1)
-        if not origen:
-            self.lbl_disco.configure(text="", style="TLabel")
+        if self.espera_disco:
+            self.raiz.after_cancel(self.espera_disco)
+            self.espera_disco = None
+        self.vista_disco.update(origen=None, lista=None, turno=self.vista_disco["turno"] + 1, leyendo=True)
+        if not origen or not Path(origen).is_dir():
+            self.vista_disco["leyendo"] = False
+            self.esperar_selector(False)
+            self.lbl_disco.configure(text="" if not origen else "Esa carpeta no existe o no se puede abrir.",
+                                     style="TLabel" if not origen else "Aviso.TLabel")
             return
-        if not Path(origen).is_dir():
-            self.lbl_disco.configure(text="Esa carpeta no existe o no se puede abrir.", style="Aviso.TLabel")
-            return
-        self.lbl_disco.configure(text="Leyendo los proyectos del disco…", style="Suave.TLabel")
+        self.lbl_disco.configure(text="Leyendo los proyectos del disco…" + (" La lista se abre sola al terminar." if self.abrir_selector else ""),
+                                 style="Suave.TLabel")
         turno, da = self.vista_disco["turno"], self.da
 
         extras = list(self.estado["media_extra"])
@@ -601,7 +608,9 @@ class App:
     def al_leer_disco(self, turno, origen, lista, error):
         if turno != self.vista_disco["turno"]:  # se cambió de disco mientras se leía: vale la lectura nueva
             return
+        self.vista_disco["leyendo"] = False
         if error is not None:
+            self.esperar_selector(False)
             self.lbl_disco.configure(text="No se han podido leer los proyectos: %s" % error, style="Aviso.TLabel")
             return
         self.vista_disco.update(origen=origen, lista=lista)
@@ -613,6 +622,14 @@ class App:
             self.estado["total_proyectos"] = len(todos)
             self.estado["proyectos"] = [n for n in todos if n not in terminados]
             self.pintar_proyectos()
+        if self.abrir_selector:
+            self.esperar_selector(False)
+            self.elegir_proyectos()
+
+    def esperar_selector(self, si):
+        """Mientras se leen los proyectos del disco, "Elegir proyectos" no bloquea la ventana: espera a que acabe."""
+        self.abrir_selector = si
+        self.raiz.configure(cursor="watch" if si else "")
 
     def pintar_proyectos(self):
         p = self.estado["proyectos"]
@@ -701,17 +718,17 @@ class App:
         if self.ultimo and (self.ultimo / "proyectos.html").exists():
             webbrowser.open((self.ultimo / "proyectos.html").resolve().as_uri())
 
-    def triaje_actual(self):
+    def triaje_actual(self, carpeta=None):
         """{proyecto: fila de triaje.json} del último análisis de este disco (qué proyectos restaurar), o {}."""
-        carpeta = self.analisis_actual()
+        carpeta = carpeta or self.analisis_actual()
         try:
             return {t["proyecto"]: t for t in json.loads((carpeta / "triaje.json").read_text(encoding="utf-8"))} if carpeta else {}
         except (OSError, ValueError, KeyError, TypeError):
             return {}
 
-    def analizados(self, todos):
+    def analizados(self, todos, carpeta=None):
         """Proyectos que ya están en el último análisis de este disco (con los sumados de análisis anteriores): {nombre: fecha}."""
-        carpeta = self.analisis_actual()
+        carpeta = carpeta or self.analisis_actual()
         try:
             r = json.loads((carpeta / "resumen.json").read_text(encoding="utf-8")) if carpeta else None
         except (OSError, ValueError):
@@ -732,14 +749,14 @@ class App:
         if not self.origen.get() or not Path(self.origen.get()).exists():
             return messagebox.showwarning("Falta el disco", "Elige primero el disco o la carpeta de Avid.", parent=self.raiz)
         lista = self.vista_disco["lista"] if self.vista_disco["origen"] == self.origen.get() else None
-        if lista is None:  # aún no se ha leído (o se está leyendo): se lee ahora
-            self.raiz.configure(cursor="watch")
-            self.raiz.update()
-            try:
-                lista = listar_todos(da, self.origen.get(), self.estado["media_extra"])
-            finally:
-                self.raiz.configure(cursor="")
-        carpeta = self.analisis_actual()
+        if lista is None:  # aún no se ha leído (o se está leyendo): se lee por detrás y la lista se abre sola al terminar
+            self.esperar_selector(True)
+            if not self.vista_disco["leyendo"] or self.espera_disco:
+                self.leer_vista_disco()
+            else:
+                self.lbl_disco.configure(text="Leyendo los proyectos del disco… La lista se abre sola al terminar.", style="Suave.TLabel")
+            return
+        carpeta = self.analisis_actual()  # una sola vez: con muchos análisis guardados, buscarlo cuesta
         try:  # las carpetas que el análisis ha visto que son media enlazada de otros proyectos no se ofrecen
             media = set(json.loads((carpeta / "resumen.json").read_text(encoding="utf-8")).get("carpetas_media_enlazada") or []) if carpeta else set()
         except (OSError, ValueError):
@@ -749,8 +766,8 @@ class App:
         carpeta_brutos = self.brutos.get()
         terminados = da.leer_hechos(carpeta_brutos) if carpeta_brutos else {}  # marcados a mano como HECHOS
         al_marcar = (lambda nombres, hecho: da.marcar_hechos(carpeta_brutos, nombres, hecho)) if carpeta_brutos else None
-        elegidos = da.dialogo_proyectos(self.raiz, lista, self.estado["proyectos"], hechos, self.triaje_actual(),
-                                        self.analizados([p["nombre"] for p in lista] + ["SIN_PROYECTO"]), terminados, al_marcar)
+        elegidos = da.dialogo_proyectos(self.raiz, lista, self.estado["proyectos"], hechos, self.triaje_actual(carpeta),
+                                        self.analizados([p["nombre"] for p in lista] + ["SIN_PROYECTO"], carpeta), terminados, al_marcar)
         if elegidos is None:
             return
         todos = [p["nombre"] for p in lista] + ["SIN_PROYECTO"]

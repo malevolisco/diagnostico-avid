@@ -2037,6 +2037,8 @@ def cruzar(proyectos, bins, clips, mxf=(), enlaces=None):
             fisico["volumenes"] = clip["volumenes"]
         for k, v in (clip.get("columnas") or {}).items():
             fisico.setdefault("columnas", {}).setdefault(k, v)
+        if str(clip.get("creado") or "") >= "1995" and (not fisico.get("en_avid") or clip["creado"] < fisico["en_avid"]):
+            fisico["en_avid"] = clip["creado"]  # cuándo entró en Avid (exportar_brutos.reloj_mal_puesto)
         if proyecto not in fisico["proyectos"]:
             fisico["proyectos"].append(proyecto)
     for b in bins:
@@ -3035,6 +3037,8 @@ def sumar_analisis_anteriores(destino_base, origen, destino, ficheros, proyectos
                     for k in ("fichero_origen", "volumenes", "columnas"):
                         if c.get(k) and not actual.get(k):
                             actual[k] = c[k]
+                    if c.get("en_avid") and (not actual.get("en_avid") or c["en_avid"] < actual["en_avid"]):
+                        actual["en_avid"] = c["en_avid"]
                     if c.get("origen") and actual.get("origen") in (None, "Sin determinar"):
                         actual["origen"], actual["origen_detalle"] = c["origen"], c.get("origen_detalle", {})
             pp = next((x for x in a_cruce.get("por_proyecto", []) if x.get("proyecto") == nombre), None)

@@ -68,6 +68,8 @@ CONFIG_DEFECTO = {
     "_agrupar": "proyecto_mes = cada proyecto en orden cronológico, en brutos de hasta horas_por_bruto, con nombre PROYECTO_AAAA-MM | dias = todo el disco por días seguidos, sin separar proyectos | proyecto = cada proyecto por tarjetas",
     "horas_por_bruto": 2,
     "_horas_por_bruto": "Duración máxima de un bruto (proyecto_mes y dias). El clip que la pasaría no se añade: abre el bruto siguiente",
+    "dias_reloj_mal_puesto": 365,
+    "_dias_reloj_mal_puesto": "Material de tarjeta (P2, SD...) cuya fecha de cámara es de más de estos días antes de que el clip entrara en Avid (o de después): el reloj de la cámara estaba mal puesto y el clip se ordena por la fecha del volcado, con aviso | 0 = se usa siempre la de la cámara (p. ej. cintas antiguas pasadas a tarjeta)",
     "separar_si_pasan_dias": 180,
     "_separar_si_pasan_dias": "proyecto_mes: si entre dos clips seguidos del proyecto pasan más de estos días, el siguiente abre un bruto nuevo (material de otra época o de otro corresponsal en el mismo proyecto, p. ej. 2002 y 2019) | 0 = no se separa",
     "excluir_importados": True,
@@ -401,6 +403,56 @@ def fecha_imposible(grabacion, volcado=None, ahora=None, desde=2000):
     if (grabacion.month, grabacion.day) == (1, 1) and volcado and abs(volcado - grabacion) > dt.timedelta(days=2):
         return "1 de enero lejos del volcado: reloj de la cámara sin poner"
     return None
+
+
+def entrada_en_avid(c, mxf_por_ruta):
+    """Cuándo entró el clip en Avid: lo primero entre la fecha en que se creó el clip en el bin (en_avid, la de cada clip,
+    no la del fichero .avb, que cambia cada vez que se guarda) y la del fichero de media. Lo grabado es de antes."""
+    fechas = [fecha_media(c, mxf_por_ruta)]
+    try:
+        fechas.append(dt.datetime.strptime(str(c.get("en_avid") or "")[:19], "%Y-%m-%d %H:%M:%S"))
+    except ValueError:
+        pass
+    fechas = [f for f in fechas if f and f.year >= 1995]  # un 1970 es un reloj sin poner
+    return min(fechas) if fechas else None
+
+
+def es_de_tarjeta(c):
+    """Material de cámara que se copia como fichero (tarjeta P2, SD...): se vuelca al poco de grabarlo. Lo capturado
+    de una cinta no, que se puede capturar años después."""
+    return str(c.get("origen") or "").startswith("Cámara") or carpeta_tarjeta(c.get("fichero_origen")) is not None
+
+
+def reloj_mal_puesto(c, grabacion, entrada, dias=365):
+    """Por qué la fecha de la cámara de un clip de tarjeta no cuadra con su entrada en Avid, o None: grabado más de
+    `dias` antes de entrar (03/11/2026: tarjetas P2 que dicen 2005 en un proyecto de 2021) o después de entrar."""
+    if not dias or not grabacion or not entrada or not es_de_tarjeta(c):
+        return None
+    cuando = "la cámara dice %s y el clip entró en Avid el %s" % (grabacion.strftime("%d/%m/%Y"), entrada.strftime("%d/%m/%Y"))
+    if entrada - grabacion > dt.timedelta(days=dias):
+        return cuando
+    if grabacion - entrada > dt.timedelta(days=2):
+        return cuando + ", antes de grabarse"
+    return None
+
+
+def corregir_relojes(clips, mxf_por_ruta, cfg):
+    """Los clips de tarjeta con el reloj de la cámara mal puesto (reloj_mal_puesto) se ordenan por la fecha del volcado,
+    como los de fecha imposible; la de la cámara queda en fecha_camara y el motivo en aviso_fecha. Devuelve cuántos.
+    dias_reloj_mal_puesto = 0: no se mira."""
+    try:
+        dias = float((cfg or {}).get("dias_reloj_mal_puesto", CONFIG_DEFECTO["dias_reloj_mal_puesto"]) or 0)
+    except (TypeError, ValueError):
+        dias = CONFIG_DEFECTO["dias_reloj_mal_puesto"]
+    n = 0
+    for c in clips:
+        motivo = reloj_mal_puesto(c, fecha_grabacion(c), entrada_en_avid(c, mxf_por_ruta), dias) if c.get("fecha_grabacion") else None
+        if motivo:
+            c["fecha_camara"] = c.pop("fecha_grabacion")
+            c.pop("fecha_grabacion_fuente", None)
+            c["aviso_fecha"] = "reloj de la cámara mal puesto (%s): se ordena por la fecha del volcado" % motivo
+            n += 1
+    return n
 
 
 def fecha_clip(c, mxf_por_ruta):
@@ -1120,6 +1172,7 @@ def listas_por_proyecto(clips, cruce, mxf_por_ruta, cfg):
     """agrupar=proyecto_mes: {proyecto: {"material": [...], "piezas": [...]}} con los clips de cada proyecto en orden
     cronológico estricto. Fuera: renders de efectos e importados (excluir_importados). Un clip en varios proyectos,
     solo en el primero (clips_compartidos = primero); los que no están en ningún bin, en SIN_PROYECTO."""
+    corregir_relojes(clips, mxf_por_ruta, cfg)
     politica = cfg.get("clips_compartidos", "primero")
     secuencias = {p["proyecto"]: {_normal(n) for n in p.get("secuencias_nombres", [])} for p in (cruce or {}).get("por_proyecto", [])}
     rx = re.compile(cfg["piezas_regex"]) if cfg.get("piezas_regex") else None

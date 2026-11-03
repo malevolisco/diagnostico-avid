@@ -59,6 +59,14 @@ def duracion_visible(c):
 # ---------------------------------------------------------------------------
 
 
+def texto_fecha(c, f):
+    """La fecha del clip en la ficha, con su aviso si lo hay (reloj de la cámara mal puesto, fecha imposible...)."""
+    texto = f.strftime("%d/%m/%Y %H:%M:%S") if f else "sin fecha"
+    if c.get("aviso_fecha"):
+        texto += "\n⚠ " + c["aviso_fecha"]
+    return texto
+
+
 def mismo_nombre(c):
     """Nombre del clip largo con el mismo identificador de cámara (00059S…) que no se ha podido confirmar que lo contenga
     (diagnostico_avid.repetidos_por_contenido), o None: el montaje lo marca para revisarlo a mano."""
@@ -660,7 +668,7 @@ class PantallaMontaje:
             return
         f = self.m.fecha(c)
         movido = c.get("clave") in self.m.movidos(self.p)
-        valores = {"fecha": f.strftime("%d/%m/%Y %H:%M:%S") if f else "sin fecha", "tc": c.get("timecode") or "—",
+        valores = {"fecha": texto_fecha(c, f), "tc": c.get("timecode") or "—",
                    "dur": fmt_h(duracion_visible(c)),
                    "formato": " · ".join(str(x) for x in (c.get("codec_video"), c.get("resolucion")) if x) or "—",
                    "audio": "%s pistas" % c["num_audio"] if c.get("num_audio") else "SIN AUDIO" if c.get("fichero_video") else "—", "origen": (c.get("origen_texto") or c.get("origen") or "—") + ("\n" + c["origen_motivo"] if c.get("origen_motivo") else ""),
@@ -669,7 +677,7 @@ class PantallaMontaje:
                       "(si es un trozo suyo, quítalo del bruto)" % mismo_nombre(c) if mismo_nombre(c) else "")}
         self.lbl_nombre.configure(text="%d. %s%s" % (n + 1, c["nombre"], " · tramo %s" % c["tramo"] if c.get("tramo") else ""))
         for k, w in self.ficha.items():
-            w.configure(text=valores[k], style="Panel.Aviso.TLabel" if k == "montaje" and mismo_nombre(c) else
+            w.configure(text=valores[k], style="Panel.Aviso.TLabel" if (k == "montaje" and mismo_nombre(c)) or (k == "fecha" and c.get("aviso_fecha")) else
                         "Panel.Acento.TLabel" if (k == "montaje" and movido) or (k == "audio" and valores[k] == "SIN AUDIO")
                         else "Panel.TLabel")
         ruta = self.listos.get(c.get("clave"))
@@ -732,7 +740,7 @@ class PantallaMontaje:
         self.lbl_bruto.configure(text="%s: no está en el bruto · un clic en la lista de clips vuelve al bruto" % v["que"],
                                  style=self.pref_bruto + "Aviso.TLabel")
         f = self.m.fecha(c)
-        valores = {"fecha": f.strftime("%d/%m/%Y %H:%M:%S") if f else "sin fecha", "tc": c.get("timecode") or "—",
+        valores = {"fecha": texto_fecha(c, f), "tc": c.get("timecode") or "—",
                    "dur": fmt_h(duracion_visible(c)),
                    "formato": " · ".join(str(x) for x in (c.get("codec_video"), c.get("resolucion")) if x) or "—",
                    "audio": "%s pistas" % c["num_audio"] if c.get("num_audio") else "SIN AUDIO",
@@ -740,7 +748,7 @@ class PantallaMontaje:
                    "montaje": v["motivo"]}
         self.lbl_nombre.configure(text="%s · %s" % (v["que"], c["nombre"]))
         for k, w in self.ficha.items():
-            w.configure(text=valores[k], style="Panel.Aviso.TLabel" if k == "montaje" else "Panel.TLabel")
+            w.configure(text=valores[k], style="Panel.Aviso.TLabel" if k == "montaje" or (k == "fecha" and c.get("aviso_fecha")) else "Panel.TLabel")
         cuadro = int(round(dentro * FPS_BRUTO))
         exacto = self.exactos.get((c.get("clave"), cuadro))
         if exacto and PIL_OK:

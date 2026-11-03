@@ -3,8 +3,15 @@
   "X003 X004": {
    "brutos": [
     {
-     "nombre": "X003 X004 NOVIEMBRE DE 2002",
+     "nombre": "X003 X004 ABRIL A MAYO DE 2019",
      "clips": [
+      "00017R.new.01",
+      "0002JS.new.01",
+      "0003R2.new.01",
+      "0006D6.new.01",
+      "0008T0.new.01",
+      "0009UX.new.01",
+      "0013OJ.new.13",
       "00015Q.new.01",
       "00025K.new.01",
       "00059S.new.01",
@@ -81,18 +88,6 @@
       "0076BV.new.01",
       "00773D.new.01",
       "0078QQ.new.01"
-     ]
-    },
-    {
-     "nombre": "X003 X004 ABRIL DE 2019",
-     "clips": [
-      "00017R.new.01",
-      "0002JS.new.01",
-      "0003R2.new.01",
-      "0006D6.new.01",
-      "0008T0.new.01",
-      "0009UX.new.01",
-      "0013OJ.new.13"
      ]
     }
    ],

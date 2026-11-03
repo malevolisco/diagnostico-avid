@@ -1034,15 +1034,21 @@ def mismo_clip_de_camara(clips):
 
 def es_duplicado(c, cfg):
     """¿Es un trozo repetido de otro clip del mismo proyecto (marcar_duplicados)? Entonces no entra en el bruto: en el
-    montaje queda en la papelera, de donde se puede recuperar (quitar_duplicados en config_brutos.json)."""
+    montaje queda en la papelera, de donde se puede recuperar (quitar_duplicados en config_brutos.json). También, para
+    revisarlo, un clip con el mismo identificador de cámara que otro más largo sin confirmar que esté dentro
+    (mismo_nombre, 3/11/2026: "suelen ser duplicados"; revisar_mismo_nombre en el config)."""
     d = c.get("contenido_en") or {}
-    return bool(cfg.get("quitar_duplicados", True) and d.get("mismo_proyecto"))
+    if not cfg.get("quitar_duplicados", True):
+        return False
+    return bool(d.get("mismo_proyecto") or (not d and c.get("mismo_nombre") and cfg.get("revisar_mismo_nombre", True)))
 
 
 def texto_duplicado(c):
     """'parte de ENTREVISTA, del 2:37,6 al 2:51,3' para el montaje, el informe y el log."""
     d = c.get("contenido_en") or {}
     if not d:
+        if c.get("mismo_nombre"):
+            return "mismo nombre que %s, sin confirmar que esté dentro: revísalo" % c["mismo_nombre"].get("nombre")
         return ""
     t = lambda s: ("%d:%04.1f" % (s // 60, s % 60)).replace(".", ",")
     if d.get("desde") is None:

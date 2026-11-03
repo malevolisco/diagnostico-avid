@@ -47,6 +47,7 @@ class Montaje:
         self.descartados = descartados or {}  # {proyecto: [(clip, motivo)]}: lo que no entra en ningún bruto
         self.mxf_por_ruta = {}  # lo que dice el análisis de cada fichero (para oír el clip: sus canales de sonido)
         self.por_clave = {c.get("clave"): c for l in listas.values() for cs in l.values() for c in cs}
+        self.por_clave.update({c.get("clave"): c for fuera in self.descartados.values() for c, _ in fuera})
         self.orden = {p: {c.get("clave"): (f, i) for f in ("material", "piezas") for i, c in enumerate(l.get(f) or [])}
                       for p, l in listas.items()}
         self.estados = {}  # solo los proyectos tocados
@@ -96,8 +97,21 @@ class Montaje:
         return set(self._estado(p)["movidos"])
 
     def fuera_del_bruto(self, p):
-        """[(clip, motivo)] de lo que se queda fuera de los brutos del proyecto (efectos de Avid, agencias, importados)."""
-        return list(self.descartados.get(p, []))
+        """[(clip, motivo)] de lo que se queda fuera de los brutos del proyecto (efectos de Avid, agencias, importados),
+        sin lo que se ha metido a mano en un bruto (meter)."""
+        dentro = set(self._estado(p).get("incluidos") or ())
+        return [(c, m) for c, m in self.descartados.get(p, []) if c.get("clave") not in dentro]
+
+    def _orden_de_fuera(self, p, clave):
+        """Sitio en el orden automático de un clip de fuera del bruto que se mete a mano: entre el material, por su fecha
+        (sin fecha, al final)."""
+        if clave in self.orden[p]:
+            return
+        f = self.fecha(self.por_clave[clave])
+        material = [(i, self.fecha(self.por_clave[k])) for k, (fam, i) in self.orden[p].items() if fam == "material"]
+        antes = [i for i, g in material if g is not None and f is not None and g <= f]
+        sitio = (max(antes) + 0.5) if antes else (-0.5 if f is not None else len(material) + 0.5)
+        self.orden[p][clave] = ("material", sitio)
 
     def nuevos(self, p):
         return [self.por_clave[k] for k in self.sin_colocar.get(p, [])]
@@ -166,6 +180,18 @@ class Montaje:
                 e["papelera"].remove(k)
                 self._insertar_por_orden(e, p, k)
                 e.setdefault("recuperados", []).append(k)  # un trozo repetido recuperado a mano no vuelve a la papelera
+
+    def meter(self, p, claves):
+        """Mete en el bruto, en su sitio por fecha, clips de fuera del bruto (un MP4 importado que sí es material)."""
+        e = self._cambiar(p)
+        fuera = {c.get("clave") for c, _ in self.descartados.get(p, [])}
+        for k in claves:
+            if k in fuera and k not in (e.get("incluidos") or []):
+                self._orden_de_fuera(p, k)
+                self._insertar_por_orden(e, p, k)
+                e.setdefault("incluidos", []).append(k)
+                if k not in e["movidos"]:
+                    e["movidos"].append(k)
 
     def colocar(self, p, claves):
         """Coloca clips nuevos (de un análisis posterior) en su sitio por fecha."""
@@ -262,6 +288,10 @@ class Montaje:
         if p not in self.listas:
             self.avisos.append("%s: el proyecto ya no está en el análisis; se ignora su montaje" % p)
             return
+        fuera = {c.get("clave") for c, _ in self.descartados.get(p, [])}
+        incluidos = [k for k in e.get("incluidos", []) if k in fuera]
+        for k in incluidos:  # lo de fuera del bruto metido a mano sigue siendo válido
+            self._orden_de_fuera(p, k)
         validas = set(self.orden[p])
         brutos = [{"nombre": b.get("nombre") or None, "tipo": b.get("tipo", "material"),
                    "clips": [k for k in b.get("clips", []) if k in validas]} for b in e.get("brutos", [])]
@@ -285,7 +315,7 @@ class Montaje:
             self.avisos.append("%s: %d clips nuevos sin colocar; no se exportan hasta colocarlos" % (p, len(nuevas)))
             self.sin_colocar[p] = nuevas
         estado = {"brutos": brutos, "papelera": papelera, "movidos": [k for k in e.get("movidos", []) if k in validas],
-                  "recuperados": recuperados, "modificado": e.get("modificado")}
+                  "recuperados": recuperados, "incluidos": incluidos, "modificado": e.get("modificado")}
         self._limpiar(estado)
         self.estados[p] = estado
 

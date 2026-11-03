@@ -234,6 +234,26 @@ def montaje():
     fuera = " | ".join(pm.lb_f.get(0, "end"))
     for motivo in ("agencia", "efecto de Avid", "importado"):
         comprobar(motivo in fuera, "Fuera del bruto sin '%s': %s" % (motivo, fuera))
+    # Fuera del bruto: un clic lo enseña en el visor (las flechas lo recorren); "Meter en el bruto" lo pone en su sitio
+    n_fuera = pm.lb_f.size()
+    i = next(i for i in range(n_fuera) if "importado" in pm.lb_f.get(i))
+    pm.lb_f.selection_set(i)
+    pm.ver_aparte("fuera")
+    app.raiz.update()
+    comprobar(pm.vista and pm.lbl_nombre.cget("text").startswith("Fuera del bruto ·") and "importado" in pm.ficha["montaje"].cget("text"),
+              "un clic en Fuera del bruto debe enseñarlo: %r" % pm.lbl_nombre.cget("text"))
+    antes = pm.vista["dentro"]
+    pm.mover_cursor(0.4)
+    comprobar(pm.vista and pm.vista["dentro"] != antes, "las flechas deben recorrer el clip de fuera del bruto")
+    nombre = pm.vista["c"]["nombre"]
+    pm.meter()
+    app.raiz.update()
+    dentro = [c["nombre"] for b in pm.m.brutos(p) for c in b["clips"]]
+    comprobar(pm.vista is None and pm.lb_f.size() == n_fuera - 1 and nombre in dentro,
+              "Meter en el bruto: %s, %d de %d fuera" % (nombre, pm.lb_f.size(), n_fuera))
+    pm.deshacer()
+    pm.cambios = False
+    comprobar(pm.lb_f.size() == n_fuera, "Deshacer debe sacarlo otra vez")
     app.raiz.after(100, origen)
 
 

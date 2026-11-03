@@ -205,6 +205,31 @@ class FueraDelBruto(Base):
         self.assertEqual([(c["nombre"], mo) for c, mo in m.fuera_del_bruto("P")], [("R", "agencia")])
         self.assertEqual(m.fuera_del_bruto("Q"), [])
 
+    def test_meter_en_el_bruto_por_su_fecha_y_guardarlo(self):
+        """Un MP4 importado que sí es material: "Meter en el bruto" lo pone en su sitio por fecha; se guarda en montaje.json,
+        se exporta con el bruto y Deshacer lo saca."""
+        descartados = {"P": [(clip("R", "2021-09-01 12:00", 1), "importado")]}
+        m = montaje.Montaje(self.listas, fecha, 7200, descartados=descartados)
+        m.meter("P", ["KR"])
+        self.assertEqual(self.vista(m)[0][1], ["A", "R", "B"])  # entre A (1 sep 10:00) y B (2 sep)
+        self.assertEqual(m.fuera_del_bruto("P"), [])
+        self.assertIn("KR", m.movidos("P"))
+        self.assertIn("R", [c["nombre"] for g in m.grupos() for c in g["clips"]])
+        m.guardar(self.tmp)
+        m2 = montaje.Montaje.cargar(self.tmp, self.listas, fecha, 7200, descartados)
+        self.assertEqual((self.vista(m2), m2.fuera_del_bruto("P"), m2.avisos), (self.vista(m), [], []))
+        m.deshacer()
+        self.assertEqual([c["nombre"] for c, _ in m.fuera_del_bruto("P")], ["R"])
+
+    def test_mismo_nombre_sin_confirmar_va_a_la_papelera_para_revisarlo(self):
+        c = clip("00059S.new.07", "2021-09-01 10:30", 1)
+        c["mismo_nombre"] = {"clave": "KA", "nombre": "00059S.new.01"}
+        self.assertTrue(eb.es_duplicado(c, {}))
+        self.assertFalse(eb.es_duplicado(c, {"revisar_mismo_nombre": False}))
+        self.assertEqual(eb.texto_duplicado(c), "mismo nombre que 00059S.new.01, sin confirmar que esté dentro: revísalo")
+        c["contenido_en"] = {"nombre": "00059S.new.01", "desde": 1.0, "hasta": 2.0, "mismo_proyecto": True}
+        self.assertTrue(eb.texto_duplicado(c).startswith("parte de 00059S.new.01"))
+
 
 class Grupos(Base):
     def test_grupos_para_exportar(self):

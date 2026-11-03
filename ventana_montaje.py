@@ -90,6 +90,7 @@ class PantallaMontaje:
         self.bloqueada = False
         self.p, self.k, self.t = None, 0, 0.0  # proyecto, bruto, segundo del cabezal dentro del bruto
         self.zoom, self.reproduciendo, self.vivo = 1.0, False, True
+        self.vista = None  # un clip de la papelera o de fuera del bruto en el visor: {c, dentro, que, motivo}
         self.compacto = compacto
         self.vw, self.vh = (304, 171) if compacto else (VISOR_W, VISOR_H)  # el visor (los fotogramas se escalan)
         ancho_lista = 20 if compacto else 34
@@ -156,9 +157,11 @@ class PantallaMontaje:
         ttk.Button(self.marco_n, text="Colocar por fecha", style=accion, command=self.colocar).pack(anchor="w")
         self.lbl_f = ttk.Label(izq, text="FUERA DEL BRUTO", style="Panel.Seccion.TLabel")
         self.lbl_f.pack(anchor="w", pady=(12, 0))
-        self.lb_f = tema.lista(izq, width=ancho_lista, height=3 if compacto else 4)
-        self.lb_f.pack(fill="x", pady=(4, 0))
-        ttk.Label(izq, text="Efectos de Avid, agencias e importados: no entran en ningún bruto.", style="Panel.Suave.TLabel",
+        self.lb_f = tema.lista(izq, width=ancho_lista, height=3 if compacto else 4, selectmode="extended")
+        self.lb_f.pack(fill="x", pady=(4, 4))
+        ttk.Button(izq, text="Meter en el bruto", style=accion, command=self.meter).pack(anchor="w")
+        ttk.Label(izq, text="Efectos de Avid, agencias e importados: no entran en ningún bruto. Un clic en esta lista o en la "
+                  "papelera lo enseña en el visor.", style="Panel.Suave.TLabel",
                   wraplength=200 if compacto else 290).pack(anchor="w", pady=(4, 0))
 
         centro = ttk.Frame(cuerpo, style="Fondo.TFrame")
@@ -292,6 +295,8 @@ class PantallaMontaje:
 
         self.cb_p.bind("<<ComboboxSelected>>", lambda e: self.elegir_proyecto(self.proyectos[self.cb_p.current()]))
         self.lb_b.bind("<<ListboxSelect>>", self.al_elegir_bruto)
+        self.lb_q.bind("<<ListboxSelect>>", lambda _: self.ver_aparte("papelera"))
+        self.lb_f.bind("<<ListboxSelect>>", lambda _: self.ver_aparte("fuera"))
         self.tv.bind("<<TreeviewSelect>>", self.al_elegir_clip)
         self.linea.bind("<Button-1>", self.al_pulsar_linea)
         self.linea.bind("<Control-Button-1>", lambda e: self.al_pulsar_linea(e, sumar=True))
@@ -382,8 +387,8 @@ class PantallaMontaje:
         papelera = self.m.papelera(self.p)
         self.lbl_q.configure(text="PAPELERA · %d" % len(papelera))
         self.lb_q.delete(0, "end")
-        for c in papelera:  # un trozo repetido dice de qué clip es parte
-            self.lb_q.insert("end", c["nombre"] + ("  · " + eb.texto_duplicado(c) if c.get("contenido_en") else ""))
+        for c in papelera:  # un trozo repetido dice de qué clip es parte (o con qué clip hay que revisarlo)
+            self.lb_q.insert("end", c["nombre"] + ("  · " + eb.texto_duplicado(c) if eb.texto_duplicado(c) else ""))
         nuevos = self.m.nuevos(self.p)
         self.lb_n.delete(0, "end")
         for c in nuevos:
@@ -634,6 +639,8 @@ class PantallaMontaje:
     def pintar_visor(self):
         tema = self.tema
         self.visor.delete("all")
+        if self.vista:
+            return self.pintar_vista()
         n, c, dentro = self.donde_cursor()
         b = self.bruto()
         total = sum(d for _, _, d in self.tramos())
@@ -688,6 +695,63 @@ class PantallaMontaje:
         i = min(int(dentro), len(jpgs) - 1)
         self.dibujar((c.get("clave"), i), lambda: jpgs[i])
 
+    def ver_aparte(self, que):
+        """Un clic en la papelera o en fuera del bruto: ese clip en el visor (las flechas lo recorren y Espacio lo oye),
+        sin tocar el bruto."""
+        lb = self.lb_q if que == "papelera" else self.lb_f
+        sel = lb.curselection()
+        if not sel or not self.p:
+            return
+        if que == "papelera":
+            c = self.m.papelera(self.p)[sel[0]]
+            texto = eb.texto_duplicado(c)
+            motivo = "En la papelera%s. \"Recuperar los marcados\" lo vuelve a meter en el bruto." % (": " + texto if texto else " (quitado a mano)")
+        else:
+            c, m = self.m.fuera_del_bruto(self.p)[sel[0]]
+            motivo = "Fuera del bruto: %s. \"Meter en el bruto\" lo pone en su sitio por fecha." % m
+        self.parar_sonido()
+        if self.reproduciendo:
+            self.reproducir()
+        self.vista = {"c": c, "dentro": min(1.0, duracion_visible(c) / 2), "que": "Papelera" if que == "papelera" else "Fuera del bruto",
+                      "motivo": motivo}
+        self.pintar_visor()
+
+    def sin_vista(self):
+        """Vuelve el visor al bruto (se ha pinchado en la lista de clips, en la línea de tiempo o en otro bruto)."""
+        if self.vista:
+            self.vista = None
+            if self.sonando and self.sonando.get("vista"):
+                self.parar_sonido()
+
+    def pintar_vista(self):
+        tema, v = self.tema, self.vista
+        c, dentro = v["c"], v["dentro"]
+        self.lbl_tc.configure(text=fmt_tc(dentro))
+        self.lbl_total.configure(text="de %s" % fmt_tc(duracion_visible(c)))
+        self.lbl_bruto.configure(text="%s: no está en el bruto · un clic en la lista de clips vuelve al bruto" % v["que"],
+                                 style=self.pref_bruto + "Aviso.TLabel")
+        f = self.m.fecha(c)
+        valores = {"fecha": f.strftime("%d/%m/%Y %H:%M:%S") if f else "sin fecha", "tc": c.get("timecode") or "—",
+                   "dur": fmt_h(duracion_visible(c)),
+                   "formato": " · ".join(str(x) for x in (c.get("codec_video"), c.get("resolucion")) if x) or "—",
+                   "audio": "%s pistas" % c["num_audio"] if c.get("num_audio") else "SIN AUDIO",
+                   "origen": (c.get("origen_texto") or c.get("origen") or "—") + ("\n" + c["origen_motivo"] if c.get("origen_motivo") else ""),
+                   "montaje": v["motivo"]}
+        self.lbl_nombre.configure(text="%s · %s" % (v["que"], c["nombre"]))
+        for k, w in self.ficha.items():
+            w.configure(text=valores[k], style="Panel.Aviso.TLabel" if k == "montaje" else "Panel.TLabel")
+        cuadro = int(round(dentro * FPS_BRUTO))
+        exacto = self.exactos.get((c.get("clave"), cuadro))
+        if exacto and PIL_OK:
+            return self.dibujar(("exacto", c.get("clave"), cuadro), lambda: exacto)
+        if not self.sonando:
+            self.pedir_exacto(c, dentro)
+        portada = self.portadas.get(c.get("clave")) if PIL_OK else None
+        if portada:
+            self.dibujar(("portada", c.get("clave")), lambda: Path(portada).read_bytes())
+        else:
+            self.visor.create_text(self.vw / 2, self.vh / 2, fill=tema.SUAVE, text="Preparando la imagen…" if self.ffmpeg and PIL_OK else "Sin imagen")
+
     def dibujar(self, clave, jpeg):
         """Pone en el visor la imagen clave (jpeg(): sus bytes), escalada al visor; las últimas 64 se guardan hechas."""
         foto = self.fotos.get(clave)
@@ -701,6 +765,7 @@ class PantallaMontaje:
         self.visor.create_image(0, 0, image=foto, anchor="nw")
 
     def refrescar(self, mantener=()):
+        self.sin_vista()
         self.pintar_proyectos()
         self.pintar_brutos()
         self.pintar_tabla(mantener)
@@ -793,7 +858,7 @@ class PantallaMontaje:
                         self.exactos[k] = ruta
                         if len(self.exactos) > 64:
                             self.exactos.pop(next(iter(self.exactos)))
-                        n, c, dentro = self.donde_cursor()
+                        n, c, dentro = (None, self.vista["c"], self.vista["dentro"]) if self.vista else self.donde_cursor()
                         if c is not None and k == (c.get("clave"), int(round(dentro * FPS_BRUTO))):
                             self.pintar_visor()
                     continue
@@ -815,13 +880,15 @@ class PantallaMontaje:
     # --- eventos -----------------------------------------------------------------------------------------------
 
     def elegir_proyecto(self, p):
+        self.vista = None
         self.parar_sonido()
         self.p, self.k, self.t = p, 0, 0.0
         self.refrescar()
 
     def al_elegir_bruto(self, _=None):
         sel = self.lb_b.curselection()
-        if sel and sel[0] != self.k:
+        if sel and (sel[0] != self.k or self.vista):
+            self.sin_vista()
             self.parar_sonido()
             self.k, self.t = sel[0], 0.0
             self.pintar_tabla()
@@ -830,6 +897,7 @@ class PantallaMontaje:
             self.pedir_fotogramas()
 
     def al_elegir_clip(self, _=None):
+        self.sin_vista()
         sel = self.tv.selection()
         if len(sel) == 1:
             self.t = self.tramos()[int(sel[0])][1]
@@ -838,6 +906,7 @@ class PantallaMontaje:
         self.ver_cursor()
 
     def al_pulsar_linea(self, e, sumar=False):
+        self.sin_vista()
         n, self.t = self.clip_en_x(self.linea.canvasx(e.x))
         if n is not None:
             if not sumar:
@@ -861,6 +930,13 @@ class PantallaMontaje:
     def mover_cursor(self, segundos):
         if not self.vivo or not self.marco.winfo_ismapped():
             return
+        if self.vista:  # recorre el clip de la papelera o de fuera
+            v = self.vista
+            v["dentro"] = max(0.0, min(duracion_visible(v["c"]) - 1 / FPS_BRUTO, v["dentro"] + segundos))
+            self.pintar_visor()
+            if self.sonando:
+                self.empezar_sonido()
+            return
         total = sum(d for _, _, d in self.tramos())
         self.t = max(0.0, min(total, self.t + segundos))
         self.pintar_linea()
@@ -875,6 +951,10 @@ class PantallaMontaje:
             self.parar_sonido()
         if self.reproduciendo:
             self.reproducir()
+        if self.vista:
+            v = self.vista
+            v["dentro"] = max(0.0, min(duracion_visible(v["c"]) - 1 / FPS_BRUTO, (round(v["dentro"] * FPS_BRUTO) + n) / FPS_BRUTO))
+            return self.pintar_visor()
         total = sum(d for _, _, d in self.tramos())
         self.t = max(0.0, min(total, (round(self.t * FPS_BRUTO) + n) / FPS_BRUTO))
         self.pintar_linea()
@@ -883,6 +963,10 @@ class PantallaMontaje:
 
     def ir_al_clip(self, salto, final=False):
         """Al principio (o al último fotograma, con final) del clip actual (salto 0), del anterior (-1) o del siguiente (1)."""
+        if self.vista:  # Inicio/Fin dentro del clip de la papelera o de fuera
+            v = self.vista
+            v["dentro"] = max(0.0, duracion_visible(v["c"]) - 1 / FPS_BRUTO) if final else 0.0
+            return self.pintar_visor()
         tramos = self.tramos()
         n, _, _ = self.donde_cursor()
         if n is None:
@@ -986,14 +1070,14 @@ class PantallaMontaje:
             return
         if self.reproduciendo:
             self.reproducir()
-        n, c, dentro = self.donde_cursor()
+        n, c, dentro = (None, self.vista["c"], self.vista["dentro"]) if self.vista else self.donde_cursor()
         if c is None or not c.get("fichero_video"):
             return
         d = duracion_visible(c)
         if dentro >= d - 0.2:
             dentro = 0.0
         canales = eb.canales_clip(c, getattr(self.m, "mxf_por_ruta", None) or {})[:16]
-        titulo = "%d. %s  (Espacio en el programa: parar)" % (n + 1, c["nombre"])
+        titulo = "%s %s  (Espacio en el programa: parar)" % ("%s:" % self.vista["que"] if self.vista else "%d." % (n + 1), c["nombre"])
         try:
             a = subprocess.Popen(mj.orden_sonido(self.ffmpeg, self.origen, c, dentro, canales), stdin=subprocess.DEVNULL,
                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **eb.flags_subproceso(prioridad_normal=True))
@@ -1003,7 +1087,8 @@ class PantallaMontaje:
         except OSError as e:
             self.lbl_foto.configure(text="No se puede reproducir: %s" % e)
             return
-        self.sonando = {"procesos": (a, b), "n": n, "inicio": self.t - dentro, "dentro": dentro, "dur": d, "t0": time.monotonic()}
+        self.sonando = {"procesos": (a, b), "n": n, "inicio": self.t - dentro, "dentro": dentro, "dur": d, "t0": time.monotonic(),
+                        "vista": bool(self.vista)}
         self.bt_sonido.configure(text="■")
 
     def parar_sonido(self):
@@ -1030,6 +1115,14 @@ class PantallaMontaje:
         if not s:
             return
         pasado = time.monotonic() - s["t0"]
+        if s.get("vista"):  # un clip de la papelera o de fuera: suena él solo, sin mover el bruto
+            if s["procesos"][1].poll() is None:
+                if self.vista and self.marco.winfo_ismapped():
+                    self.vista["dentro"] = min(s["dentro"] + pasado, s["dur"])
+                    self.pintar_visor()
+                return
+            self.parar_sonido()
+            return
         if s["procesos"][1].poll() is None:
             self.t = s["inicio"] + min(s["dentro"] + pasado, s["dur"])
             if self.marco.winfo_ismapped():
@@ -1201,6 +1294,18 @@ class PantallaMontaje:
         if sel and self.permitido():
             self.m.recuperar(self.p, sel)
             self.hecho()
+
+    def meter(self):
+        """Mete en el bruto, en su sitio por fecha, lo marcado en fuera del bruto (un MP4 importado que sí es material)."""
+        fuera = self.m.fuera_del_bruto(self.p)
+        sel = [fuera[i][0].get("clave") for i in self.lb_f.curselection() if i < len(fuera)]
+        if not sel:
+            from tkinter import messagebox
+            return messagebox.showinfo("Meter en el bruto", "Marca en \"Fuera del bruto\" lo que quieras meter (Ctrl para varios).",
+                                       parent=self.marco)
+        if self.permitido():
+            self.m.meter(self.p, sel)
+            self.hecho(sel)
 
     def colocar(self):
         nuevos = self.m.nuevos(self.p)

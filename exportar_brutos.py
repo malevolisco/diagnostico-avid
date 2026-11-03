@@ -429,6 +429,9 @@ def _fecha_dmy(f):
     return f.strftime("%d/%m/%Y")
 
 
+MISMA_CAMARA_DIAS = 180  # corregir_relojes: dos proyectos cuyo atraso difiere menos que esto, la misma cámara
+
+
 def corregir_relojes(clips, mxf_por_ruta, cfg):
     """Fechas de cámara de material de tarjeta (es_de_tarjeta) que no cuadran con su entrada en Avid (entrada_en_avid).
     Hay dos casos que el bin no distingue clip a clip (03/11/2026, discos reales):
@@ -438,8 +441,9 @@ def corregir_relojes(clips, mxf_por_ruta, cfg):
       del proyecto cuadra con su entrada.
     Por eso se mira cada proyecto entero: si al menos un clip de tarjeta se grabó a menos de dias_reloj_mal_puesto de su
     entrada, los relojes son buenos y las fechas se quedan (las que se alejan llevan aviso). Si ninguno, el reloj estaba
-    mal puesto: a todas se les suma el menor retraso del proyecto (lo más pronto que pudo entrar lo que se grabó), así
-    que cada clip queda antes de su entrada y la distancia entre rodajes se mantiene. La de la cámara queda en
+    mal puesto: a todas se les suma el menor retraso (lo más pronto que pudo entrar lo que se grabó; el de todo el disco si
+    no se aleja del del proyecto: la misma cámara se atrasa siempre lo mismo), así que cada clip queda antes de su entrada
+    y la distancia entre rodajes se mantiene. La de la cámara queda en
     fecha_camara. Una grabación de después de entrar en Avid es imposible: ese clip va por el volcado.
     Devuelve cuántos clips cambian de fecha. dias_reloj_mal_puesto = 0: no se mira."""
     try:
@@ -465,21 +469,29 @@ def corregir_relojes(clips, mxf_por_ruta, cfg):
             n += 1
             continue
         por_proyecto[(sorted(c.get("proyectos") or []) or [""])[0]].append((c, g, e))
-    for xs in por_proyecto.values():
+    mal = []  # (proyecto, su menor retraso): los de reloj mal puesto
+    for p, xs in por_proyecto.items():
         retraso = min(e - g for _, g, e in xs)
-        if retraso <= limite:
-            for c, g, e in xs:
-                if e - g > limite:
-                    c["aviso_fecha"] = ("la cámara dice %s y el clip entró en Avid el %s: material antiguo traído en otra "
-                                        "tarjeta, o un reloj mal puesto" % (_fecha_dmy(g), _fecha_dmy(e)))
+        if retraso > limite:
+            mal.append((p, retraso))
             continue
         for c, g, e in xs:
+            if e - g > limite:
+                c["aviso_fecha"] = ("la cámara dice %s y el clip entró en Avid el %s: material antiguo traído en otra "
+                                    "tarjeta, o un reloj mal puesto" % (_fecha_dmy(g), _fecha_dmy(e)))
+    # Una cámara con el reloj mal puesto se atrasa siempre lo mismo (disco real: 5931-5932 días en 7 de 8 proyectos). El
+    # menor retraso de todo el disco es el más fino: en un proyecto de 1 o 2 clips que se volcaron semanas después, el suyo
+    # se pasa. Se usa el menor de los proyectos cuyo retraso es hasta MISMA_CAMARA_DIAS menor que el suyo (la misma cámara);
+    # uno que se aleja más es de otra cámara y no cuenta.
+    misma = dt.timedelta(days=MISMA_CAMARA_DIAS)
+    for p, retraso in mal:
+        retraso = min(r for _, r in mal if retraso - misma <= r <= retraso)
+        for c, g, e in por_proyecto[p]:
             c["fecha_camara"] = c["fecha_grabacion"]
             c["fecha_grabacion"] = (g + retraso).strftime("%Y-%m-%d %H:%M:%S")
             c["fecha_grabacion_fuente"] = "cámara, corregida"
-            c["aviso_fecha"] = ("reloj de la cámara mal puesto: dice %s y nada de tarjeta del proyecto entró en Avid antes de "
-                                "%d años después; fecha aproximada (se mantiene la distancia entre rodajes)"
-                                % (_fecha_dmy(g), retraso.days // 365))
+            c["aviso_fecha"] = ("reloj de la cámara mal puesto: dice %s y lo de tarjeta entró en Avid unos %d años después; "
+                                "fecha aproximada (se mantiene la distancia entre rodajes)" % (_fecha_dmy(g), retraso.days // 365))
             n += 1
     return n
 

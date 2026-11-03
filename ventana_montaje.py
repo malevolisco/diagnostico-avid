@@ -58,6 +58,14 @@ def duracion_visible(c):
 # Página de montaje
 # ---------------------------------------------------------------------------
 
+
+def mismo_nombre(c):
+    """Nombre del clip largo con el mismo identificador de cámara (00059S…) que no se ha podido confirmar que lo contenga
+    (diagnostico_avid.repetidos_por_contenido), o None: el montaje lo marca para revisarlo a mano."""
+    if c.get("contenido_en"):
+        return None
+    return (c.get("mismo_nombre") or {}).get("nombre")
+
 class PantallaMontaje:
     """Se construye dentro de contenedor (un marco de la ventana). al_cambiar() avisa de que cambió el estado de
     "cambios sin guardar" (para que la ventana pregunte antes de salir de la página)."""
@@ -276,6 +284,7 @@ class PantallaMontaje:
         self.tv.tag_configure("movido", foreground=tema.ACENTO)
         self.tv.tag_configure("audio", foreground=tema.SUAVE)
         self.tv.tag_configure("sinaudio", foreground=tema.ACENTO)  # clip con vídeo y sin ninguna pista de sonido
+        self.tv.tag_configure("revisar", foreground=tema.AVISO)  # mismo clip de cámara que otro, sin confirmar que esté dentro
         sb = ttk.Scrollbar(tabla, orient="vertical", command=self.tv.yview)
         self.tv.configure(yscrollcommand=sb.set)
         self.tv.pack(side="left", fill="both", expand=True)
@@ -399,10 +408,12 @@ class PantallaMontaje:
         for n, (c, _, d) in enumerate(self.tramos()):
             f = self.m.fecha(c)
             sin_audio = bool(c.get("fichero_video")) and not c.get("num_audio")
+            revisar = mismo_nombre(c)
             tags = (("movido",) if c.get("clave") in movidos else ("audio",) if not c.get("fichero_video") else
-                    ("sinaudio",) if sin_audio else ())
+                    ("sinaudio",) if sin_audio else ("revisar",) if revisar else ())
             self.tv.insert("", "end", iid=str(n), tags=tags, values=(
-                n + 1, c["nombre"] + ("" if c.get("fichero_video") else "  (solo audio: no se exporta)") + ("  (SIN AUDIO)" if sin_audio else ""),
+                n + 1, c["nombre"] + ("" if c.get("fichero_video") else "  (solo audio: no se exporta)") + ("  (SIN AUDIO)" if sin_audio else "")
+                + ("  ⚠ mismo nombre que %s" % revisar if revisar else ""),
                 f.strftime("%d/%m/%Y %H:%M:%S") if f else "sin fecha", fmt_h(d), c.get("origen_texto") or c.get("origen") or "",
                 "movido a mano" if c.get("clave") in movidos else "automático"))
             self.claves_tv.append(c.get("clave"))
@@ -645,10 +656,13 @@ class PantallaMontaje:
                    "dur": fmt_h(duracion_visible(c)),
                    "formato": " · ".join(str(x) for x in (c.get("codec_video"), c.get("resolucion")) if x) or "—",
                    "audio": "%s pistas" % c["num_audio"] if c.get("num_audio") else "SIN AUDIO" if c.get("fichero_video") else "—", "origen": (c.get("origen_texto") or c.get("origen") or "—") + ("\n" + c["origen_motivo"] if c.get("origen_motivo") else ""),
-                   "montaje": "movido a mano" if movido else "automático"}
+                   "montaje": ("movido a mano" if movido else "automático")
+                   + ("\n⚠ Mismo clip de cámara que %s, pero no está dentro ni por el timecode ni por el sonido: revísalo "
+                      "(si es un trozo suyo, quítalo del bruto)" % mismo_nombre(c) if mismo_nombre(c) else "")}
         self.lbl_nombre.configure(text="%d. %s" % (n + 1, c["nombre"]))
         for k, w in self.ficha.items():
-            w.configure(text=valores[k], style="Panel.Acento.TLabel" if (k == "montaje" and movido) or (k == "audio" and valores[k] == "SIN AUDIO")
+            w.configure(text=valores[k], style="Panel.Aviso.TLabel" if k == "montaje" and mismo_nombre(c) else
+                        "Panel.Acento.TLabel" if (k == "montaje" and movido) or (k == "audio" and valores[k] == "SIN AUDIO")
                         else "Panel.TLabel")
         ruta = self.listos.get(c.get("clave"))
         self.pedir_fotogramas()  # si se ha cambiado de clip, lo suyo pasa delante

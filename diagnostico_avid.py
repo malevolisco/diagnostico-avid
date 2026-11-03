@@ -1425,6 +1425,7 @@ def marcar_duplicados(clips, origen, ffmpeg=None, mxf=()):
     import lecturas
     for c in clips:
         c.pop("contenido_en", None)
+        c.pop("mismo_nombre", None)
     try:
         candidatos, _ = exportar_brutos.duplicados_dv(clips)
     except Exception as e:
@@ -1514,18 +1515,21 @@ def repetidos_por_nombre(clips, origen):
                     sitios = lecturas.situar(largo["fichero_video"], ruta(largo), [a_f(ini), a_f(fin)], a_f)
                     a, b = sitios.get(a_f(ini)), sitios.get(a_f(fin))
                     if a is None or b is None or abs((b - a + 1) - n) > 2:
-                        LOG.info("Mismo clip de cámara pero no está dentro (%s en %s): se queda", corto["nombre"], largo["nombre"])
+                        LOG.info("Mismo clip de cámara pero su timecode no está dentro (%s en %s): se mira el sonido", corto["nombre"], largo["nombre"])
+                        corto["mismo_nombre"] = {"clave": largo.get("clave"), "nombre": largo["nombre"]}
                         continue
                     desde = a
                 elif corto.get("timecode") and largo.get("timecode"):
                     t0, l0 = a_f(corto["timecode"]), a_f(largo["timecode"])
                     nl = int(round((largo.get("duracion") or 0) * fps))
                     if not (l0 <= t0 and t0 + n <= l0 + nl + 1):
-                        LOG.info("Mismo clip de cámara pero su timecode no cae dentro (%s en %s): se queda", corto["nombre"], largo["nombre"])
+                        LOG.info("Mismo clip de cámara pero su timecode no cae dentro (%s en %s): se mira el sonido", corto["nombre"], largo["nombre"])
+                        corto["mismo_nombre"] = {"clave": largo.get("clave"), "nombre": largo["nombre"]}
                         continue
                     desde = t0 - l0
             except (OSError, ValueError) as e:
                 LOG.warning("Trozos repetidos: no se puede comprobar %s en %s (%s)", corto["nombre"], largo["nombre"], e)
+                corto["mismo_nombre"] = {"clave": largo.get("clave"), "nombre": largo["nombre"]}
                 continue
             corto["contenido_en"] = {"clave": largo.get("clave"), "nombre": largo["nombre"], "por": "nombre",
                                      "desde": None if desde is None else round(desde / fps, 1),
@@ -1595,6 +1599,46 @@ def repetidos_por_contenido(clips, origen, ffmpeg, mxf):
                 return None
         return round(desde, 3)
 
+    sonidos = {}
+
+    def todo_de(largo):  # el sonido entero del largo, solo si hace falta (y una vez)
+        k = largo.get("clave")
+        if k not in sonidos:
+            sonidos[k] = sonido(largo, 0, largo["duracion"] + 1)
+        return sonidos[k]
+
+    def comparar(corto, largo):
+        """Marca el corto si su sonido está en el largo. True si lo está."""
+        nonlocal pares
+        pares += 1
+        try:
+            desde = lecturas.ACTIVAS.leer("contenido", [corto.get("clave"), largo.get("clave")],
+                                          lambda: buscar(corto, lambda: todo_de(largo)))
+        except OSError as e:
+            LOG.debug("Trozos repetidos por el contenido: %s en %s (%s)", corto["nombre"], largo["nombre"], e)
+            return False
+        if desde == "sin_forma":
+            sin_forma.add(corto.get("clave"))  # no sirve de huella con ningún largo
+        if desde in (None, "sin_forma"):
+            return False
+        corto["contenido_en"] = {"clave": largo.get("clave"), "nombre": largo["nombre"], "desde": round(desde, 1),
+                                 "hasta": round(desde + corto["duracion"], 1), "por": "sonido", "mismo_proyecto": True}
+        corto.pop("mismo_nombre", None)
+        marcados.append(corto)
+        LOG.info("Trozo repetido (su sonido está en el largo): %s es %s", corto["nombre"], exportar_brutos.texto_duplicado(corto))
+        return True
+
+    # El nombre es la primera pista (3/11/2026: "el nombre es un indicativo vital"): un clip de cámara con el mismo
+    # identificador que otro más largo (repetidos_por_nombre, que no lo encontró por el timecode) se compara siempre con
+    # ese largo, dure lo que dure. Si tampoco está por el sonido, se queda con el aviso para revisarlo en el montaje.
+    por_clave = {c.get("clave"): c for c in clips}
+    for corto in clips:
+        largo = por_clave.get((corto.get("mismo_nombre") or {}).get("clave"))
+        if largo is None or corto.get("contenido_en") or corto.get("clave") in sin_forma:
+            continue
+        if corto.get("num_audio") and largo.get("num_audio") and corto.get("duracion") and largo.get("duracion"):
+            comparar(corto, largo)
+
     for p, cs in sorted(por_proyecto.items()):
         largos, total = [], 0.0
         for c in sorted((c for c in cs if c["duracion"] >= LARGO_MIN), key=lambda c: -c["duracion"]):
@@ -1607,30 +1651,16 @@ def repetidos_por_contenido(clips, origen, ffmpeg, mxf):
                 continue
             cortos = [c for c in cs if c is not largo and not c.get("contenido_en") and c["duracion"] < largo["duracion"]
                       and (c.get("origen") or "") == (largo.get("origen") or "")]
-            entero = {}
-
-            def todo(largo=largo, entero=entero):  # el sonido entero del largo, solo si hace falta (y una vez)
-                if "m" not in entero:
-                    entero["m"] = sonido(largo, 0, largo["duracion"] + 1)
-                return entero["m"]
             for corto in cortos:
                 if corto.get("contenido_en") or corto.get("clave") in sin_forma:
                     continue
-                pares += 1
-                try:
-                    desde = lecturas.ACTIVAS.leer("contenido", [corto.get("clave"), largo.get("clave")],
-                                                  lambda: buscar(corto, todo))
-                except OSError as e:
-                    LOG.debug("Trozos repetidos por el contenido: %s en %s (%s)", corto["nombre"], largo["nombre"], e)
-                    continue
-                if desde == "sin_forma":
-                    sin_forma.add(corto.get("clave"))  # no sirve de huella con ningún largo
-                if desde in (None, "sin_forma"):
-                    continue
-                corto["contenido_en"] = {"clave": largo.get("clave"), "nombre": largo["nombre"], "desde": round(desde, 1),
-                                         "hasta": round(desde + corto["duracion"], 1), "por": "sonido", "mismo_proyecto": True}
-                marcados.append(corto)
-                LOG.info("Trozo repetido (su sonido está en el largo): %s es %s", corto["nombre"], exportar_brutos.texto_duplicado(corto))
+                if (corto.get("mismo_nombre") or {}).get("clave") == largo.get("clave"):
+                    continue  # ya comparado arriba
+                comparar(corto, largo)
+    quedan = [c for c in clips if c.get("mismo_nombre") and not c.get("contenido_en")]
+    for c in quedan:
+        LOG.info("Mismo clip de cámara que %s, pero no está dentro ni por el timecode ni por el sonido: %s se queda (aviso en el "
+                 "montaje para revisarlo)", c["mismo_nombre"]["nombre"], c["nombre"])
     LOG.info("Trozos repetidos por el contenido: %d comparaciones, %d encontrados (%.0f s)", pares, len(marcados), time.monotonic() - t0)
     return marcados
 

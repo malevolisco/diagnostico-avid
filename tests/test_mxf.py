@@ -397,6 +397,28 @@ class RepetidosPorElContenido(unittest.TestCase):
             da.repetidos_por_contenido(otra, self.tmp / "no_existe", FFMPEG, mxf)
         self.assertEqual(([c["nombre"] for c in otra if c.get("contenido_en")], leidas.no_grabadas), (["00059S.new.07"], 0))
 
+    def test_el_mismo_nombre_se_compara_siempre(self):
+        """Con el mismo identificador de cámara, el corto se compara con su largo aunque dure menos de un minuto; si no
+        está dentro, se queda con el aviso para el montaje."""
+        import diagnostico_avid as da
+        import lecturas
+        import ventana_montaje as vm
+        run = lambda *a: subprocess.run([FFMPEG, "-v", "error", "-y", *a], check=True)
+        run("-ss", "10", "-t", "20", "-i", str(self.tmp / "largo.wav"), "-c:a", "copy", str(self.tmp / "largo20.wav"))
+        run("-ss", "14", "-t", "6", "-i", str(self.tmp / "largo.wav"), "-c:a", "copy", str(self.tmp / "dentro.wav"))
+        mxf = [{"ruta": f, "pistas": [{"tipo": "audio", "canales": 1}]} for f in ("largo20.wav", "dentro.wav", "otro.wav")]
+        largo = self.clip("0008AY.new.01", "largo20.wav", 20.0)
+        largo["clave"] = "LARGO"
+        dentro, fuera = self.clip("0008AY.new.01", "dentro.wav", 6.0), self.clip("0008AY.new.02", "otro.wav", 8.0)
+        dentro["clave"] = "DENTRO"
+        for c in (dentro, fuera):
+            c["mismo_nombre"] = {"clave": "LARGO", "nombre": "0008AY.new.01"}  # lo que deja repetidos_por_nombre
+        lecturas.empezar()
+        marcados = da.repetidos_por_contenido([largo, dentro, fuera], self.tmp, FFMPEG, mxf)
+        self.assertEqual([c["clave"] for c in marcados], ["DENTRO"])
+        self.assertEqual((dentro["contenido_en"]["desde"], "mismo_nombre" in dentro), (4.0, False))
+        self.assertEqual((vm.mismo_nombre(fuera), vm.mismo_nombre(dentro)), ("0008AY.new.01", None))
+
 
 @unittest.skipUnless(FFMPEG and FFPROBE, "sin ffmpeg/ffprobe")
 class AudioPorCanales(unittest.TestCase):

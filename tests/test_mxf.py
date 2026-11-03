@@ -627,6 +627,49 @@ class VideoDeCualquierOrigen(AudioPorCanales):
         r = subprocess.run([FFPROBE, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(seg)], capture_output=True, text=True)
         self.assertAlmostEqual(float(r.stdout), self.perfil("cine.mov")["duracion"], delta=0.08)  # misma duración: no se acelera
 
+    def test_mov_de_cualquier_camara(self):
+        """03/11/2026, MOV que dan guerra: ProRes 4444 con transparencia, cuatro pistas mono (Sony, Canon), iPhone en HEVC
+        de 10 bits girado, DV NTSC, MJPEG de cámara de fotos, AAC 5.1 y sin audio. Todos salen XDCAM conformes."""
+        src = ["-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=25:d=2"]
+        tono = lambda f=440, r=48000: ["-f", "lavfi", "-i", "sine=f=%d:r=%d:d=2" % (f, r)]
+        casos = {
+            "prores4444.mov": src + ["-c:v", "prores_ks", "-profile:v", "4", "-pix_fmt", "yuva444p10le"],
+            "cuatro_mono.mov": src + tono(300) + tono(400) + tono(500) + tono(600) + ["-map", "0:v", "-map", "1:a", "-map", "2:a", "-map", "3:a",
+                                                                                   "-map", "4:a", "-c:v", "mpeg2video", "-c:a", "pcm_s24le"],
+            "iphone.mov": ["-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=30:d=2"] + tono(r=44100) + [
+                "-c:v", "libx265", "-x265-params", "log-level=error", "-pix_fmt", "yuv420p10le", "-tag:v", "hvc1", "-c:a", "aac"],
+            "dv_ntsc.mov": ["-f", "lavfi", "-i", "testsrc2=s=720x480:r=30000/1001:d=2"] + tono() + ["-c:v", "dvvideo", "-pix_fmt", "yuv411p",
+                                                                                                 "-c:a", "pcm_s16le"],
+            "fotos.mov": ["-f", "lavfi", "-i", "testsrc2=s=640x480:r=30:d=2"] + tono(r=22050) + ["-c:v", "mjpeg", "-pix_fmt", "yuvj422p",
+                                                                                              "-c:a", "pcm_u8"],
+            "aac51.mov": src + tono() + ["-c:v", "mpeg2video", "-af", "pan=5.1|c0=c0|c1=c0|c2=c0|c3=c0|c4=c0|c5=c0", "-c:a", "aac"],
+            "mudo.mov": src + ["-c:v", "prores_ks", "-profile:v", "0"],
+        }
+        for nombre, args in casos.items():
+            self.ff(*args, str(self.tmp / nombre))
+        self.ff("-display_rotation:v:0", "90", "-i", str(self.tmp / "iphone.mov"), "-c", "copy", str(self.tmp / "iphone_girado.mov"))
+        for nombre in list(casos) + ["iphone_girado.mov"]:
+            with self.subTest(mov=nombre):
+                self.convertir(nombre)
+
+    def test_mov_cortado(self):
+        """Una grabación interrumpida: sin el índice (moov) no se puede leer, y el análisis lo dice sin romperse; con el índice
+        y los datos a medias, el bruto lleva lo que hay y el shotlist avisa de que está incompleto."""
+        import diagnostico_avid as da
+        for nombre, flags in (("final.mov", []), ("delante.mov", ["-movflags", "+faststart"])):
+            self.ff("-f", "lavfi", "-i", "testsrc2=s=1280x720:r=25:d=4", "-c:v", "mpeg2video", *flags, str(self.tmp / nombre))
+            datos = (self.tmp / nombre).read_bytes()
+            (self.tmp / ("cortado_" + nombre)).write_bytes(datos[:len(datos) // 2])
+        datos, err = da.ffprobe_json(FFPROBE, self.tmp / "cortado_final.mov")
+        self.assertIsNone(datos)
+        self.assertIn("moov", err)
+        seg, _, _ = self.segmento(["cortado_delante.mov"], 4)
+        real = float(subprocess.run([FFPROBE, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(seg)],
+                                    capture_output=True, text=True).stdout)
+        self.assertLess(real, 3)
+        self.assertIn("fichero incompleto", eb.aviso_incompleto(real, 4.0))
+        self.assertIsNone(eb.aviso_incompleto(3.96, 4.0))
+
     def test_sd_anamorfico_16_9_ocupa_todo(self):
         self.ff("-f", "lavfi", "-i", "testsrc2=s=720x576:r=25:d=2", "-vf", "setsar=64/45", "-c:v", "mpeg2video", "-flags", "+ildct+ilme",
                 "-top", "1", str(self.tmp / "sd169.mxf"))

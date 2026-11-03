@@ -1625,6 +1625,14 @@ def duracion_video(clip, mxf_por_ruta):
     return pv.get("duracion") or m.get("duracion") or clip.get("duracion")
 
 
+def aviso_incompleto(real, esperada, margen=1.0):
+    """Texto para el shotlist si el segmento dura bastante menos que el vídeo según su cabecera: un fichero cortado (03/11/2026:
+    un MOV con la grabación interrumpida o una copia a medias se lee hasta donde llega y el resto falta). None si cuadra."""
+    if real and esperada and esperada - real > margen:
+        return "fichero incompleto: el bruto lleva %.1f s de los %.1f s que dice el fichero" % (real, esperada)
+    return None
+
+
 def medir_audio(ffmpeg, ruta, flujo=0, canal=None):
     """Sonoridad integrada (LUFS) y pico (dBFS) de un canal de audio de un fichero (flujo de audio y canal dentro de él;
     sin canal, el flujo entero). None si no se puede."""
@@ -2272,6 +2280,10 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
                 filas.append(fila)
                 continue
             dur = duracion_ffprobe(ffprobe, seg) or (c.get("duracion") or 0)
+            incompleto = aviso_incompleto(dur, duracion_video(c, mxf_por_ruta))
+            if incompleto:
+                fila["aviso_video"] = "; ".join(x for x in (fila.get("aviso_video"), incompleto) if x)
+                LOG.warning("%s: %s", c["nombre"], incompleto)
             n = int(round(dur * plan["fps"]))
             fila.update({"estado": "incluido (cuarentena)" if c.get("en_cuarentena") else "incluido",
                          "tc_in": fmt_tc(inicio + frames, plan["fps"]), "tc_out": fmt_tc(inicio + frames + n, plan["fps"]),

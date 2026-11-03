@@ -46,6 +46,36 @@ class CasosReales(unittest.TestCase):
         quedan = {c["nombre"] for c in clips if not c.get("contenido_en")}
         self.assertLessEqual({"00059S.new.04", "00059S.new.07", "0013OJ.new.02", "0013OJ.new.13", "0013OJ.new.20"}, quedan)
 
+    def test_master_clip_de_varios_tramos_y_copias(self):
+        """Disco DV real: 00059S.new.01 es un master clip de 26:40 en tres tramos (tres vídeos con sus cuatro pistas de
+        sonido cada uno). Antes salía un clip con el primer vídeo y las 12 pistas de sonido de los tres; ahora, un clip por
+        tramo, con su sonido y su timecode. Y las copias del mismo fichero en dos carpetas cuentan una vez."""
+        import diagnostico_avid as da
+        clips = da.agrupar_clips(casos_reales.cargar("disco_dv_2002_2019")["mxf"])
+        tramos = [c for c in clips if c["nombre"] == "00059S.new.01" and c.get("tramo")]
+        self.assertEqual([(c["tramo"], round(c["duracion"], 1), c["num_audio"], len(c["ficheros"]), c["timecode"]) for c in tramos],
+                         [("1/3", 593.9, 4, 5, "17:35:48:11"), ("2/3", 593.9, 4, 5, "17:45:41:21"), ("3/3", 412.3, 4, 5, "17:55:35:01")])
+        self.assertEqual(len({r for c in tramos for r in c["ficheros"]}), 15)  # cada fichero, en un solo tramo
+        self.assertEqual([c.get("tramo_de") for c in tramos], [None, tramos[0]["clave"], tramos[0]["clave"]])
+        con_copias = [c for c in clips if c.get("copias")]
+        self.assertTrue(con_copias and all(c["num_audio"] <= 4 for c in con_copias), [(c["nombre"], c["num_audio"]) for c in con_copias])
+        # Y los trozos del 00059S que estaban en el segundo tramo (de 17:45 a 17:55 de la cinta) se encuentran en él
+        from unittest import mock
+        import exportar_brutos as eb
+        for c in clips:
+            c["proyectos"] = ["P"]
+
+        def situar(ruta_rel, ruta, objetivos, a_f):  # con el timecode seguido dentro de cada tramo
+            largo = next(c for c in clips if c.get("fichero_video") == ruta_rel)
+            l0, n = a_f(largo["dv"]["inicio"]["tc"]), largo["dv"]["fotogramas"]
+            return {o: o - l0 for o in objetivos if 0 <= o - l0 < n}
+
+        with mock.patch("lecturas.situar", situar):
+            marcados = {c["nombre"]: eb.texto_duplicado(c) for c in da.repetidos_por_nombre(clips, "(disco)")}
+        self.assertEqual(marcados.get("00059S.new.07"), "parte de 00059S.new.01 (tramo 2/3), del 4:55,6 al 5:04,4")
+        self.assertEqual(marcados.get("00059S.new.04"), "parte de 00059S.new.01 (tramo 2/3), del 5:59,8 al 6:11,3")
+        self.assertFalse(any(c.get("contenido_en") or c.get("mismo_nombre") for c in tramos))  # los tramos no son trozos unos de otros
+
     def test_sin_nada_sensible(self):
         for nombre in casos_reales.casos():
             for f in sorted((casos_reales.CARPETA / nombre).iterdir()):

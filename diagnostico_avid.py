@@ -1498,41 +1498,59 @@ def repetidos_por_nombre(clips, origen):
     proyecto, uno más largo (30/10/2026: "si hay uno 00059S más largo, que no meta estos"). El corto va a la papelera si
     su primer y su último timecode de cinta están en el largo, a la distancia que toca (mxf_util.situar_tc_dv, que no
     supone el timecode seguido): así no se pierden trozos distintos del mismo clip de cámara cuando el largo no es el
-    clip entero. Sin subcódigo DV, con el timecode del fichero dentro del largo; sin ningún timecode, solo por el nombre."""
+    clip entero. Sin subcódigo DV, con el timecode del fichero dentro del largo; sin ningún timecode, solo por el nombre.
+    Si el largo es un master clip de varios tramos (agrupar_clips), se mira en cada tramo."""
     import lecturas
     ruta = lambda c: ruta_larga(Path(origen) / c["fichero_video"])
-    marcados = []
-    for largo, cortos in exportar_brutos.mismo_clip_de_camara(clips):
+    tramos = defaultdict(list)
+    for c in clips:
+        if c.get("tramo_de"):
+            tramos[c["tramo_de"]].append(c)
+
+    def dentro(corto, largo):
+        """Fotograma del largo donde empieza el corto; False si no está dentro; None si no hay timecode para saberlo."""
         fps = exportar_brutos.fps_num(largo.get("fps")) or 25
         a_f = lambda x: exportar_brutos.tc_cinta(x, largo.get("fps"))
+        dv = corto.get("dv") or {}
+        ini, fin = (dv.get("inicio") or {}).get("tc"), (dv.get("fin") or {}).get("tc")
+        n = dv.get("fotogramas") or int(round((corto.get("duracion") or 0) * fps))
+        if ini and fin and (largo.get("dv") or {}).get("inicio", {}).get("tc"):
+            sitios = lecturas.situar(largo["fichero_video"], ruta(largo), [a_f(ini), a_f(fin)], a_f)
+            a, b = sitios.get(a_f(ini)), sitios.get(a_f(fin))
+            return False if a is None or b is None or abs((b - a + 1) - n) > 2 else a
+        if corto.get("timecode") and largo.get("timecode"):
+            t0, l0 = a_f(corto["timecode"]), a_f(largo["timecode"])
+            nl = int(round((largo.get("duracion") or 0) * fps))
+            return t0 - l0 if l0 <= t0 and t0 + n <= l0 + nl + 1 else False
+        return None
+
+    marcados = []
+    for largo, cortos in exportar_brutos.mismo_clip_de_camara(clips):
+        base = largo.get("tramo_de") or largo.get("clave")
+        candidatos = sorted([c for c in clips if c.get("clave") == base] + tramos.get(base, []), key=lambda c: c.get("tramo") or "") or [largo]
         for corto in cortos:
-            dv = corto.get("dv") or {}
-            ini, fin = (dv.get("inicio") or {}).get("tc"), (dv.get("fin") or {}).get("tc")
-            n = dv.get("fotogramas") or int(round((corto.get("duracion") or 0) * fps))
-            desde = None
-            try:
-                if ini and fin and (largo.get("dv") or {}).get("inicio", {}).get("tc"):
-                    sitios = lecturas.situar(largo["fichero_video"], ruta(largo), [a_f(ini), a_f(fin)], a_f)
-                    a, b = sitios.get(a_f(ini)), sitios.get(a_f(fin))
-                    if a is None or b is None or abs((b - a + 1) - n) > 2:
-                        LOG.info("Mismo clip de cámara pero su timecode no está dentro (%s en %s): se mira el sonido", corto["nombre"], largo["nombre"])
-                        corto["mismo_nombre"] = {"clave": largo.get("clave"), "nombre": largo["nombre"]}
-                        continue
-                    desde = a
-                elif corto.get("timecode") and largo.get("timecode"):
-                    t0, l0 = a_f(corto["timecode"]), a_f(largo["timecode"])
-                    nl = int(round((largo.get("duracion") or 0) * fps))
-                    if not (l0 <= t0 and t0 + n <= l0 + nl + 1):
-                        LOG.info("Mismo clip de cámara pero su timecode no cae dentro (%s en %s): se mira el sonido", corto["nombre"], largo["nombre"])
-                        corto["mismo_nombre"] = {"clave": largo.get("clave"), "nombre": largo["nombre"]}
-                        continue
-                    desde = t0 - l0
-            except (OSError, ValueError) as e:
-                LOG.warning("Trozos repetidos: no se puede comprobar %s en %s (%s)", corto["nombre"], largo["nombre"], e)
+            hallado, error = None, None
+            for l in candidatos:
+                try:
+                    desde = dentro(corto, l)
+                except (OSError, ValueError) as e:
+                    error = e
+                    continue
+                if desde is not False:
+                    hallado = (l, desde)
+                    break
+            if hallado is None:
+                if error is not None:
+                    LOG.warning("Trozos repetidos: no se puede comprobar %s en %s (%s)", corto["nombre"], largo["nombre"], error)
+                else:
+                    LOG.info("Mismo clip de cámara pero su timecode no está dentro (%s en %s): se mira el sonido", corto["nombre"], largo["nombre"])
                 corto["mismo_nombre"] = {"clave": largo.get("clave"), "nombre": largo["nombre"]}
                 continue
-            corto["contenido_en"] = {"clave": largo.get("clave"), "nombre": largo["nombre"], "por": "nombre",
-                                     "desde": None if desde is None else round(desde / fps, 1),
+            l, desde = hallado
+            fps = exportar_brutos.fps_num(l.get("fps")) or 25
+            n = (corto.get("dv") or {}).get("fotogramas") or int(round((corto.get("duracion") or 0) * fps))
+            corto["contenido_en"] = {"clave": l.get("clave"), "nombre": l["nombre"] + (" (tramo %s)" % l["tramo"] if l.get("tramo") else ""),
+                                     "por": "nombre", "desde": None if desde is None else round(desde / fps, 1),
                                      "hasta": None if desde is None else round((desde + n) / fps, 1), "mismo_proyecto": True}
             marcados.append(corto)
             LOG.info("Trozo repetido (mismo clip de cámara): %s es %s", corto["nombre"], exportar_brutos.texto_duplicado(corto))
@@ -1649,7 +1667,12 @@ def repetidos_por_contenido(clips, origen, ffmpeg, mxf):
         for largo in largos:
             if largo.get("contenido_en"):
                 continue
-            cortos = [c for c in cs if c is not largo and not c.get("contenido_en") and c["duracion"] < largo["duracion"]
+            # Los otros tramos del mismo master clip también se comparan, aunque duren lo mismo (3/11/2026: "si son 9:54,
+            # a lo mejor conviene analizar la huella por si es el mismo clip"): si su sonido es idéntico, es una copia
+            mio = largo.get("tramo_de") or largo.get("clave")
+            hermano = lambda c: (c.get("tramo_de") or c.get("clave")) == mio
+            cortos = [c for c in cs if c is not largo and not c.get("contenido_en")
+                      and (c["duracion"] < largo["duracion"] or (hermano(c) and c["duracion"] <= largo["duracion"]))
                       and (c.get("origen") or "") == (largo.get("origen") or "")]
             for corto in cortos:
                 if corto.get("contenido_en") or corto.get("clave") in sin_forma:
@@ -1748,9 +1771,71 @@ def repetidos_por_sonido(clips, origen, ffmpeg, mxf):
     return marcados
 
 
+RE_PISTA_AVID = re.compile(r"^([A-Za-z]+\d+)\.")  # V01.5CD8B0EA_… / A02.5CD8B0F1_…: la pista del fichero
+
+
+def quitar_copias(fichs):
+    """Dos copias del mismo fichero de Avid (mismo nombre y tamaño, en dos carpetas de media) son uno solo: si no, el
+    clip llevaba cada pista de sonido dos veces (3/11/2026). Se queda la de la carpeta donde están más ficheros del
+    clip. Devuelve (ficheros, copias quitadas)."""
+    carpetas = Counter(carpeta_de(f["ruta"]) for f in fichs)
+    por = defaultdict(list)
+    for f in fichs:
+        por[(f["nombre"].lower(), f.get("bytes"))].append(f)
+    quedan, quitadas = [], []
+    for grupo in por.values():
+        grupo.sort(key=lambda f: (-carpetas[carpeta_de(f["ruta"])], f["ruta"]))
+        quedan.append(grupo[0])
+        quitadas += [f["ruta"] for f in grupo[1:]]
+    return sorted(quedan, key=lambda f: f["ruta"]), quitadas
+
+
+def tramos_de_clip(fichs):
+    """Un master clip de Avid puede estar hecho de varios tramos seguidos, cada uno con su vídeo y sus pistas de sonido
+    (3/11/2026: un 00059S.new.01 de 26:40 en tres ficheros de vídeo de 9:54, 9:54 y 6:52, con 12 de sonido; se exportaba
+    el primer vídeo con el sonido de los tres encima, y los otros dos tramos no salían). Cada vídeo va con el fichero de
+    cada pista (A01, A02…) creado en el mismo orden (el número de su paquete de fichero, que Avid da seguido) y de la
+    misma duración.
+    Devuelve [[ficheros del tramo]] en el orden de la grabación, o None si no se sabe repartir (se deja como estaba)."""
+    es_video = lambda f: any(p["tipo"] == "video" for p in f["pistas"])
+    videos = [f for f in fichs if es_video(f)]
+    if len(videos) < 2:
+        return None
+    pista = lambda f: RE_PISTA_AVID.match(f["nombre"])
+    if not all(pista(f) for f in fichs):
+        return None
+
+    def orden(f):
+        """El paquete de fichero de su vídeo o su sonido (material del UMID), en el orden en que Avid los creó."""
+        p = next((p for p in f["pistas"] if p["tipo"] in ("video", "audio") and p.get("file_package_umid")), None)
+        return (material(p["file_package_umid"]).upper() if p else "", f["nombre"])
+    videos.sort(key=orden)
+    por_pista = defaultdict(list)
+    for f in fichs:
+        if not es_video(f):
+            por_pista[pista(f).group(1).upper()].append(f)
+    tramos = [[v] for v in videos]
+    for fs in por_pista.values():
+        if len(fs) != len(videos):
+            return None
+        for k, f in enumerate(sorted(fs, key=orden)):
+            if abs((f.get("duracion") or 0) - (videos[k].get("duracion") or 0)) > 0.5:
+                return None
+            tramos[k].append(f)
+
+    def cuando(t):
+        d = (t[0].get("dv") or {}).get("inicio") or {}
+        return (str(d.get("fecha") or ""), str(d.get("hora") or ""), str(d.get("tc") or ""))
+    if all(cuando(t)[0] for t in tramos):
+        tramos.sort(key=cuando)
+    return tramos
+
+
 def agrupar_clips(mxf):
     """Los MXF OP-Atom llevan una pista por fichero; los que comparten UMID
-    son el mismo clip. Los que no tienen UMID se agrupan por nombre."""
+    son el mismo clip. Los que no tienen UMID se agrupan por nombre. Las copias del mismo fichero cuentan una vez
+    (quitar_copias) y un master clip de varios tramos da un clip por tramo (tramos_de_clip): "tramo" ("2/3") y
+    "tramo_de" (la clave del primero); el primero conserva la clave del master clip."""
     grupos = defaultdict(list)
     for m in mxf:
         if m.get("error"):
@@ -1758,12 +1843,11 @@ def agrupar_clips(mxf):
         clave = m.get("umid") or ("ENLACE:" + m["ruta"] if m.get("enlazado") else "NOMBRE:" + (m.get("nombre_clip") or m["nombre"]))
         grupos[clave].append(m)
 
-    clips = []
-    for clave, fichs in grupos.items():
+    def clip_de(clave, fichs):
         video = [f for f in fichs if any(p["tipo"] == "video" for p in f["pistas"])]
         pv = next((p for f in video for p in f["pistas"] if p["tipo"] == "video"), None)
         dur = max((f["duracion"] or 0) for f in fichs) if fichs else None
-        clips.append({
+        return {
             "clave": clave,
             "nombre": next((f["nombre_clip"] for f in fichs if f.get("nombre_clip")), fichs[0]["nombre"]),
             "ficheros": [f["ruta"] for f in fichs],
@@ -1785,9 +1869,46 @@ def agrupar_clips(mxf):
             "marca": next((f["marca"] for f in fichs if f.get("marca")), None),
             "marca_tipo": next((f["marca_tipo"] for f in fichs if f.get("marca")), None),
             "dv": next((f["dv"] for f in video if f.get("dv")), None),
-        })
-    clips.sort(key=lambda c: c["nombre"])
-    LOG.info("Clips reconstruidos: %d", len(clips))
+        }
+
+    clips, copias, partidos = [], 0, 0
+    for clave, fichs in grupos.items():
+        fichs, quitadas = quitar_copias(fichs)
+        copias += len(quitadas)
+        tramos = tramos_de_clip(fichs)
+        if not tramos:
+            c = clip_de(clave, fichs)
+            if quitadas:
+                c["copias"] = quitadas
+            clips.append(c)
+            continue
+        partidos += 1
+        fps = None
+        inicio = None
+        for k, tramo in enumerate(tramos):
+            c = clip_de(clave if k == 0 else "%s#%d" % (clave, k + 1), tramo)
+            c["tramo"] = "%d/%d" % (k + 1, len(tramos))
+            if k:
+                c["tramo_de"] = clave
+                tc_dv = ((c.get("dv") or {}).get("inicio") or {}).get("tc")
+                if tc_dv:  # el timecode del fichero es el del master clip: el del tramo, el que grabó la cámara
+                    c["timecode"] = tc_dv
+                elif c.get("timecode") and c.get("fps"):
+                    try:
+                        fps = exportar_brutos.fps_num(c["fps"])
+                        inicio = inicio if inicio is not None else exportar_brutos.tc_a_frames(c["timecode"], fps)
+                        antes = sum(round((x[0].get("duracion") or 0) * fps) for x in tramos[:k])
+                        c["timecode"] = exportar_brutos.fmt_tc(inicio + antes, fps)
+                    except (ValueError, ZeroDivisionError):
+                        pass
+            if quitadas:
+                c["copias"] = quitadas
+            clips.append(c)
+        LOG.info("Clip de varios tramos: %s, %d tramos (%s)", clips[-1]["nombre"], len(tramos),
+                 ", ".join("%.1f s" % (t[0].get("duracion") or 0) for t in tramos))
+    clips.sort(key=lambda c: (c["nombre"], c.get("tramo") or ""))
+    LOG.info("Clips reconstruidos: %d (%d master clips de varios tramos; %d copias repetidas de ficheros, contadas una vez)",
+             len(clips), partidos, copias)
     return clips
 
 
@@ -1894,7 +2015,14 @@ def cruzar(proyectos, bins, clips, mxf=(), enlaces=None):
             por_proyecto[p]["claves"].add(c["clave"])
             por_proyecto[p]["online"] += 1
 
+    tramos = defaultdict(list)  # los demás tramos de un master clip de varios (agrupar_clips): van con el primero
+    for c in clips:
+        if c.get("tramo_de"):
+            tramos[c["tramo_de"]].append(c)
+
     def asignar(fisico, clip, proyecto, pr, nbin):
+        for t in tramos.get(fisico["clave"], []):
+            asignar(t, clip, proyecto, pr, nbin)
         pr["online"] += 1
         if nbin and nbin not in fisico.setdefault("bins", []):  # para el origen: el nombre del bin es una pista
             fisico["bins"].append(nbin)
@@ -1943,10 +2071,10 @@ def cruzar(proyectos, bins, clips, mxf=(), enlaces=None):
                 pr["exactos"] += 1
             if clip.get("render"):
                 pr["renders"] += 1
-                if fisico:
-                    fisico["render"] = True
-                    if b["proyecto"] not in fisico.setdefault("proyectos_render", []):  # van al bruto de piezas del proyecto
-                        fisico["proyectos_render"].append(b["proyecto"])
+                for f in ([fisico] + tramos.get(fisico["clave"], [])) if fisico else []:
+                    f["render"] = True
+                    if b["proyecto"] not in f.setdefault("proyectos_render", []):  # van al bruto de piezas del proyecto
+                        f["proyectos_render"].append(b["proyecto"])
                     coincidencias[modo] += 1
                 continue
             pr["clips_bin"] += 1

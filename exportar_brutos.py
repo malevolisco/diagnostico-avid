@@ -1022,13 +1022,17 @@ def mismo_clip_de_camara(clips):
                 grupos[(m.group(1).upper(), p)].append(c)
     fotogramas = lambda c: (c.get("dv") or {}).get("fotogramas") or int(round((c.get("duracion") or 0) * (fps_num(c.get("fps")) or 25)))
     salida, vistos = [], set()
+    base = lambda c: c.get("tramo_de") or c.get("clave")  # los tramos de un mismo master clip no son trozos unos de otros
     for cs in grupos.values():
         cs = [c for c in cs if id(c) not in vistos]
         if len(cs) < 2:
             continue
         cs.sort(key=lambda c: (-fotogramas(c), -(c.get("num_audio") or 0), str(c.get("clave"))))
-        salida.append((cs[0], cs[1:]))
-        vistos.update(id(c) for c in cs[1:])
+        cortos = [c for c in cs[1:] if base(c) != base(cs[0])]
+        if not cortos:
+            continue
+        salida.append((cs[0], cortos))
+        vistos.update(id(c) for c in cortos)
     return salida
 
 

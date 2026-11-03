@@ -397,6 +397,23 @@ class RepetidosPorElContenido(unittest.TestCase):
             da.repetidos_por_contenido(otra, self.tmp / "no_existe", FFMPEG, mxf)
         self.assertEqual(([c["nombre"] for c in otra if c.get("contenido_en")], leidas.no_grabadas), (["00059S.new.07"], 0))
 
+    def test_tramos_de_un_master_clip_por_la_huella(self):
+        """Dos tramos de 70 s del mismo master clip: si son el mismo material (el mismo sonido), el segundo es una copia;
+        si no, son tramos seguidos y se quedan los dos."""
+        import diagnostico_avid as da
+        import lecturas
+        run = lambda *a: subprocess.run([FFMPEG, "-v", "error", "-y", *a], check=True)
+        run("-i", str(self.tmp / "largo.wav"), "-c:a", "copy", str(self.tmp / "copia.wav"))
+        run("-f", "lavfi", "-i", "anoisesrc=d=70:c=brown:r=48000:seed=3,volume='if(lt(mod(t,1),0.5),1,0.2)':eval=frame", "-ac", "1",
+            "-c:a", "pcm_s16le", str(self.tmp / "otro70.wav"))
+        mxf = [{"ruta": f, "pistas": [{"tipo": "audio", "canales": 1}]} for f in ("largo.wav", "copia.wav", "otro70.wav")]
+        for segundo, esperado in (("copia.wav", ["T2"]), ("otro70.wav", [])):
+            t1, t2 = self.clip("00059S.new.01", "largo.wav", 70.0), self.clip("00059S.new.01", segundo, 70.0)
+            t1.update(clave="T1", tramo="1/2")
+            t2.update(clave="T2", tramo="2/2", tramo_de="T1")
+            lecturas.empezar()
+            self.assertEqual([c["clave"] for c in da.repetidos_por_contenido([t1, t2], self.tmp, FFMPEG, mxf)], esperado)
+
     def test_el_mismo_nombre_se_compara_siempre(self):
         """Con el mismo identificador de cámara, el corto se compara con su largo aunque dure menos de un minuto; si no
         está dentro, se queda con el aviso para el montaje."""

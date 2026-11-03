@@ -417,7 +417,8 @@ class PantallaMontaje:
             tags = (("movido",) if c.get("clave") in movidos else ("audio",) if not c.get("fichero_video") else
                     ("sinaudio",) if sin_audio else ("revisar",) if revisar else ())
             self.tv.insert("", "end", iid=str(n), tags=tags, values=(
-                n + 1, c["nombre"] + ("" if c.get("fichero_video") else "  (solo audio: no se exporta)") + ("  (SIN AUDIO)" if sin_audio else "")
+                n + 1, c["nombre"] + ("  · tramo %s" % c["tramo"] if c.get("tramo") else "")
+                + ("" if c.get("fichero_video") else "  (solo audio: no se exporta)") + ("  (SIN AUDIO)" if sin_audio else "")
                 + ("  ⚠ mismo nombre que %s" % revisar if revisar else ""),
                 f.strftime("%d/%m/%Y %H:%M:%S") if f else "sin fecha", fmt_h(d), c.get("origen_texto") or c.get("origen") or "",
                 "movido a mano" if c.get("clave") in movidos else "automático"))
@@ -666,7 +667,7 @@ class PantallaMontaje:
                    "montaje": ("movido a mano" if movido else "automático")
                    + ("\n⚠ Mismo clip de cámara que %s, pero no está dentro ni por el timecode ni por el sonido: revísalo "
                       "(si es un trozo suyo, quítalo del bruto)" % mismo_nombre(c) if mismo_nombre(c) else "")}
-        self.lbl_nombre.configure(text="%d. %s" % (n + 1, c["nombre"]))
+        self.lbl_nombre.configure(text="%d. %s%s" % (n + 1, c["nombre"], " · tramo %s" % c["tramo"] if c.get("tramo") else ""))
         for k, w in self.ficha.items():
             w.configure(text=valores[k], style="Panel.Aviso.TLabel" if k == "montaje" and mismo_nombre(c) else
                         "Panel.Acento.TLabel" if (k == "montaje" and movido) or (k == "audio" and valores[k] == "SIN AUDIO")

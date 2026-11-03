@@ -227,9 +227,17 @@ Usa el último análisis del disco: no lo repite.
   de cada clip dentro de los clips largos (de un minuto o más) de su
   proyecto: si está igual, muestra a muestra, es el mismo material.
   Si un clip se llama como otro más largo (00059S.new.07 y
-  00059S.new.01) y no se puede confirmar que esté dentro, se queda en el
-  bruto pero sale en rojo con "mismo nombre que ...": revísalo y, si es
-  un trozo suyo, quítalo del bruto.
+  00059S.new.01) y no se puede confirmar que esté dentro, también va a la
+  papelera, "para revisar" ("mismo nombre que ..., sin confirmar"): si es
+  otro plano, recupéralo. Si lo recuperas, en la lista sale en rojo.
+- VER LO QUE NO ESTÁ EN EL BRUTO: un clic en la papelera o en "Fuera del
+  bruto" lo enseña en el visor, con su ficha y el motivo. Las flechas lo
+  recorren y Espacio (o el botón de reproducir) lo oye. Un clic en la
+  lista de clips o en la línea de tiempo vuelve al bruto.
+- METER LO DE FUERA: marca en "Fuera del bruto" lo que sí es material
+  (por ejemplo un MP4 importado) y pulsa "Meter en el bruto": va a su
+  sitio por fecha. "Deshacer" lo vuelve a sacar. Para un bin entero, mejor
+  la pestaña "Origen del material".
 - Lo movido a mano sale en naranja y en el Excel pone "movido a mano".
 - "Renombrar..." cambia el nombre del fichero del bruto elegido.
 - "Orden automático" deshace todo lo del proyecto.

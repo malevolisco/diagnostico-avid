@@ -69,7 +69,7 @@ CONFIG_DEFECTO = {
     "horas_por_bruto": 2,
     "_horas_por_bruto": "Duración máxima de un bruto (proyecto_mes y dias). El clip que la pasaría no se añade: abre el bruto siguiente",
     "dias_reloj_mal_puesto": 365,
-    "_dias_reloj_mal_puesto": "Material de tarjeta (P2, SD...) cuya fecha de cámara es de más de estos días antes de que el clip entrara en Avid (o de después): el reloj de la cámara estaba mal puesto y el clip se ordena por la fecha del volcado, con aviso | 0 = se usa siempre la de la cámara (p. ej. cintas antiguas pasadas a tarjeta)",
+    "_dias_reloj_mal_puesto": "Material de tarjeta (P2, SD...) de un proyecto en el que NINGÚN clip de tarjeta se grabó a menos de estos días de entrar en Avid: el reloj de la cámara estaba mal puesto y las fechas se corrigen (todas lo mismo, así que los rodajes siguen separados), con aviso. Si alguno sí cuadra, las fechas de la cámara se quedan (material antiguo traído en otra tarjeta) | 0 = se usa siempre la de la cámara",
     "separar_si_pasan_dias": 180,
     "_separar_si_pasan_dias": "proyecto_mes: si entre dos clips seguidos del proyecto pasan más de estos días, el siguiente abre un bruto nuevo (material de otra época o de otro corresponsal en el mismo proyecto, p. ej. 2002 y 2019) | 0 = no se separa",
     "excluir_importados": True,
@@ -423,34 +423,61 @@ def es_de_tarjeta(c):
     return str(c.get("origen") or "").startswith("Cámara") or carpeta_tarjeta(c.get("fichero_origen")) is not None
 
 
-def reloj_mal_puesto(c, grabacion, entrada, dias=365):
-    """Por qué la fecha de la cámara de un clip de tarjeta no cuadra con su entrada en Avid, o None: grabado más de
-    `dias` antes de entrar (03/11/2026: tarjetas P2 que dicen 2005 en un proyecto de 2021) o después de entrar."""
-    if not dias or not grabacion or not entrada or not es_de_tarjeta(c):
-        return None
-    cuando = "la cámara dice %s y el clip entró en Avid el %s" % (grabacion.strftime("%d/%m/%Y"), entrada.strftime("%d/%m/%Y"))
-    if entrada - grabacion > dt.timedelta(days=dias):
-        return cuando
-    if grabacion - entrada > dt.timedelta(days=2):
-        return cuando + ", antes de grabarse"
-    return None
+def _fecha_dmy(f):
+    return f.strftime("%d/%m/%Y")
 
 
 def corregir_relojes(clips, mxf_por_ruta, cfg):
-    """Los clips de tarjeta con el reloj de la cámara mal puesto (reloj_mal_puesto) se ordenan por la fecha del volcado,
-    como los de fecha imposible; la de la cámara queda en fecha_camara y el motivo en aviso_fecha. Devuelve cuántos.
-    dias_reloj_mal_puesto = 0: no se mira."""
+    """Fechas de cámara de material de tarjeta (es_de_tarjeta) que no cuadran con su entrada en Avid (entrada_en_avid).
+    Hay dos casos que el bin no distingue clip a clip (03/11/2026, discos reales):
+    - Material antiguo traído en otra tarjeta: en el disco DV, rodajes de 2002 que entraron en Avid en 2019 junto con
+      los de 2019. La fecha de la cámara es buena y tiene que separar los rodajes.
+    - Reloj de la cámara mal puesto: tarjetas P2 que dicen 2004-2005 en un proyecto de hacia 2020. Ningún clip de tarjeta
+      del proyecto cuadra con su entrada.
+    Por eso se mira cada proyecto entero: si al menos un clip de tarjeta se grabó a menos de dias_reloj_mal_puesto de su
+    entrada, los relojes son buenos y las fechas se quedan (las que se alejan llevan aviso). Si ninguno, el reloj estaba
+    mal puesto: a todas se les suma el menor retraso del proyecto (lo más pronto que pudo entrar lo que se grabó), así
+    que cada clip queda antes de su entrada y la distancia entre rodajes se mantiene. La de la cámara queda en
+    fecha_camara. Una grabación de después de entrar en Avid es imposible: ese clip va por el volcado.
+    Devuelve cuántos clips cambian de fecha. dias_reloj_mal_puesto = 0: no se mira."""
     try:
         dias = float((cfg or {}).get("dias_reloj_mal_puesto", CONFIG_DEFECTO["dias_reloj_mal_puesto"]) or 0)
     except (TypeError, ValueError):
         dias = CONFIG_DEFECTO["dias_reloj_mal_puesto"]
-    n = 0
+    if not dias:
+        return 0
+    limite, n = dt.timedelta(days=dias), 0
+    por_proyecto = defaultdict(list)
     for c in clips:
-        motivo = reloj_mal_puesto(c, fecha_grabacion(c), entrada_en_avid(c, mxf_por_ruta), dias) if c.get("fecha_grabacion") else None
-        if motivo:
+        g = fecha_grabacion(c)
+        if not g or c.get("fecha_camara") or not es_de_tarjeta(c):  # fecha_camara: ya corregido
+            continue
+        e = entrada_en_avid(c, mxf_por_ruta)
+        if not e:
+            continue
+        if g - e > dt.timedelta(days=2):
             c["fecha_camara"] = c.pop("fecha_grabacion")
             c.pop("fecha_grabacion_fuente", None)
-            c["aviso_fecha"] = "reloj de la cámara mal puesto (%s): se ordena por la fecha del volcado" % motivo
+            c["aviso_fecha"] = ("la cámara dice %s, después de que el clip entrara en Avid (%s): reloj mal puesto; se ordena "
+                                "por la fecha del volcado" % (_fecha_dmy(g), _fecha_dmy(e)))
+            n += 1
+            continue
+        por_proyecto[(sorted(c.get("proyectos") or []) or [""])[0]].append((c, g, e))
+    for xs in por_proyecto.values():
+        retraso = min(e - g for _, g, e in xs)
+        if retraso <= limite:
+            for c, g, e in xs:
+                if e - g > limite:
+                    c["aviso_fecha"] = ("la cámara dice %s y el clip entró en Avid el %s: material antiguo traído en otra "
+                                        "tarjeta, o un reloj mal puesto" % (_fecha_dmy(g), _fecha_dmy(e)))
+            continue
+        for c, g, e in xs:
+            c["fecha_camara"] = c["fecha_grabacion"]
+            c["fecha_grabacion"] = (g + retraso).strftime("%Y-%m-%d %H:%M:%S")
+            c["fecha_grabacion_fuente"] = "cámara, corregida"
+            c["aviso_fecha"] = ("reloj de la cámara mal puesto: dice %s y nada de tarjeta del proyecto entró en Avid antes de "
+                                "%d años después; fecha aproximada (se mantiene la distancia entre rodajes)"
+                                % (_fecha_dmy(g), retraso.days // 365))
             n += 1
     return n
 

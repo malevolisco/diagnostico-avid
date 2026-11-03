@@ -2059,8 +2059,8 @@ class TrozosRepetidos(unittest.TestCase):
 
 class MaterialDeOtraEpoca(unittest.TestCase):
     """Disco real (30/10/2026): un proyecto con material que la cámara DV fecha en 2002 y en 2019, volcado todo en 2019. La
-    fecha de grabación sale de la cámara DV y un salto de más de separar_si_pasan_dias abre un bruto nuevo. Pero si es de
-    tarjeta y entró en Avid años después de esa fecha, el reloj de la cámara estaba mal puesto (03/11/2026)."""
+    fecha de grabación sale de la cámara DV y un salto de más de separar_si_pasan_dias abre un bruto nuevo. Si en un
+    proyecto nada de tarjeta cuadra con su entrada en Avid, el reloj de la cámara estaba mal puesto (03/11/2026)."""
 
     def clip(self, n, fecha, hora="10:00:00", dur=60):
         return {"clave": n, "nombre": n, "fichero_video": n + ".mxf", "ficheros": [n + ".mxf"], "duracion": dur, "proyectos": ["P"],
@@ -2078,30 +2078,48 @@ class MaterialDeOtraEpoca(unittest.TestCase):
         self.assertEqual((r["fuentes"], r["desfasados"]), ({da.FUENTE_DV: 3}, 0))
         self.assertNotIn("aviso_fecha", viejo)  # capturar una cinta años después es lo normal, no un reloj desfasado
 
-    def test_reloj_de_la_camara_mal_puesto_en_una_tarjeta(self):
-        """03/11/2026: tarjetas P2 que dicen 2005 (o 2002) en un proyecto cuyos clips entraron en Avid en 2019-2021: el reloj
-        de la cámara estaba mal puesto. Se ordenan por la fecha del volcado, con aviso; lo capturado de una cinta no."""
+    def caso_reloj(self, *clips):
+        """Clips de tarjeta (nombre, fecha de cámara, entrada en Avid) del proyecto P; la entrada, como fecha del MXF."""
+        cs, mxf = [], {}
+        for n, fecha, entrada in clips:
+            c = self.clip(n, fecha)
+            c["fecha_grabacion"] = fecha + " 10:00:00"
+            cs.append(c)
+            mxf[n + ".mxf"] = {"ruta": n + ".mxf", "modificado": entrada + " 12:00:00"}
+        return cs, mxf
+
+    def test_reloj_de_la_camara_mal_puesto_en_todo_el_proyecto(self):
+        """03/11/2026: tarjetas P2 que dicen 2004-2005 en un proyecto de hacia 2020, y ningún clip de tarjeta del proyecto
+        cuadra con su entrada en Avid. Todos se corrigen lo mismo (el menor retraso), así que los rodajes siguen separados."""
         D = eb.dt.datetime
-        tarjeta, cinta = self.clip("A", "2005-04-30"), dict(self.clip("B", "2005-04-30"), origen="Sin determinar")
-        bien, antes = self.clip("C", "2021-03-01"), self.clip("E", "2021-03-20")
-        en_bin = dict(self.clip("F", "2005-04-30"), en_avid="2021-03-04 09:00:00")  # sin MXF con fecha: la del bin
-        cs = [tarjeta, cinta, bien, antes, en_bin]
-        for c in cs:
-            c["fecha_grabacion"] = c["dv"]["inicio"]["fecha"] + " 10:00:00"
-        mxf = {n + ".mxf": {"ruta": n + ".mxf", "modificado": "2021-03-05 12:00:00"} for n in "ABCE"}
+        cs, mxf = self.caso_reloj(("A", "2004-12-29", "2021-03-05"), ("B", "2005-04-30", "2021-03-05"), ("C", "2005-07-10", "2021-03-06"))
         self.assertEqual(eb.corregir_relojes(cs, mxf, eb.CONFIG_DEFECTO), 3)
-        self.assertEqual(eb.fecha_clip(tarjeta, mxf), D(2021, 3, 5, 12))  # la del volcado
-        self.assertEqual(tarjeta["fecha_camara"], "2005-04-30 10:00:00")
-        self.assertIn("la cámara dice 30/04/2005 y el clip entró en Avid el 05/03/2021", tarjeta["aviso_fecha"])
-        self.assertEqual(eb.fecha_clip(cinta, mxf), D(2005, 4, 30, 10))  # una cinta se captura cuando sea
-        self.assertEqual(eb.fecha_clip(bien, mxf), D(2021, 3, 1, 10))  # unos días antes del volcado: normal
-        self.assertIn("antes de grabarse", antes["aviso_fecha"])  # grabado después de entrar en Avid: imposible
-        self.assertIn("entró en Avid el 04/03/2021", en_bin["aviso_fecha"])
-        otro = self.clip("G", "2005-04-30", dur=30)
-        otro["fecha_grabacion"] = "2005-04-30 10:00:00"
-        self.assertEqual(eb.corregir_relojes([otro], mxf | {"G.mxf": {"ruta": "G.mxf", "modificado": "2021-03-05 12:00:00"}},
-                                             dict(eb.CONFIG_DEFECTO, dias_reloj_mal_puesto=0)), 0)  # 0: se usa la de la cámara
+        retraso = D(2021, 3, 6, 12) - D(2005, 7, 10, 10)  # el de C, el menor
+        self.assertEqual([eb.fecha_clip(c, mxf) for c in cs], [D(y, m, d, 10) + retraso for y, m, d in ((2004, 12, 29), (2005, 4, 30), (2005, 7, 10))])
+        self.assertTrue(all(eb.fecha_clip(c, mxf) <= D(2021, 3, 5, 12) for c in cs[:2]))  # nada después de entrar en Avid
+        self.assertEqual(cs[1]["fecha_camara"], "2005-04-30 10:00:00")
+        self.assertIn("reloj de la cámara mal puesto: dice 30/04/2005", cs[1]["aviso_fecha"])
         self.assertEqual(eb.corregir_relojes(cs, mxf, eb.CONFIG_DEFECTO), 0)  # dos veces: nada más que hacer
+        cs, mxf = self.caso_reloj(("A", "2005-04-30", "2021-03-05"))
+        self.assertEqual(eb.corregir_relojes(cs, mxf, dict(eb.CONFIG_DEFECTO, dias_reloj_mal_puesto=0)), 0)  # 0: la de la cámara
+
+    def test_material_antiguo_traido_en_otra_tarjeta(self):
+        """03/11/2026, disco DV: rodajes de 2002 que entraron en Avid en 2019 a la vez que los de 2019 (el reportero los trajo
+        en otra tarjeta). Como lo de 2019 cuadra con su entrada, los relojes son buenos: las fechas se quedan y separan los
+        rodajes; lo de 2002 lleva aviso. Lo capturado de cinta no cuenta, y lo grabado después de entrar va por el volcado."""
+        D = eb.dt.datetime
+        cs, mxf = self.caso_reloj(("A", "2002-11-13", "2019-04-17"), ("B", "2019-04-15", "2019-04-17"), ("C", "2019-04-20", "2019-04-17"))
+        cinta = dict(self.clip("T", "2002-11-13"), origen="Sin determinar", fecha_grabacion="2002-11-13 10:00:00")
+        mxf["T.mxf"] = {"ruta": "T.mxf", "modificado": "2019-04-17 12:00:00"}
+        en_bin = dict(self.clip("F", "2002-11-14"), fecha_grabacion="2002-11-14 10:00:00", en_avid="2019-04-16 09:00:00")  # sin MXF
+        self.assertEqual(eb.corregir_relojes(cs + [cinta, en_bin], mxf, eb.CONFIG_DEFECTO), 1)  # solo C
+        self.assertEqual([eb.fecha_clip(c, mxf) for c in cs[:2]], [D(2002, 11, 13, 10), D(2019, 4, 15, 10)])
+        self.assertIn("material antiguo traído en otra tarjeta", cs[0]["aviso_fecha"])
+        self.assertIn("entró en Avid el 16/04/2019", en_bin["aviso_fecha"])  # la de creación del clip en el bin
+        self.assertNotIn("aviso_fecha", cs[1])
+        self.assertEqual(eb.fecha_clip(cs[2], mxf), D(2019, 4, 17, 12))  # grabado después de entrar: por el volcado
+        self.assertIn("después de que el clip entrara en Avid", cs[2]["aviso_fecha"])
+        self.assertEqual((eb.fecha_clip(cinta, mxf), cinta.get("aviso_fecha")), (D(2002, 11, 13, 10), None))  # una cinta, cuando sea
 
     def test_un_salto_de_anos_abre_otro_bruto(self):
         cs = [dict(self.clip(n, f), fecha_grabacion=f + " " + h) for n, f, h in

@@ -2103,6 +2103,25 @@ class MaterialDeOtraEpoca(unittest.TestCase):
         cs, mxf = self.caso_reloj(("A", "2005-04-30", "2021-03-05"))
         self.assertEqual(eb.corregir_relojes(cs, mxf, dict(eb.CONFIG_DEFECTO, dias_reloj_mal_puesto=0)), 0)  # 0: la de la cámara
 
+    def test_la_misma_camara_se_atrasa_lo_mismo_en_todo_el_disco(self):
+        """03/11/2026, disco real: la cámara se atrasa 5931-5932 días en casi todos los proyectos; un proyecto de 2 clips que
+        se volcaron dos meses después daba 5997 y salía en octubre en vez de agosto. Ahora usa el atraso del disco; uno
+        que se aleja más de MISMA_CAMARA_DIAS es otra cámara y usa el suyo."""
+        D = eb.dt.datetime
+        cs, mxf = self.caso_reloj(("A", "2005-02-27", "2021-05-26"), ("B", "2005-03-01", "2021-05-28"))
+        retraso = D(2021, 5, 26, 12) - D(2005, 2, 27, 10)
+        def de(proyecto, n, fecha, entrada):
+            c, m = self.caso_reloj((n, fecha, entrada))
+            c[0]["proyectos"] = [proyecto]
+            cs.append(c[0]); mxf.update(m)
+            return c[0]
+        poco = de("Q", "Q1", "2005-05-12", "2021-10-12")  # 66 días más de retraso: la misma cámara, volcado tarde
+        otra = de("R", "R1", "2010-01-10", "2019-03-01")  # años de diferencia: otra cámara
+        self.assertEqual(eb.corregir_relojes(cs, mxf, eb.CONFIG_DEFECTO), 4)
+        self.assertEqual(eb.fecha_clip(poco, mxf), D(2005, 5, 12, 10) + retraso)  # agosto de 2021, no octubre
+        self.assertEqual(eb.fecha_clip(poco, mxf).month, 8)
+        self.assertEqual(eb.fecha_clip(otra, mxf), D(2019, 3, 1, 12))  # el suyo: justo antes de entrar
+
     def test_material_antiguo_traido_en_otra_tarjeta(self):
         """03/11/2026, disco DV: rodajes de 2002 que entraron en Avid en 2019 a la vez que los de 2019 (el reportero los trajo
         en otra tarjeta). Como lo de 2019 cuadra con su entrada, los relojes son buenos: las fechas se quedan y separan los

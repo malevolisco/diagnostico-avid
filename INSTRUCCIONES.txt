@@ -377,12 +377,16 @@ clips en orden de fecha y de 2 horas como mucho:
    puesto), se usa igual, pero con aviso. En vídeo DV (cintas) la fecha
    es la que grabó la cámara en cada fotograma; que la cinta se capturara
    años después es normal y no se avisa.
-   Pero el material de tarjeta (P2, SD...) se vuelca al poco de grabarlo:
-   si la cámara dice que se grabó más de un año antes de que el clip
-   entrara en Avid (o después), el reloj estaba mal puesto. Ese clip va
-   por la fecha del volcado, y la ficha del montaje lo avisa en naranja
-   con la fecha que decía la cámara. Si de verdad es material antiguo
-   pasado a tarjeta, pon "dias_reloj_mal_puesto": 0 en config_brutos.json.
+   En el material de tarjeta (P2, SD...) se compara la fecha de la cámara
+   con la de entrada del clip en Avid, proyecto a proyecto:
+   - Si algo de tarjeta del proyecto cuadra con su entrada, las fechas de
+     la cámara se quedan: lo que es de años antes es material antiguo
+     traído en otra tarjeta y va en su propio bruto, con aviso.
+   - Si nada cuadra, el reloj de la cámara estaba mal puesto: todas las
+     fechas se adelantan lo mismo (los rodajes siguen separados) y la
+     ficha del montaje lo avisa en naranja con la fecha que decía la
+     cámara. Para no corregir nunca: "dias_reloj_mal_puesto": 0 en
+     config_brutos.json.
 
 Todo seguido, sin pasar por Montaje ni Exportar: en la página Disco, abre
 "Opciones avanzadas" y marca "Analizar y exportar seguido" antes de pulsar

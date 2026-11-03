@@ -223,6 +223,9 @@ Usa el último análisis del disco: no lo repite.
   timecode que grabó la cámara y los mismos fotogramas; en cualquier otro
   formato, por el timecode y el mismo sonido (tiene que ser sonido que
   cambia, como una voz: un tono o un silencio no sirven para saberlo).
+  Además, aunque los datos de la cinta digan otra cosa, busca el sonido
+  de cada clip dentro de los clips largos (de un minuto o más) de su
+  proyecto: si está igual, muestra a muestra, es el mismo material.
 - Lo movido a mano sale en naranja y en el Excel pone "movido a mano".
 - "Renombrar..." cambia el nombre del fichero del bruto elegido.
 - "Orden automático" deshace todo lo del proyecto.

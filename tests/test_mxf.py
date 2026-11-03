@@ -358,6 +358,47 @@ if __name__ == "__main__":
 
 
 @unittest.skipUnless(FFMPEG and FFPROBE, "sin ffmpeg/ffprobe")
+class RepetidosPorElContenido(unittest.TestCase):
+    """El sonido de un trozo, en cualquier punto de un clip largo de su proyecto, aunque su timecode diga otra cosa
+    (3/11/2026: 00059S.new.07 y .04 de un disco DV real)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        run = lambda *a: subprocess.run([FFMPEG, "-v", "error", "-y", *a], check=True)
+        run("-f", "lavfi", "-i", "anoisesrc=d=70:c=pink:r=48000:a=0.3,volume='if(lt(mod(t,1),0.5),1,0.2)':eval=frame", "-ac", "1",
+            "-c:a", "pcm_s16le", str(self.tmp / "largo.wav"))
+        run("-ss", "41.5", "-t", "8", "-i", str(self.tmp / "largo.wav"), "-c:a", "copy", str(self.tmp / "trozo.wav"))
+        run("-f", "lavfi", "-i", "anoisesrc=d=8:c=white:r=48000:seed=7,volume='if(lt(mod(t,1),0.5),1,0.2)':eval=frame", "-ac", "1",
+            "-c:a", "pcm_s16le", str(self.tmp / "otro.wav"))
+        run("-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", "8", "-c:a", "pcm_s16le", str(self.tmp / "silencio.wav"))
+
+    def clip(self, nombre, fichero, dur, origen="Material propio"):
+        return {"clave": nombre, "nombre": nombre, "fichero_video": fichero, "ficheros": [fichero], "duracion": dur, "num_audio": 1,
+                "proyectos": ["P"], "origen": origen, "timecode": "17:50:36:29"}
+
+    def test_trozo_dentro_por_el_sonido(self):
+        import diagnostico_avid as da
+        import lecturas
+        mxf = [{"ruta": f, "pistas": [{"tipo": "audio", "canales": 1}]} for f in ("largo.wav", "trozo.wav", "otro.wav", "silencio.wav")]
+        clips = [self.clip("00059S.new.01", "largo.wav", 70.0), self.clip("00059S.new.07", "trozo.wav", 8.0),
+                 self.clip("OTRA TOMA", "otro.wav", 8.0), self.clip("SILENCIO", "silencio.wav", 8.0),
+                 self.clip("IMPORTADO", "trozo.wav", 8.0, origen="Fichero importado")]  # otro origen: no se compara
+        lecturas.empezar()
+        marcados = da.repetidos_por_contenido(clips, self.tmp, FFMPEG, mxf)
+        self.assertEqual([c["nombre"] for c in marcados], ["00059S.new.07"])
+        d = clips[1]["contenido_en"]
+        self.assertEqual((d["nombre"], d["desde"], d["hasta"], d["mismo_proyecto"]), ("00059S.new.01", 41.5, 49.5, True))
+        # lo leído queda en lecturas.json y se repite igual sin el disco
+        datos = dict(lecturas.ACTIVAS.datos)
+        self.assertTrue(any('"contenido"' in k for k in datos))
+        otra = [self.clip(c["nombre"], c["fichero_video"], c["duracion"], c["origen"]) for c in clips]
+        with lecturas.repetir(datos) as leidas:
+            da.repetidos_por_contenido(otra, self.tmp / "no_existe", FFMPEG, mxf)
+        self.assertEqual(([c["nombre"] for c in otra if c.get("contenido_en")], leidas.no_grabadas), (["00059S.new.07"], 0))
+
+
+@unittest.skipUnless(FFMPEG and FFPROBE, "sin ffmpeg/ffprobe")
 class AudioPorCanales(unittest.TestCase):
     """Cada canal del clip es una pista del bruto (un estéreo en un solo fichero da dos; un 5.1, seis) y todo el audio
     dura lo mismo que el vídeo, para que al unir los clips el sonido no se desplace."""

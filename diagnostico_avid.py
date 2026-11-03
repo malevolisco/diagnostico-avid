@@ -1487,6 +1487,8 @@ def marcar_duplicados(clips, origen, ffmpeg=None, mxf=()):
     if ffmpeg:
         marcados += repetidos_por_sonido(clips, origen, ffmpeg, mxf)
     marcados += repetidos_por_nombre(clips, origen)
+    if ffmpeg:
+        marcados += repetidos_por_contenido(clips, origen, ffmpeg, mxf)
     return marcados
 
 
@@ -1534,6 +1536,104 @@ def repetidos_por_nombre(clips, origen):
 
 
 VENTANA_SONIDO = 3.0  # segundos del principio y del final del trozo que se comparan
+LARGO_MIN = 60.0  # s: el sonido de cada trozo se busca entero dentro de los clips de su proyecto de al menos 1 minuto
+SONIDO_LARGOS_MAX = 7200.0  # s de sonido de esos largos por proyecto, como mucho (lo que se lee del disco)
+
+
+def repetidos_por_contenido(clips, origen, ffmpeg, mxf):
+    """Lo que queda, por el contenido y no por los datos (3/11/2026: 00059S.new.07 y .04, de la misma grabación que un
+    00059S.new.01 de casi 10 minutos, seguían en el bruto porque su timecode y su hora de grabación decían que eran de
+    después de su final; el material sí estaba dentro). El sonido de cada clip (los 3 primeros y los 3 últimos segundos,
+    muestra a muestra) se busca en cualquier punto del sonido entero de los clips largos de su proyecto, con el mismo
+    origen (material de cámara con material de cámara, etc.). Exigir las mismas muestras, y que el sonido varíe
+    (exportar_brutos.sonido_con_forma), evita confundirlo con otra toma o con un silencio. Lo que se encuentra queda en
+    lecturas.json ("contenido": solo la posición, nunca el sonido)."""
+    import lecturas
+    mxf_por_ruta = {m["ruta"]: m for m in mxf}
+    por_proyecto = defaultdict(list)
+    for c in exportar_brutos.con_video(clips):
+        if c.get("render") or not c.get("duracion") or not c.get("num_audio"):
+            continue
+        for p in c.get("proyectos") or []:
+            por_proyecto[p].append(c)
+    leido, sin_forma, marcados, pares, t0 = {}, set(), [], 0, time.monotonic()
+
+    def sonido(c, inicio, dur):
+        canales = exportar_brutos.canales_clip(c, mxf_por_ruta)
+        if not canales:
+            return b""
+        return exportar_brutos.muestras_sonido(ffmpeg, ruta_larga(Path(origen) / canales[0]["ruta"]), canales[0], inicio, dur)
+
+    def huella(corto):
+        """(principio, final, muestras por segundo) del sonido del corto, o None si no sirve de huella. Se lee una vez."""
+        k = corto.get("clave")
+        if k not in leido:
+            dur = corto["duracion"]
+            v = min(VENTANA_SONIDO, dur)
+            principio = sonido(corto, 0, v)
+            if not exportar_brutos.sonido_con_forma(principio):
+                leido[k] = None
+            else:
+                tasa = round(len(principio) / 2 / v / 100) * 100 or 48000
+                leido[k] = (principio, sonido(corto, dur - v, v) if dur > v + 1 else b"", tasa)
+        return leido[k]
+
+    def buscar(corto, entero):
+        h = huella(corto)
+        if h is None:
+            return "sin_forma"
+        principio, final, tasa = h
+        pos = exportar_brutos.buscar_muestras(principio, entero())
+        if pos is None:
+            return None
+        desde = pos / tasa
+        if final:  # el final, en su sitio
+            v = len(final) / 2 / tasa
+            fin = int(round((desde + corto["duracion"] - v) * tasa)) * 2
+            ventana = entero()[max(0, fin - int(0.05 * tasa) * 2): fin + len(final) + int(0.05 * tasa) * 2]
+            if exportar_brutos.buscar_muestras(final, ventana) is None:
+                return None
+        return round(desde, 3)
+
+    for p, cs in sorted(por_proyecto.items()):
+        largos, total = [], 0.0
+        for c in sorted((c for c in cs if c["duracion"] >= LARGO_MIN), key=lambda c: -c["duracion"]):
+            if total + c["duracion"] > SONIDO_LARGOS_MAX:
+                break
+            largos.append(c)
+            total += c["duracion"]
+        for largo in largos:
+            if largo.get("contenido_en"):
+                continue
+            cortos = [c for c in cs if c is not largo and not c.get("contenido_en") and c["duracion"] < largo["duracion"]
+                      and (c.get("origen") or "") == (largo.get("origen") or "")]
+            entero = {}
+
+            def todo(largo=largo, entero=entero):  # el sonido entero del largo, solo si hace falta (y una vez)
+                if "m" not in entero:
+                    entero["m"] = sonido(largo, 0, largo["duracion"] + 1)
+                return entero["m"]
+            for corto in cortos:
+                if corto.get("contenido_en") or corto.get("clave") in sin_forma:
+                    continue
+                pares += 1
+                try:
+                    desde = lecturas.ACTIVAS.leer("contenido", [corto.get("clave"), largo.get("clave")],
+                                                  lambda: buscar(corto, todo))
+                except OSError as e:
+                    LOG.debug("Trozos repetidos por el contenido: %s en %s (%s)", corto["nombre"], largo["nombre"], e)
+                    continue
+                if desde == "sin_forma":
+                    sin_forma.add(corto.get("clave"))  # no sirve de huella con ningún largo
+                if desde in (None, "sin_forma"):
+                    continue
+                corto["contenido_en"] = {"clave": largo.get("clave"), "nombre": largo["nombre"], "desde": round(desde, 1),
+                                         "hasta": round(desde + corto["duracion"], 1), "por": "sonido", "mismo_proyecto": True}
+                marcados.append(corto)
+                LOG.info("Trozo repetido (su sonido está en el largo): %s es %s", corto["nombre"], exportar_brutos.texto_duplicado(corto))
+    LOG.info("Trozos repetidos por el contenido: %d comparaciones, %d encontrados (%.0f s)", pares, len(marcados), time.monotonic() - t0)
+    return marcados
+
 
 
 def repetidos_por_sonido(clips, origen, ffmpeg, mxf):

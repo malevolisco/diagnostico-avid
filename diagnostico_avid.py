@@ -228,10 +228,14 @@ PATRONES_ORIGEN_DEFECTO = {
         {"origen": "Agencia Reuters", "campo": "fichero_origen",
          "regex": r"(?P<fecha>\d{4}-\d{2}-\d{2})T(?P<hora>\d{6})Z_\d+_(?P<id>[A-Z0-9]+)_RTR[A-Z0-9]*_[A-Z]_(?P<num>\d+)-(?P<slug>[^/\\]+?)\.(?:MP4|MXF|MOV|M4V)$",
          "grupos": ["id", "slug", "fecha"]},
-        {"origen": "Cámara (tarjeta P2)", "campo": "nombre", "regex": r"^\d{4}[A-Z0-9]{2}(\.new)?(\.\d+)?$", "grupos": []},
+        {"origen": "Cámara (tarjeta P2)", "campo": "nombre", "regex": r"^\d{4}[A-Z0-9]{2}(\.(new|copy|sub)(\.\d+)?)*(\.\d+)?$", "grupos": []},
         {"origen": "Fichero importado", "campo": "fichero_origen", "regex": r"\.(?:MP4|MOV|MXF|M4V|AVI|MTS|M2T)$", "grupos": []}
     ]
 }
+
+
+# Reglas por defecto de versiones anteriores que se guardaron en config_origen.json: se leen como la de ahora.
+REGEX_P2_ANTIGUAS = {r"^\d{4}[A-Z0-9]{2}(\.new)?(\.\d+)?$": r"^\d{4}[A-Z0-9]{2}(\.(new|copy|sub)(\.\d+)?)*(\.\d+)?$"}
 
 
 def cargar_patrones_origen():
@@ -250,7 +254,8 @@ def cargar_patrones_origen():
     reglas = []
     for r in datos.get("reglas", []):
         try:
-            reglas.append((r["origen"], r.get("campo", "fichero_origen"), re.compile(r["regex"], re.IGNORECASE), r.get("grupos", [])))
+            regex = REGEX_P2_ANTIGUAS.get(r["regex"], r["regex"])  # la de antes, sin .Copy.01: se pone al día
+            reglas.append((r["origen"], r.get("campo", "fichero_origen"), re.compile(regex, re.IGNORECASE), r.get("grupos", [])))
         except Exception as e:
             LOG.error("Regla de origen inválida %s: %s", r, e)
     return reglas

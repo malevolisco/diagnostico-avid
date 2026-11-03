@@ -420,7 +420,9 @@ def entrada_en_avid(c, mxf_por_ruta):
 def es_de_tarjeta(c):
     """Material de cámara que se copia como fichero (tarjeta P2, SD...): se vuelca al poco de grabarlo. Lo capturado
     de una cinta no, que se puede capturar años después."""
-    return str(c.get("origen") or "").startswith("Cámara") or carpeta_tarjeta(c.get("fichero_origen")) is not None
+    return (str(c.get("origen") or "").startswith("Cámara") or carpeta_tarjeta(c.get("fichero_origen")) is not None
+            or (not c.get("fichero_origen") and any(re.match(NOMBRE_P2, str(n or "").strip(), re.IGNORECASE)
+                                                    for n in [c.get("nombre"), *(c.get("nombres_bin") or ())])))
 
 
 def _fecha_dmy(f):
@@ -615,7 +617,10 @@ CLASES_ORIGEN = {"propio": "Material propio", "agencia": "Agencia", "importado":
 MOVIL_REGEX = r"^(IMG_\d{4}|IMG_\d{8}_\d{6}|VID_\d{4,}|PXL_\d{8}|VID-\d{8}-WA\d+|.*-WA\d{4})(\D|$)"
 # Nombre de clip de una tarjeta P2 de Panasonic (0001AB, 0001AB.new.01), como la regla de config_origen.json; aquí
 # también para los clips sin bin, a los que no se aplica esa regla
-NOMBRE_P2 = r"^\d{4}[A-Z0-9]{2}(\.new)?(\.\d+)?$"
+# Lo que Avid añade al nombre del clip: .new.01 al consolidar o hacer un subclip, .Copy.01 al duplicarlo en el bin
+# (03/11/2026: la entrevista de un proyecto real era 0005ZC.new.01.Copy.01 y quedaba como dudosa), .sub.01.
+SUFIJOS_AVID = r"(?:\.(?:new|copy|sub)(?:\.\d+)?)*"
+NOMBRE_P2 = r"^\d{4}[A-Z0-9]{2}" + SUFIJOS_AVID + r"(\.\d+)?$"
 # Carpetas de las que lo importado viene de fuera: descargas y mensajería
 CARPETAS_DE_FUERA = r"(^|[\\/])(downloads|descargas|whatsapp[^\\/]*|telegram[^\\/]*|wechat[^\\/]*)([\\/]|$)"
 # Marcas de móvil en los metadatos (make): el resto de marcas es de cámara
@@ -1086,7 +1091,7 @@ def buscar_muestras(trozo, donde):
     return None if i == -1 else i // 2
 
 
-ID_P2 = re.compile(r"^(\d{4}[A-Z0-9]{2})(\.new(\.\d+)?)?$", re.IGNORECASE)
+ID_P2 = re.compile(r"^(\d{4}[A-Z0-9]{2})" + SUFIJOS_AVID + r"$", re.IGNORECASE)
 
 
 def mismo_clip_de_camara(clips):

@@ -2121,6 +2121,36 @@ class MaterialDeOtraEpoca(unittest.TestCase):
         self.assertIn("después de que el clip entrara en Avid", cs[2]["aviso_fecha"])
         self.assertEqual((eb.fecha_clip(cinta, mxf), cinta.get("aviso_fecha")), (D(2002, 11, 13, 10), None))  # una cinta, cuando sea
 
+    def test_clip_p2_duplicado_en_el_bin(self):
+        """03/11/2026, proyecto real: la entrevista era 0005ZC.new.01.Copy.01 (Avid añade .Copy.01 al duplicar un clip en el
+        bin) y, sin regla de origen que la reconociera, se quedaba fuera del bruto como dudosa. Es de cámara P2: entra, su
+        fecha de cámara se corrige como las demás de tarjeta y cuenta como el mismo clip de cámara que 0005ZC."""
+        cfg = dict(json.loads(json.dumps(eb.CONFIG_DEFECTO)), solo_material_de_camara=True)
+        c = dict(self.clip("0005ZC.new.01.Copy.01", "2005-07-07"), origen="Sin determinar")
+        self.assertEqual(eb.clasificar(c, cfg)[:2], ("propio", "nombre de clip P2"))
+        self.assertTrue(eb.es_de_tarjeta(c))
+        self.assertEqual(eb.ID_P2.match(c["nombre"]).group(1), "0005ZC")
+        for n in ("0008AY", "0008AY.new.01", "00059S.new.04.sub.02"):
+            self.assertTrue(eb.ID_P2.match(n), n)
+        for n in ("ENTREVISTA.Copy.01", "0005ZC.mp4", "Video_1632734631.mp4"):
+            self.assertIsNone(eb.ID_P2.match(n), n)
+        importado = dict(c, fichero_origen="C:/Users/admin/Videos/0005ZC.new.01.Copy.01.mp4")
+        self.assertFalse(eb.es_de_tarjeta(importado))  # un .mp4 importado que se llama así no es de tarjeta
+
+    @unittest.skipIf(da is None, "sin pyavb")
+    def test_config_origen_de_antes_reconoce_las_copias(self):
+        """Un config_origen.json guardado por una versión anterior tiene la regla P2 sin .Copy.01: se lee como la de ahora."""
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            viejo = {"reglas": [{"origen": "Cámara (tarjeta P2)", "campo": "nombre", "regex": r"^\d{4}[A-Z0-9]{2}(\.new)?(\.\d+)?$"}]}
+            (Path(tmp) / "config_origen.json").write_text(json.dumps(viejo), encoding="utf-8")
+            with mock.patch.object(da, "carpeta_base", lambda: Path(tmp)):
+                reglas = da.cargar_patrones_origen()
+        self.assertEqual(da.clasificar_origen(reglas, "0005ZC.new.01.Copy.01", None)[0], "Cámara (tarjeta P2)")
+        self.assertEqual(da.clasificar_origen(reglas, "0008AY.new.01", None)[0], "Cámara (tarjeta P2)")
+
     def test_un_salto_de_anos_abre_otro_bruto(self):
         cs = [dict(self.clip(n, f), fecha_grabacion=f + " " + h) for n, f, h in
               (("A", "2002-11-13", "10:00:00"), ("B", "2002-11-14", "09:00:00"), ("C", "2019-04-15", "10:00:00"), ("D", "2019-04-15", "11:00:00"))]

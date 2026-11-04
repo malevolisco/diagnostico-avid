@@ -670,6 +670,28 @@ class VideoDeCualquierOrigen(AudioPorCanales):
         self.assertIn("fichero incompleto", eb.aviso_incompleto(real, 4.0))
         self.assertIsNone(eb.aviso_incompleto(3.96, 4.0))
 
+    def test_clip_que_falla_entra_lo_que_se_ha_leido(self):
+        """04/11/2026: clips enteros fuera del bruto porque ffmpeg acababa con error (un disco con sectores dañados, muchos
+        fotogramas que no se decodifican). Si falla también al repetirlo solo, entra lo que se haya escrito."""
+        from unittest import mock
+        self.ff("-f", "lavfi", "-i", "testsrc2=s=720x480:r=30000/1001:d=3", "-c:v", "dvvideo", "-pix_fmt", "yuv411p", "-f", "mxf_opatom",
+                str(self.tmp / "v.mxf"))
+        mxf = {"v.mxf": self.perfil("v.mxf")}
+        clip = {"clave": "K", "nombre": "C", "ficheros": ["v.mxf"], "fichero_video": "v.mxf", "duracion": mxf["v.mxf"]["duracion"],
+                "bytes": 1, "num_audio": 0}
+        real = eb.ejecutar_ffmpeg
+
+        def con_error(cmd, timeout, cwd=None):
+            ok, err = real(cmd, timeout, cwd)
+            return (False, "v.mxf: Input/output error") if ok and str(cmd[-1]).endswith(".mxf") and "/seg" in str(cmd[-1]).replace("\\", "/") else (ok, err)
+        (self.tmp / "brutos").mkdir()
+        with mock.patch.object(eb, "ejecutar_ffmpeg", con_error), mock.patch.object(eb, "buscar_bmx", lambda ffprobe: None):
+            res = eb.exportar_proyecto("P", [clip], mxf, self.tmp, self.tmp / "brutos", FFMPEG, FFPROBE, lambda m: None, self.cfg)
+        self.assertEqual((res["incluidos"], res["fallidos"]), (1, 0), res)
+        self.assertTrue(res["estado"].startswith("OK"), res)
+        self.assertIn("-max_error_rate", " ".join(map(str, eb.hacer_segmento(clip, 9, {"modo": "convertir", "pistas_audio": 0, "destino": {"xdcam": True},
+                                                                                 "fps": 25.0}, self.tmp, mxf, self.tmp, FFMPEG, self.cfg)[2])))
+
     def test_sd_anamorfico_16_9_ocupa_todo(self):
         self.ff("-f", "lavfi", "-i", "testsrc2=s=720x576:r=25:d=2", "-vf", "setsar=64/45", "-c:v", "mpeg2video", "-flags", "+ildct+ilme",
                 "-top", "1", str(self.tmp / "sd169.mxf"))

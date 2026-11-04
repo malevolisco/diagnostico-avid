@@ -1908,6 +1908,16 @@ def fuentes_con_sonido(fuentes, picos, n_canales):
 # Segmentos y unión
 # ---------------------------------------------------------------------------
 
+def parte_aprovechable(rutas, ffprobe, minimo=1.0):
+    """De los segmentos que un ffmpeg fallido dejó escritos, el más largo que se pueda leer (al menos `minimo` s), o None."""
+    mejor, dur_mejor = None, minimo
+    for r in rutas:
+        d = duracion_ffprobe(ffprobe, r) if Path(r).exists() else None
+        if d and d >= dur_mejor and pistas_ffprobe(ffprobe, r):
+            mejor, dur_mejor = Path(r), d
+    return mejor
+
+
 def ultima_linea(err, n=120):
     """La última línea con texto de un error de ffmpeg, para el shotlist."""
     lineas = [x.strip() for x in str(err or "").splitlines() if x.strip()]
@@ -1978,7 +1988,9 @@ def hacer_segmento(clip, idx, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, nomb
     if avisos:
         info["aviso_audio"] = "; ".join(avisos)
 
-    cmd = [ffmpeg, "-v", "error", "-y", "-i", str(video)]
+    # -max_error_rate 1: los fotogramas dañados del original se disimulan y el clip sigue; sin esto, ffmpeg 7 da error al
+    # final si muchos fotogramas no se decodifican, y el clip entero se quedaba fuera del bruto (04/11/2026)
+    cmd = [ffmpeg, "-v", "error", "-y", "-max_error_rate", "1", "-i", str(video)]
     entradas = {clip["fichero_video"]: 0}  # fichero -> número de entrada de ffmpeg
     for r in usadas:
         if audios[r - 1]["ruta"] not in entradas:
@@ -2292,6 +2304,12 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
                     fila.update(info2)
                 else:
                     err, cmd = err2 or err, cmd2
+                    if err != TIEMPO_AGOTADO:  # lo que se haya podido leer, mejor que nada (un disco con sectores dañados)
+                        seg = parte_aprovechable([tmp / ("seg2_%05d.mxf" % i), tmp / ("seg_%05d.mxf" % i)], ffprobe)
+                        if seg:
+                            fila["aviso_video"] = "; ".join(x for x in (fila.get("aviso_video"), "error al leer el original (%s): "
+                                                                        "entra lo que se ha podido leer" % ultima_linea(err, 80)) if x)
+                            LOG.warning("%s: %s entra a medias: %s", proyecto, c["nombre"], ultima_linea(err))
             if not seg:
                 comprobar_origen(origen)  # si es que se ha ido el disco, no se sigue haciendo un bruto con huecos
                 if err == TIEMPO_AGOTADO:

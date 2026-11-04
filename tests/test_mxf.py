@@ -670,6 +670,13 @@ class VideoDeCualquierOrigen(AudioPorCanales):
         self.assertIn("fichero incompleto", eb.aviso_incompleto(real, 4.0))
         self.assertIsNone(eb.aviso_incompleto(3.96, 4.0))
 
+    def test_ntsc_con_timecode_drop_frame(self):
+        """04/11/2026, disco real: DV NTSC con timecode drop frame (02:50:41;21). ffmpeg copiaba ese timecode al segmento a
+        25 fps y el MXF no lo admite: 258 de 263 clips de un bruto se quedaban fuera."""
+        self.ff("-f", "lavfi", "-i", "testsrc2=s=720x480:r=30000/1001:d=2", "-f", "lavfi", "-i", "sine=r=48000:d=2", "-map", "0:v",
+                "-c:v", "dvvideo", "-pix_fmt", "yuv411p", "-timecode", "02:50:41;21", "-f", "mxf_opatom", str(self.tmp / "df.mxf"))
+        self.convertir("df.mxf")
+
     def test_clip_que_falla_entra_lo_que_se_ha_leido(self):
         """04/11/2026: clips enteros fuera del bruto porque ffmpeg acababa con error (un disco con sectores dañados, muchos
         fotogramas que no se decodifican). Si falla también al repetirlo solo, entra lo que se haya escrito."""

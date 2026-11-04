@@ -203,6 +203,22 @@ class Reintento(unittest.TestCase):
 
 
 class Reanudar(unittest.TestCase):
+    def test_bruto_al_que_le_faltan_clips_se_rehace(self):
+        """04/11/2026: brutos de una versión anterior que se quedaron sin clips con estado "OK": al relanzar no se saltan."""
+        self.assertTrue(eb.exportado_entero({"estado": "OK", "fallidos": 0}))
+        self.assertFalse(eb.exportado_entero({"estado": "OK", "fallidos": 35}))
+        self.assertFalse(eb.exportado_entero({"estado": "INCOMPLETO: no han entrado 35 de 39 clips"}))
+        self.assertFalse(eb.exportado_entero(None))
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "B.mxf").write_bytes(b"12345")
+            (d / "B.xlsx").write_bytes(b"x")
+            previo = {"estado": "OK", "fichero": "B.mxf", "bytes": 5, "clips": 39, "shotlist": "B.xlsx", "fallidos": 35}
+            self.assertFalse(eb.ya_exportado(previo, 39, d))
+            self.assertTrue(eb.ya_exportado(dict(previo, fallidos=0), 39, d))
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
     def test_ya_exportado(self):
         d = Path(tempfile.mkdtemp())
         try:

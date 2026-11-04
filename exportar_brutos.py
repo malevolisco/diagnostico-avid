@@ -1908,7 +1908,23 @@ def fuentes_con_sonido(fuentes, picos, n_canales):
 # Segmentos y unión
 # ---------------------------------------------------------------------------
 
-def hacer_segmento(clip, idx, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, nombre=None, info=None):
+def parte_aprovechable(rutas, ffprobe, minimo=1.0):
+    """De los segmentos que un ffmpeg fallido dejó escritos, el más largo que se pueda leer (al menos `minimo` s), o None."""
+    mejor, dur_mejor = None, minimo
+    for r in rutas:
+        d = duracion_ffprobe(ffprobe, r) if Path(r).exists() else None
+        if d and d >= dur_mejor and pistas_ffprobe(ffprobe, r):
+            mejor, dur_mejor = Path(r), d
+    return mejor
+
+
+def ultima_linea(err, n=120):
+    """La última línea con texto de un error de ffmpeg, para el shotlist."""
+    lineas = [x.strip() for x in str(err or "").splitlines() if x.strip()]
+    return (lineas[-1] if lineas else "sin detalle")[:n]
+
+
+def hacer_segmento(clip, idx, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, nombre=None, info=None, margen_tiempo=1):
     """Convierte un clip (V + sus audios) en un MXF OP1a intermedio homogéneo, con las pistas de audio del bruto según
     enrutado_audio (las que el clip no tiene, en silencio) y los niveles pedidos. Cada pista del bruto es un canal del clip
     (canales_clip): un estéreo da dos pistas. Todo el audio dura lo mismo que el vídeo (el corto se rellena con silencio y
@@ -1972,7 +1988,9 @@ def hacer_segmento(clip, idx, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, nomb
     if avisos:
         info["aviso_audio"] = "; ".join(avisos)
 
-    cmd = [ffmpeg, "-v", "error", "-y", "-i", str(video)]
+    # -max_error_rate 1: los fotogramas dañados del original se disimulan y el clip sigue; sin esto, ffmpeg 7 da error al
+    # final si muchos fotogramas no se decodifican, y el clip entero se quedaba fuera del bruto (04/11/2026)
+    cmd = [ffmpeg, "-v", "error", "-y", "-max_error_rate", "1", "-i", str(video)]
     entradas = {clip["fichero_video"]: 0}  # fichero -> número de entrada de ffmpeg
     for r in usadas:
         if audios[r - 1]["ruta"] not in entradas:
@@ -2010,7 +2028,7 @@ def hacer_segmento(clip, idx, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, nomb
     dur = duracion_video(clip, mxf_por_ruta)
     cmd += ["-t", "%.3f" % dur] if dur else ["-shortest"]  # todo, también el audio largo, a la duración del vídeo
     cmd += ["-f", "mxf", str(salida)]
-    ok, err = ejecutar_ffmpeg(cmd, timeout_segmento(clip.get("duracion")))
+    ok, err = ejecutar_ffmpeg(cmd, timeout_segmento(clip.get("duracion")) * margen_tiempo)
     if not ok:
         LOG.error("Segmento fallido %s (%s): %s", clip["nombre"], plan["modo"], err)
         return None, err, cmd
@@ -2275,6 +2293,23 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
             seg, err, cmd = futuros[i].result() if i in futuros else hacer_segmento(c, i, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg,
                                                                                     None, infos.setdefault(i, {}))
             fila.update(infos.get(i, {}))
+            if not seg and not puede_reintentar:  # convirtiendo: otra vez, solo, antes de dejar un hueco en el bruto (04/11/2026)
+                comprobar_origen(origen)
+                LOG.warning("%s: el clip %s ha fallado (%s); se repite solo", proyecto, c["nombre"], (err or "")[-200:])
+                progreso("  %s: el clip %d/%d (%s) ha fallado; se repite solo" % (proyecto, i, len(cs), c["nombre"]))
+                info2 = {}
+                seg, err2, cmd2 = hacer_segmento(c, i, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, "seg2_%05d.mxf" % i, info2,
+                                                 margen_tiempo=3)
+                if seg:
+                    fila.update(info2)
+                else:
+                    err, cmd = err2 or err, cmd2
+                    if err != TIEMPO_AGOTADO:  # lo que se haya podido leer, mejor que nada (un disco con sectores dañados)
+                        seg = parte_aprovechable([tmp / ("seg2_%05d.mxf" % i), tmp / ("seg_%05d.mxf" % i)], ffprobe)
+                        if seg:
+                            fila["aviso_video"] = "; ".join(x for x in (fila.get("aviso_video"), "error al leer el original (%s): "
+                                                                        "entra lo que se ha podido leer" % ultima_linea(err, 80)) if x)
+                            LOG.warning("%s: %s entra a medias: %s", proyecto, c["nombre"], ultima_linea(err))
             if not seg:
                 comprobar_origen(origen)  # si es que se ha ido el disco, no se sigue haciendo un bruto con huecos
                 if err == TIEMPO_AGOTADO:
@@ -2287,6 +2322,7 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
                         if prueba:  # convirtiendo sí sale: el problema es el códec, no el fichero
                             return reintentar("segmento %s: %s" % (c["nombre"], (err or "")[-200:]))
                     fila["estado"] = "ERROR al convertir"
+                fila["estado"] += ": " + ultima_linea(err)
                 res["errores"].append(dict(detalle_error(c["nombre"], "segmento", cmd, err), estado=fila["estado"]))
                 res["fallidos"] += 1
                 filas.append(fila)
@@ -2378,10 +2414,31 @@ def exportar_proyecto(proyecto, cs, mxf_por_ruta, origen, destino, ffmpeg, ffpro
     except Exception as e:
         LOG.error("Contactos %s: %s", proyecto, e)
     shutil.rmtree(tmp, ignore_errors=True)
+    falta = texto_incompleto(res, cs, mxf_por_ruta)
+    if falta and str(res["estado"]).startswith(("OK", "AVISO")):
+        res["estado"] = "INCOMPLETO: " + falta + ("" if res["estado"].startswith("OK") else "; " + res["estado"])
+        LOG.error("%s: %s", proyecto, res["estado"])
     LOG.info("Bruto %s: %s (%d incluidos, %d fallidos, %.1f s, modo %s%s)", proyecto, res["estado"], res["incluidos"], res["fallidos"],
              res["segundos"], res["modo"], ", reintento" if res["reintento"] else "")
     avisar("terminado", resultado=res)
     return res
+
+
+def texto_incompleto(res, cs, mxf_por_ruta):
+    """Qué le falta a un bruto exportado, o None (04/11/2026: un bruto de 30:53 salió de 1:30 y la cola decía "Terminado",
+    porque los clips que no se convierten se saltan y el resto se une bien). Faltan clips si alguno no ha entrado, y falta
+    duración si el bruto dura bastante menos (más de 2 s y del 1 %) que el vídeo de sus clips. El estado pasa a
+    "INCOMPLETO: ...", que no cuenta como exportado: al relanzar se vuelve a hacer."""
+    con_video = [c for c in cs if c.get("fichero_video")]
+    partes = []
+    if res.get("fallidos"):
+        partes.append("no han entrado %d de %d clips" % (res["fallidos"], len(con_video)))
+    esperado = sum(duracion_video(c, mxf_por_ruta) or 0 for c in con_video)
+    real = res.get("segundos") or 0
+    if real and esperado - real > max(2.0, 0.01 * esperado):
+        minutos = lambda x: "%d min %02d s" % (int(round(x)) // 60, int(round(x)) % 60)
+        partes.append("dura %s de %s" % (minutos(real), minutos(esperado)))
+    return "; ".join(partes) + " (el porqué, en el shotlist y en brutos_resultado.json)" if partes else None
 
 
 def comprobar_parar():

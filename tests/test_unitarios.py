@@ -102,14 +102,14 @@ class Reintento(unittest.TestCase):
 
         def duracion(ffprobe, ruta):  # un segmento dura lo que su clip; el bruto, la suma de los incluidos
             nombre = Path(ruta).name
-            if nombre.startswith(("seg_", "prueba_")):
+            if nombre.startswith(("seg_", "seg2_", "prueba_")):
                 return DUR
             return DUR * self.incluidos_esperados
         eb.ejecutar_ffmpeg, eb.duracion_ffprobe = ejecutar, duracion
 
-    def exportar(self):
+    def exportar(self, formato="auto"):
         cfg = eb.cargar_config(self.tmp / "config_brutos.json")
-        cfg["formato_salida"] = "auto"  # DNxHD iguales: copia
+        cfg["formato_salida"] = formato  # auto, DNxHD iguales: copia
         destino = self.tmp / "brutos"
         destino.mkdir()
         return eb.exportar_proyecto("PRUEBA", self.clips, self.mxf_por_ruta, self.tmp, destino, "ffmpeg", "ffprobe",
@@ -138,8 +138,8 @@ class Reintento(unittest.TestCase):
         self.assertEqual(res["modo"], "copia")
         self.assertIs(res["reintento"], False)
         self.assertEqual((res["incluidos"], res["fallidos"]), (2, 1))
-        self.assertEqual([(e["clip"], e["estado"]) for e in res["errores"]], [("CLIP 1", "ERROR al convertir")])
-        self.assertTrue(res["estado"].startswith("OK"), res)
+        self.assertEqual([(e["clip"], e["estado"]) for e in res["errores"]], [("CLIP 1", "ERROR al convertir: corrupt")])
+        self.assertTrue(res["estado"].startswith("INCOMPLETO: no han entrado 1 de 3 clips"), res)  # 04/11/2026: ya no "OK"
         self.comprobar_timeouts()
 
     def test_tiempo_agotado_no_reintenta(self):
@@ -148,10 +148,37 @@ class Reintento(unittest.TestCase):
         res = self.exportar()
         self.assertEqual(res["modo"], "copia")
         self.assertIs(res["reintento"], False)
-        self.assertEqual([(e["clip"], e["estado"]) for e in res["errores"]], [("CLIP 2", "ERROR (tiempo agotado)")])
+        self.assertEqual([(e["clip"], e["estado"]) for e in res["errores"]], [("CLIP 2", "ERROR (tiempo agotado): %s" % eb.TIEMPO_AGOTADO)])
         # el clip con tiempo agotado no se prueba en convertir
         self.assertEqual(sum(1 for cmd, _ in self.llamadas if any("C2V01" in str(x) for x in cmd)), 1)
         self.comprobar_timeouts()
+
+    def test_convirtiendo_un_fallo_suelto_se_repite_solo(self):
+        """04/11/2026: un bruto de 30:53 salió de 1:30. Convirtiendo (varios clips a la vez), un clip que falla se repite una
+        vez solo antes de dejar el hueco; si sale, el bruto va entero."""
+        self.incluidos_esperados = 3
+        veces = {"n": 0}
+
+        def falla(cmd):
+            if any("C1V01" in str(x) for x in cmd) and "concat" not in cmd:
+                veces["n"] += 1
+                return "Cannot allocate memory" if veces["n"] == 1 else None
+            return None
+        self.simular(falla)
+        res = self.exportar("xdcam_hd50")
+        self.assertEqual((res["modo"], res["reintento"], res["incluidos"], res["fallidos"]), ("convertir", False, 3, 0))
+        self.assertGreaterEqual(veces["n"], 2)
+        self.assertTrue(res["estado"].startswith("OK"), res)
+        # un fichero dañado de verdad falla dos veces y el bruto sale INCOMPLETO, con el porqué
+        self.llamadas, veces["n"] = [], 0
+        self.simular(lambda cmd: "corrupt" if any("C1V01" in str(x) for x in cmd) and "concat" not in cmd else None)
+        self.incluidos_esperados = 2
+        shutil.rmtree(self.tmp / "brutos")
+        res = self.exportar("xdcam_hd50")
+        self.assertEqual((res["incluidos"], res["fallidos"]), (2, 1))
+        self.assertTrue(res["estado"].startswith("INCOMPLETO"), res)
+        segmentos = [cmd for cmd, _ in self.llamadas if any("C1V01" in str(x) for x in cmd) and str(cmd[-1]).endswith(".mxf")]
+        self.assertEqual([Path(cmd[-1]).name for cmd in segmentos], ["seg_00002.mxf", "seg2_00002.mxf"])
 
     def test_union_fallida_reintenta_convirtiendo(self):
         self.incluidos_esperados = 3
@@ -834,6 +861,17 @@ class CortesYGrabacion(unittest.TestCase):
                  {"columnas": {"Tape": "7"}, "comentarios": {"Record Date": "2021-09-15"}}]
         r = da.fijar_fechas_grabacion(clips)
         self.assertEqual(r["columnas_vistas"], {"Camroll": 2, "Shoot Date": 1, "Tape": 1, "MXF: Record Date": 1})
+
+    def test_bruto_incompleto(self):
+        """04/11/2026: un bruto de 30:53 salió de 1:30 y la cola decía "Terminado". Si falta algún clip o el bruto dura
+        bastante menos que el vídeo de sus clips, se dice, y no cuenta como exportado."""
+        mxf = {"v%d.mxf" % k: {"pistas": [{"tipo": "video", "duracion": 60.0}]} for k in range(3)}
+        cs = [{"fichero_video": "v%d.mxf" % k} for k in range(3)] + [{"fichero_video": None}]
+        self.assertIsNone(eb.texto_incompleto({"fallidos": 0, "segundos": 179.5}, cs, mxf))
+        t = eb.texto_incompleto({"fallidos": 2, "segundos": 60.0}, cs, mxf)
+        self.assertIn("no han entrado 2 de 3 clips", t)
+        self.assertIn("dura 1 min 00 s de 3 min 00 s", t)
+        self.assertIn("dura 1 min 30 s", eb.texto_incompleto({"fallidos": 0, "segundos": 90.0}, cs, mxf))  # segmentos cortados
 
     def test_fechas_de_grabacion_imposibles(self):
         D, f = eb.dt.datetime, eb.fecha_imposible
@@ -2375,6 +2413,12 @@ except ImportError:  # algunos Python de Linux vienen sin tkinter
 @unittest.skipUnless(TK_OK, "sin tkinter")
 class TextosDeLaCola(unittest.TestCase):
     """Lo que dice cada fila de la cola de la página Exportar según el avance que llega de la exportación."""
+
+    def test_bruto_incompleto_no_dice_terminado(self):
+        import interfaz
+        estado = "INCOMPLETO: no han entrado 2 de 3 clips; dura 1 min 30 s de 30 min 53 s"
+        self.assertEqual(interfaz.texto_calidad({"estado": estado, "conforme": True}), "INCOMPLETO")
+        self.assertTrue(interfaz.texto_estado({"estado": "terminado", "resultado": {"estado": estado}}).startswith("INCOMPLETO"))
 
     def test_estados(self):
         import interfaz

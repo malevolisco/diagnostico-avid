@@ -3189,7 +3189,7 @@ def brutos_hechos(carpeta):
     """Proyectos con algún bruto terminado (OK o AVISO) en esa carpeta de brutos, según brutos_resultado.json."""
     try:
         res = json.loads((Path(carpeta) / "brutos_resultado.json").read_text(encoding="utf-8"))
-        return {r.get("proyecto_avid") for r in res if str(r.get("estado", "")).startswith(("OK", "AVISO"))}
+        return {r.get("proyecto_avid") for r in res if exportar_brutos.exportado_entero(r)}
     except Exception:
         return set()
 

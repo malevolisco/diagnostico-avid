@@ -1171,7 +1171,7 @@ class App:
         """Brutos ya exportados en esa carpeta (brutos_resultado.json): se ven como hechos en la cola."""
         try:
             res = json.loads((Path(self.brutos.get()) / "brutos_resultado.json").read_text(encoding="utf-8"))
-            return {r["proyecto"]: r for r in res if str(r.get("estado", "")).startswith(("OK", "AVISO"))}
+            return {r["proyecto"]: r for r in res if self.da.exportar_brutos.exportado_entero(r)}
         except Exception:
             return {}
 

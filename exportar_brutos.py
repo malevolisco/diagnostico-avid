@@ -2027,6 +2027,11 @@ def hacer_segmento(clip, idx, plan, origen, mxf_por_ruta, tmp, ffmpeg, cfg, nomb
         cmd += ["-c:a", "pcm_s24le", "-ar", "48000", "-ac", "1"]
     dur = duracion_video(clip, mxf_por_ruta)
     cmd += ["-t", "%.3f" % dur] if dur else ["-shortest"]  # todo, también el audio largo, a la duración del vídeo
+    if plan["modo"] != "copia":
+        # El timecode del segmento, uno válido a los fps de salida (el del bruto lo pone la unión). Sin esto, ffmpeg copia
+        # el del original: el NTSC con timecode drop frame (02:50:41;21) a 25 fps no se puede escribir en MXF, y cada uno
+        # de esos clips fallaba ("Drop frame is only allowed with multiples of 30000/1001 FPS"; disco real, 04/11/2026).
+        cmd += ["-timecode", timecode_inicio(cfg, plan["fps"])]
     cmd += ["-f", "mxf", str(salida)]
     ok, err = ejecutar_ffmpeg(cmd, timeout_segmento(clip.get("duracion")) * margen_tiempo)
     if not ok:
@@ -2480,10 +2485,16 @@ def acabado_profesional(res, salida, plan, cfg, ffprobe, inicio, segundos, progr
         res["md5"] = mxf_util.escribir_md5(salida, comprobar_parar)
 
 
+def exportado_entero(res):
+    """¿Ese resultado de brutos_resultado.json es un bruto hecho, con todos sus clips? Uno que se quedó sin algún clip no
+    (04/11/2026: brutos de versiones anteriores con clips fallidos y estado "OK"; al relanzar se tienen que rehacer)."""
+    return bool(res) and str(res.get("estado", "")).startswith(("OK", "AVISO")) and not res.get("fallidos")
+
+
 def ya_exportado(previo, n_clips, destino, firma=None):
-    """Un bruto de una ejecución anterior se salta si terminó bien, sus ficheros siguen ahí con el
+    """Un bruto de una ejecución anterior se salta si terminó bien con todos sus clips, sus ficheros siguen ahí con el
     mismo tamaño y tiene los mismos clips (si cambió el análisis o el config, se rehace)."""
-    if not previo or not (str(previo.get("estado", "")).startswith(("OK", "AVISO"))):
+    if not exportado_entero(previo):
         return False
     if previo.get("clips") != n_clips or not previo.get("fichero") or not previo.get("shotlist"):
         return False

@@ -53,6 +53,8 @@ def texto_calidad(res):
     """Columna Comprobación: "Conforme · MD5", "NO CONFORME" o "—"."""
     if not res:
         return "—"
+    if str(res.get("estado", "")).startswith("INCOMPLETO"):
+        return "INCOMPLETO"
     if res.get("conforme") is False:
         return "NO CONFORME"
     partes = (["Conforme"] if res.get("conforme") else []) + (["MD5"] if res.get("md5") else [])
@@ -1269,7 +1271,7 @@ class App:
             res = e["resultados"].get(n)
             estado = e["estados"].get(n) or ("Exportado antes" if res else "En espera" if n in e["marcados"] else "No se exporta")
             calidad = texto_calidad(res)
-            tag = ("mal",) if calidad == "NO CONFORME" or estado.startswith(("ERROR", "SIN ESPACIO", "AVISO")) else \
+            tag = ("mal",) if calidad == "NO CONFORME" or estado.startswith(("ERROR", "SIN ESPACIO", "AVISO", "INCOMPLETO")) else \
                 ("activo",) if n in e["estados"] and not res else ("bien",) if res else () if n in e["marcados"] else ("fuera",)
             nombre = n + ("   · piezas" if f["tipo"] == "piezas" else "")
             self.tv.insert("", "end", iid=n, tags=tag, values=("☑" if n in e["marcados"] else "☐", nombre, vm.fmt_h(f["segundos"]), estado, calidad))

@@ -15,6 +15,7 @@ Hilos: el análisis y la exportación van en un hilo aparte; sus mensajes y su a
 por una cola que lee la ventana cada 200 ms. Nada toca tkinter fuera del hilo principal.
 """
 
+import contextlib
 import json
 import queue
 import threading
@@ -148,6 +149,9 @@ class App:
         self.destino.trace_add("write", lambda *a: self.cambio_carpetas())
         self.brutos.trace_add("write", lambda *a: self.cambio_carpetas())
         raiz.protocol("WM_DELETE_WINDOW", self.al_cerrar)
+        # El programa en la nube (hoja de inventario): qué hace este PC, cada minuto, y las órdenes que se le mandan
+        self.orden_actual, self.ultima_linea, self.ultimo_aviso, self.nube_en_vuelo = None, "", "", False
+        raiz.after(5000, self.ciclo_nube)
         # Ajuste de desarrollo, sin botón: crear el disco de prueba (para probar el programa sin un disco real)
         raiz.bind_all("<Control-Shift-KeyPress-D>", self.disco_de_prueba)
         raiz.bind_all("<Control-Shift-KeyPress-d>", self.disco_de_prueba)
@@ -234,6 +238,7 @@ class App:
         self.revisar_exportar()
 
     def escribe(self, txt):
+        self.ultima_linea = str(txt).strip().splitlines()[-1][:200] if str(txt).strip() else self.ultima_linea
         self.registro.configure(state="normal")
         self.registro.insert("end", txt + "\n")
         self.registro.see("end")
@@ -694,6 +699,8 @@ class App:
         else:
             gran = self.gran_actual()
             texto = ("pestaña %s" % gran) if gran else "conectada: falta elegir el gran proyecto (Conectar…)"
+            if gran and self.hoja["cfg"].get("acepta_ordenes"):
+                texto += " · acepta órdenes"
         self.lbl_hoja.configure(text=texto)
 
     def conectar_hoja(self):
@@ -722,8 +729,11 @@ class App:
         combo.grid(row=3, column=1, sticky="w", pady=4)
         ttk.Label(caja, text="la pestaña: México, China… (una nueva se crea sola)" if self.origen.get() else
                   "elige antes el disco en 1 · Disco", style="Suave.TLabel").grid(row=4, column=1, sticky="w")
+        acepta = tk.BooleanVar(value=bool(cfg.get("acepta_ordenes")))
+        ttk.Checkbutton(caja, text="Aceptar órdenes desde la hoja en este PC (pestaña Órdenes: analizar, exportar, detener…)",
+                        variable=acepta).grid(row=5, column=0, columnspan=3, sticky="w", pady=(10, 0))
         lbl = ttk.Label(caja, text="", style="Suave.TLabel", wraplength=560, justify="left")
-        lbl.grid(row=5, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        lbl.grid(row=6, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
         def probar():
             lbl.configure(text="Probando la conexión…", style="Suave.TLabel")
@@ -742,7 +752,7 @@ class App:
                 v.configure(cursor="")
 
         def guardar():
-            nuevo = dict(cfg, url=url.get().strip())
+            nuevo = dict(cfg, url=url.get().strip(), acepta_ordenes=acepta.get())
             if nuevo["url"]:
                 try:
                     hi.comprobar_url(nuevo["url"])
@@ -771,18 +781,18 @@ class App:
             v.destroy()
             self.pintar_hoja()
         pie = ttk.Frame(caja)
-        pie.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(16, 0))
+        pie.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(16, 0))
         ttk.Button(pie, text="Probar la conexión", command=probar).pack(side="left")
         if cfg.get("url"):
             ttk.Button(pie, text="Desconectar", style="Fantasma.TButton", command=desconectar).pack(side="left", padx=6)
         ttk.Button(pie, text="Guardar", style="Elegido.TButton", command=guardar).pack(side="right")
         ttk.Button(pie, text="Cancelar", style="Fantasma.TButton", command=v.destroy).pack(side="right", padx=6)
         caja.columnconfigure(1, weight=1)
-        v.probar, v.guardar, v.url, v.gran = probar, guardar, url, gran  # para las pruebas
+        v.probar, v.guardar, v.url, v.gran, v.acepta = probar, guardar, url, gran, acepta  # para las pruebas
         v.grab_set()
         return v
 
-    def sincronizar_hoja(self, quitados_hecho=()):
+    def sincronizar_hoja(self, quitados_hecho=(), datos=False):
         """Apunta en la hoja el estado de los proyectos del disco (por detrás; un fallo no para nada: se manda la próxima vez)."""
         url, gran, origen = self.hoja["cfg"].get("url"), self.gran_actual(), self.origen.get()
         if not url or not gran or not origen:
@@ -801,8 +811,18 @@ class App:
                 resultados = []
             hechos = da.leer_hechos(brutos)
         base = da.carpeta_base()
+        disco = self.disco_id()
 
         def hilo():
+            if datos:  # el zip SOLO DE TEXTO del análisis y de los brutos, para revisarlo desde la nube
+                try:
+                    contenido, nombres = hi.zip_texto([("analisis", carpeta), ("brutos", brutos)])
+                    if nombres:
+                        hi.subir_datos(url, gran, disco, (Path(carpeta).name if carpeta else "brutos") + ".zip", contenido)
+                        self.cola.put(("log", "Hoja de inventario: datos del análisis subidos (%d ficheros de texto, sin imágenes)." % len(nombres)))
+                except Exception as e:
+                    da.LOG.warning("Hoja de inventario, datos: %s", e)
+                    self.cola.put(("log", "Hoja de inventario: no se han podido subir los datos (%s)." % e))
             try:
                 todos = lista if lista is not None else listar_todos(da, origen, extras)
                 filas = hi.filas_inventario(todos, [origen] + extras, triaje, resultados, hechos, quitados_hecho)
@@ -813,6 +833,188 @@ class App:
                 da.LOG.warning("Hoja de inventario: %s", e)
                 self.cola.put(("log", "Hoja de inventario: no se ha podido actualizar (%s). Se manda la próxima vez." % e))
         threading.Thread(target=hilo, daemon=True).start()
+
+    # --- el programa en la nube: estado de este PC y órdenes desde la hoja ---------------------------------------------
+
+    def estado_nube(self):
+        """Lo que se apunta en la pestaña Programa: qué hace este PC ahora."""
+        actividad = {None: "libre", "analisis": "analizando", "exportacion": "exportando", "actualizacion": "actualizándose",
+                     "prueba": "creando el disco de prueba"}.get(self.estado["ocupado"], str(self.estado["ocupado"]))
+        if self.estado["ocupado"] and self.ultima_linea:
+            actividad += ": " + self.ultima_linea
+        progreso = ""
+        c = self.cronometro
+        if c and c.get("segundos_total"):
+            progreso = "%d %%" % min(100, 100 * c["segundos_hechos"] / c["segundos_total"])
+        if self.orden_actual:
+            progreso = ("orden %s · " % self.orden_actual) + progreso
+        cfg = self.hoja["cfg"]
+        return {"pc": hi.nombre_pc(), "disco": self.origen.get() and "%s (%s)" % (Path(self.origen.get()).name or self.origen.get(), self.origen.get()),
+                "gran_proyecto": self.gran_actual(), "acepta": bool(cfg.get("acepta_ordenes")), "actividad": actividad[:300],
+                "progreso": progreso, "aviso": self.ultimo_aviso[:300], "version": getattr(self.da, "BUILD", "")}
+
+    def ciclo_nube(self):
+        """Cada minuto, con la hoja conectada: el latido de este PC y las órdenes pendientes (por detrás)."""
+        self.raiz.after(60000, self.ciclo_nube)
+        url = self.hoja["cfg"].get("url")
+        if not url or self.nube_en_vuelo:
+            return
+        self.nube_en_vuelo = True
+        estado = self.estado_nube()
+
+        def hilo():
+            try:
+                ordenes = hi.latido(url, estado)
+                if ordenes and estado["acepta"]:
+                    self.cola.put(("hoja_ordenes", ordenes))
+            except Exception as e:
+                self.da.LOG.info("Hoja de inventario, latido: %s", e)
+                if "desconocida" in str(e) and not getattr(self, "aviso_buzon", False):
+                    self.aviso_buzon = True
+                    self.cola.put(("log", "Hoja de inventario: el buzón de la hoja es de una versión anterior. Para el estado y las "
+                                          "órdenes, pega en la hoja el hoja_inventario.gs nuevo (INSTRUCCIONES.txt)."))
+            finally:
+                self.nube_en_vuelo = False
+        threading.Thread(target=hilo, daemon=True).start()
+
+    def nube_orden(self, n, estado, detalle="", desde=None, luego=None):
+        """Cambia el estado de una orden en la hoja (por detrás). luego: mensaje para la cola si se ha podido."""
+        url = self.hoja["cfg"].get("url")
+        if not url:
+            return
+        pc = hi.nombre_pc()
+
+        def hilo():
+            try:
+                hi.marcar_orden(url, n, estado, detalle, pc, desde)
+                if luego:
+                    self.cola.put(luego)
+            except Exception as e:
+                self.cola.put(("log", "Orden %s de la hoja: %s" % (n, e)))
+        threading.Thread(target=hilo, daemon=True).start()
+
+    def plan_de_orden(self, o):
+        """Qué haría este PC con la orden o: (plan, None) si la puede hacer, (None, motivo) si no y es para él, o (None, None)
+        si no es para él (otro PC con otro disco la cogerá)."""
+        mia = bool(o.get("pc")) and o["pc"].strip().lower() == hi.nombre_pc().lower()
+        if o.get("pc") and not mia:
+            return None, None
+        orden = o.get("orden")
+        if orden not in hi.ORDENES:
+            return None, "orden desconocida: %s" % orden
+        if orden == "Detener":
+            if self.estado["ocupado"] in ("analisis", "exportacion"):
+                return {"orden": orden}, None
+            return (None, "no estaba trabajando") if mia else (None, None)
+        if self.estado["ocupado"]:
+            return None, None  # se coge al terminar lo de ahora
+        if orden == "Sincronizar":
+            return {"orden": orden}, None
+        lista = self.vista_disco["lista"] if self.vista_disco["origen"] == self.origen.get() else None
+        if not lista:
+            return (None, "no hay disco elegido en este PC") if mia else (None, None)
+        pedidos = hi.proyectos_de_orden(o.get("proyectos"))
+        todo = orden == "Analizar" and (not pedidos or [p.lower() for p in pedidos] == ["todo"])
+        if not pedidos and not todo:
+            return None, "faltan los proyectos"
+        nombres, faltan = ([], []) if todo else hi.casar_proyectos(pedidos, [p["nombre"] for p in lista] + ["SIN_PROYECTO"])
+        if faltan:
+            return None, "no están en el disco de este PC: %s" % "; ".join(faltan)
+        if orden in ("Exportar", "Marcar HECHO") and not self.brutos.get():
+            return None, "falta la carpeta de brutos en este PC"
+        if orden == "Analizar" and not self.destino.get():
+            return None, "falta la carpeta del informe en este PC"
+        if orden in ("Analizar", "Exportar") and not self.da.localizar_ffmpeg()[0]:
+            return None, "falta ffmpeg en este PC"
+        if orden == "Exportar":
+            carpeta = self.analisis_actual()
+            if not carpeta:
+                return None, "este disco no está analizado: manda antes Analizar"
+            antes = self.estado["proyectos"]
+            self.estado["proyectos"] = nombres
+            falta = self.faltan_en_analisis(carpeta)
+            self.estado["proyectos"] = antes
+            if falta:
+                return None, falta
+        return {"orden": orden, "proyectos": None if todo else nombres}, None
+
+    def al_recibir_ordenes(self, ordenes):
+        """La primera orden que este PC puede hacer se coge (pasa a "En marcha" si nadie la ha cogido antes) y se hace."""
+        if not self.hoja["cfg"].get("acepta_ordenes"):
+            return
+        for o in ordenes:
+            plan, motivo = self.plan_de_orden(o)
+            if motivo:
+                self.escribe("Orden %s de la hoja (%s): no se hace, %s." % (o.get("n"), o.get("orden"), motivo))
+                self.nube_orden(o["n"], "Rechazada", motivo, desde="Pendiente")
+                continue
+            if plan:
+                plan["n"] = o["n"]
+                self.nube_orden(o["n"], "En marcha", "", desde="Pendiente", luego=("hoja_ejecutar", plan))
+                return
+
+    def ejecutar_orden(self, plan):
+        """Hace una orden de la hoja, sin ventanas (nadie delante para contestarlas). El resultado va a la orden."""
+        n, orden = plan["n"], plan["orden"]
+        self.escribe("— Orden %s desde la hoja: %s%s" % (n, orden, " · " + "; ".join(plan["proyectos"]) if plan.get("proyectos") else ""))
+        if orden == "Detener":
+            if self.estado["ocupado"]:
+                self.da.PARAR.set()
+                self.escribe("Deteniendo... (unos segundos)")
+            return self.nube_orden(n, "Hecha", "detenido" if self.estado["ocupado"] else "no estaba trabajando")
+        if self.estado["ocupado"]:  # se ha puesto a trabajar mientras se cogía la orden
+            return self.nube_orden(n, "Pendiente", "este PC estaba ocupado; se reintenta")
+        if orden == "Sincronizar":
+            self.sincronizar_hoja(datos=True)
+            return self.nube_orden(n, "Hecha", "inventario y datos enviados")
+        if orden == "Marcar HECHO":
+            self.da.marcar_hechos(self.brutos.get(), plan["proyectos"], True)
+            self.sincronizar_hoja()
+            return self.nube_orden(n, "Hecha", "%d marcados como HECHOS" % len(plan["proyectos"]))
+        self.estado.update(proyectos=plan["proyectos"], auto=False)
+        if plan["proyectos"]:
+            self.estado["total_proyectos"] = max(self.estado.get("total_proyectos") or 0, len(plan["proyectos"]))
+        self.pintar_proyectos()
+        self.orden_actual = n
+        try:
+            with sin_ventanas():
+                if orden == "Analizar":
+                    self.lanzar_analisis(plan["proyectos"])
+                else:
+                    self.preparar_exportar()
+                    if self.exp:  # los descartados de la hoja no salen; lo pedido sí
+                        self.exp["marcados"] = {f["nombre"] for f in self.exp["resumen"]["filas"]
+                                                if f["proyecto"] in set(plan["proyectos"]) and (f["tipo"] != "piezas" or
+                                                                                                self.exp["cfg"].get("exportar_piezas"))}
+                    self.revisar_exportar()
+                    if not self.exp or "disabled" in self.bt_exportar.state():
+                        motivo = self.lbl_motivo.cget("text") or "no se ha podido preparar la cola"
+                        self.orden_actual = None
+                        return self.nube_orden(n, "Error", motivo.replace("\n", " · "))
+                    self.exportar(preguntar=False)
+            if not self.estado["ocupado"]:
+                self.orden_actual = None
+                self.nube_orden(n, "Error", "no ha arrancado: %s" % (self.ultima_linea or "motivo desconocido"))
+        except Exception as e:
+            self.orden_actual = None
+            self.da.LOG.error("Orden %s: %s\n%s", n, e, traceback.format_exc())
+            self.nube_orden(n, "Error", str(e))
+
+    def cerrar_orden(self, n, tipo, msg):
+        """El final de una orden de la hoja (análisis o exportación terminados, detenidos o con error)."""
+        if tipo == "fin":
+            estado, detalle = "Hecha", "análisis terminado: %s" % Path(str(msg[0])).parent.name if isinstance(msg, tuple) else "análisis terminado"
+        elif tipo == "exportado":
+            total, ok, parado, _ = msg
+            estado = "Hecha" if not parado and ok == total else "Error" if not parado else "Hecha"
+            detalle = "%s: %d brutos, %d OK" % ("detenida" if parado else "exportación terminada", total, ok)
+        elif tipo in ("detenido", "detenido_brutos"):
+            estado, detalle = "Hecha", "detenido antes de terminar"
+        else:
+            estado, detalle = "Error", str(msg).strip().splitlines()[0][:300] if str(msg).strip() else "error"
+            self.ultimo_aviso = detalle
+        self.escribe("Orden %s de la hoja: %s (%s)." % (n, estado.lower(), detalle))
+        self.nube_orden(n, estado, detalle)
 
     def esperar_selector(self, si):
         """Mientras se leen los proyectos del disco, "Elegir proyectos" no bloquea la ventana: espera a que acabe."""
@@ -1532,7 +1734,7 @@ class App:
             self.lbl_tiempo.configure(text="%s de material por exportar. El tiempo se calcula al terminar el primer bruto "
                                       "(depende del ordenador y del disco)." % vm.fmt_h(material))
 
-    def exportar(self):
+    def exportar(self, preguntar=True):
         from tkinter import messagebox
         da = self.da
         if self.estado["ocupado"] or not self.exp:
@@ -1542,7 +1744,7 @@ class App:
             return
         e = self.exp
         filas = [f for f in e["resumen"]["filas"] if f["nombre"] in e["marcados"]]
-        if not messagebox.askyesno("Exportar brutos", "Se exportan %d brutos con el análisis %s (no se repite) y el montaje guardado.\n\n"
+        if preguntar and not messagebox.askyesno("Exportar brutos", "Se exportan %d brutos con el análisis %s (no se repite) y el montaje guardado.\n\n"
                                    "Puede tardar muchas horas; se puede parar con Detener y seguir otro día.\n\n¿Empezar?"
                                    % (len(filas), Path(e["carpeta"]).name), parent=self.raiz):
             return
@@ -1614,6 +1816,12 @@ class App:
                 if tipo == "hoja_leida":
                     self.al_leer_hoja(*msg)
                     continue
+                if tipo == "hoja_ordenes":
+                    self.al_recibir_ordenes(msg)
+                    continue
+                if tipo == "hoja_ejecutar":
+                    self.ejecutar_orden(msg)
+                    continue
                 if tipo == "que_hay":
                     self.pintar_que_hay(*msg)
                     continue
@@ -1638,42 +1846,55 @@ class App:
                     self.raiz.destroy()
                     return
                 if tipo in ("fin", "detenido_brutos", "exportado"):
-                    self.sincronizar_hoja()  # lo analizado y exportado, a la hoja de inventario
-                if tipo in ("fin", "detenido_brutos"):
-                    self.pintar_ultimo()
-                    if self.exp:
-                        self.exp["clave"] = None  # análisis nuevo: la cola se rehace al entrar (se conservan ajustes y casillas)
-                if tipo == "fin" and self.falta:  # quedan clips sin media y no se ha mirado todo el disco: se pregunta ya
-                    b = self.falta
-                    if messagebox.askyesno("Terminado", "Diagnóstico terminado.\n\nInforme: %s\n\nZIP para enviar: %s\n\n"
-                                           "⚠ %d clips de los bins no tienen media en lo que se ha mirado (por el nombre y en las "
-                                           "carpetas del proyecto).\n\n¿Buscarlos ahora en todo el disco? Tarda %s; se puede "
-                                           "detener. Si no, puedes hacerlo luego con \"Buscar en todo el disco…\" en \"Último análisis\"."
-                                           % (msg + (sum(b["sin_media"].values()), self.da.texto_minutos(b.get("minutos", 0)))),
-                                           parent=self.raiz):
-                        self.buscar_en_todo_el_disco(preguntar=False)
-                elif tipo == "fin":
-                    messagebox.showinfo("Terminado", "Diagnóstico terminado.\n\nInforme: %s\n\nZIP para enviar: %s\n\n"
-                                        "Siguiente paso: 2 · Montaje (opcional) y 3 · Exportar." % msg, parent=self.raiz)
-                elif tipo == "detenido_brutos":
-                    messagebox.showwarning("Detenido", "Exportación detenida. Los brutos terminados se conservan y el informe recoge lo hecho.\n\n"
-                                           "Para seguir, exporta otra vez con las mismas carpetas: sigue por el bruto que faltaba.\n\n"
-                                           "Informe: %s\n\nZIP para enviar: %s" % msg, parent=self.raiz)
-                elif tipo == "detenido":
-                    messagebox.showwarning("Detenido", "Análisis detenido antes de terminar: no se ha generado informe.\n\n"
-                                           "Al volver a lanzarlo empezará desde el principio.", parent=self.raiz)
-                elif tipo == "exportado":
-                    total, ok, parado, carpeta_b = msg
-                    self.pintar_cola()
-                    (messagebox.showwarning if parado or ok < total else messagebox.showinfo)(
-                        "Brutos", "%s\n\n%d brutos, %d OK.\n\nCarpeta: %s\n(detalle en brutos_resultado.json y exportacion.log)"
-                        % ("Exportación detenida. Al volver a pulsar Exportar sigue por donde se quedó." if parado else "Exportación terminada.",
-                           total, ok, carpeta_b), parent=self.raiz)
-                elif tipo == "error":
-                    messagebox.showerror("Error", msg, parent=self.raiz)
+                    self.sincronizar_hoja(datos=True)  # lo analizado y exportado, a la hoja de inventario
+                # Lo mandado desde la hoja: el resultado se apunta en la orden y no se abre ninguna ventana (nadie la cerraría)
+                remota = self.orden_actual if tipo in ("fin", "detenido_brutos", "detenido", "exportado", "error") else None
+                if remota is not None:
+                    self.orden_actual = None
+                    self.cerrar_orden(remota, tipo, msg)
+                with (sin_ventanas() if remota is not None else contextlib.nullcontext()):
+                    self.final_de_trabajo(tipo, msg)
         except queue.Empty:
             pass
         self.raiz.after(200, self.vaciar_cola)
+
+    def final_de_trabajo(self, tipo, msg):
+        """Lo que se enseña al terminar un análisis o una exportación."""
+        from tkinter import messagebox
+        if tipo in ("fin", "detenido_brutos"):
+            self.pintar_ultimo()
+            if self.exp:
+                self.exp["clave"] = None  # análisis nuevo: la cola se rehace al entrar (se conservan ajustes y casillas)
+        if tipo == "fin" and self.falta:  # quedan clips sin media y no se ha mirado todo el disco: se pregunta ya
+            b = self.falta
+            if messagebox.askyesno("Terminado", "Diagnóstico terminado.\n\nInforme: %s\n\nZIP para enviar: %s\n\n"
+                                   "⚠ %d clips de los bins no tienen media en lo que se ha mirado (por el nombre y en las "
+                                   "carpetas del proyecto).\n\n¿Buscarlos ahora en todo el disco? Tarda %s; se puede "
+                                   "detener. Si no, puedes hacerlo luego con \"Buscar en todo el disco…\" en \"Último análisis\"."
+                                   % (msg + (sum(b["sin_media"].values()), self.da.texto_minutos(b.get("minutos", 0)))),
+                                   parent=self.raiz):
+                self.buscar_en_todo_el_disco(preguntar=False)
+        elif tipo == "fin":
+            messagebox.showinfo("Terminado", "Diagnóstico terminado.\n\nInforme: %s\n\nZIP para enviar: %s\n\n"
+                                "Siguiente paso: 2 · Montaje (opcional) y 3 · Exportar." % msg, parent=self.raiz)
+        elif tipo == "detenido_brutos":
+            messagebox.showwarning("Detenido", "Exportación detenida. Los brutos terminados se conservan y el informe recoge lo hecho.\n\n"
+                                   "Para seguir, exporta otra vez con las mismas carpetas: sigue por el bruto que faltaba.\n\n"
+                                   "Informe: %s\n\nZIP para enviar: %s" % msg, parent=self.raiz)
+        elif tipo == "detenido":
+            messagebox.showwarning("Detenido", "Análisis detenido antes de terminar: no se ha generado informe.\n\n"
+                                   "Al volver a lanzarlo empezará desde el principio.", parent=self.raiz)
+        elif tipo == "exportado":
+            total, ok, parado, carpeta_b = msg
+            self.pintar_cola()
+            (messagebox.showwarning if parado or ok < total else messagebox.showinfo)(
+                "Brutos", "%s\n\n%d brutos, %d OK.\n\nCarpeta: %s\n(detalle en brutos_resultado.json y exportacion.log)"
+                % ("Exportación detenida. Al volver a pulsar Exportar sigue por donde se quedó." if parado else "Exportación terminada.",
+                   total, ok, carpeta_b), parent=self.raiz)
+        elif tipo == "error":
+            self.ultimo_aviso = str(msg).strip().splitlines()[0][:300] if str(msg).strip() else "error"
+            messagebox.showerror("Error", msg, parent=self.raiz)
+
 
     def al_cerrar(self):
         from tkinter import messagebox
@@ -1717,6 +1938,23 @@ class App:
         self.escribe("Buscando versión nueva en GitHub...")
         threading.Thread(target=lambda: self.cola.put(("actualizacion", da.actualizar.actualizar(
             da.BUILD, da.carpeta_base(), progreso=lambda m: self.cola.put(("log", m))))), daemon=True).start()
+
+
+@contextlib.contextmanager
+def sin_ventanas():
+    """Mientras se hace una orden de la hoja no se abre ninguna ventana de aviso o pregunta: nadie las contestaría.
+    Las preguntas se contestan "no" (o cancelar); lo que dirían va al registro del programa."""
+    from tkinter import messagebox as mb
+    nombres = ("showinfo", "showwarning", "showerror", "askyesno", "askokcancel", "askyesnocancel")
+    viejas = {k: getattr(mb, k) for k in nombres}
+    mb.showinfo = mb.showwarning = mb.showerror = lambda *a, **k: None
+    mb.askyesno = mb.askokcancel = lambda *a, **k: False
+    mb.askyesnocancel = lambda *a, **k: None
+    try:
+        yield
+    finally:
+        for k, f in viejas.items():
+            setattr(mb, k, f)
 
 
 def listar_todos(da, origen, extras=()):

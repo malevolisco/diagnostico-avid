@@ -433,6 +433,30 @@ código, en "Implementar" -> "Gestionar implementaciones" edita la que hay
 y elige "Nueva versión": así la dirección no cambia.
 Sin conexión no pasa nada: el programa sigue y lo apunta la próxima vez.
 
+Desde la nube: qué hace cada PC y órdenes
+-----------------------------------------
+Con la hoja conectada, el programa apunta cada minuto en la pestaña
+"Programa" qué hace ese PC (libre, analizando, exportando y por dónde va,
+el último error). Al terminar un análisis o una exportación sube a Drive,
+en la carpeta "DiagnosticoAvid datos" junto a la hoja, un zip SOLO DE TEXTO
+(los .json, .csv, .log, shotlists y fichas): nunca vídeo, miniaturas ni
+capturas. Sirve para revisar el trabajo desde fuera; se puede borrar.
+
+Órdenes: en la pestaña "Órdenes" se escribe una fila con la Orden
+(Analizar, Exportar, Detener, Marcar HECHO, Sincronizar) y los Proyectos
+(separados por ";"; para analizar el disco entero, TODO). En la columna PC
+se puede poner qué ordenador la hace; vacía, la hace el que tenga ese
+disco. El programa la coge en un minuto, pone "En marcha" y al acabar
+"Hecha", "Error" o "Rechazada" con el motivo. Mientras hace una orden no
+abre ventanas de aviso: todo queda en la orden y en el registro.
+Solo se hacen órdenes en los PC que lo permitan: "Conectar..." ->
+"Aceptar órdenes desde la hoja en este PC" (desmarcado de entrada).
+Exportar necesita el disco analizado antes. Con el PC dormido, el programa
+cerrado o el disco desconectado, la orden espera.
+Si ya tenías pegado el buzón de antes, pega el hoja_inventario.gs nuevo
+y en "Implementar" -> "Gestionar implementaciones" edita la que hay con
+"Nueva versión": pedirá permiso también para Drive (la carpeta de datos).
+
 Si hay que pararlo (por ejemplo, se acaba la jornada)
 -----------------------------------------------------
 Pulsa "Detener" (en la página Disco si está analizando, en Exportar si está

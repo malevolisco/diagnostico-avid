@@ -123,9 +123,20 @@ function libroFalso() {
     }
   }
   const hojas = [];
-  const libro = {getSheets: () => hojas.slice(), getSheetByName: (n) => hojas.find((h) => h.nombre === n) || null,
+  const libro = {getId: () => 'hoja', getSheets: () => hojas.slice(), getSheetByName: (n) => hojas.find((h) => h.nombre === n) || null,
     insertSheet: (n, pos) => { const h = new Hoja(n); pos === 0 ? hojas.unshift(h) : hojas.push(h); return h; }};
+  const drive = {ficheros: [], carpetas: {}};
+  const carpetaFalsa = (ruta) => ({
+    getFoldersByName: (n) => { const r = ruta + '/' + n; return {hasNext: () => r in drive.carpetas, next: () => drive.carpetas[r]}; },
+    createFolder: (n) => { const r = ruta + '/' + n; drive.carpetas[r] = carpetaFalsa(r); return drive.carpetas[r]; },
+    getFilesByName: (n) => { const fs = drive.ficheros.filter((f) => f.ruta === ruta && f.nombre === n && !f.papelera); let i = 0;
+      return {hasNext: () => i < fs.length, next: () => { const f = fs[i++]; return {setTrashed: () => { f.papelera = true; }}; }}; },
+    createFile: (blob) => { const f = {ruta, nombre: blob.nombre, datos: blob.datos}; drive.ficheros.push(f); return {getId: () => 'id' + drive.ficheros.length}; }});
   const ctx2 = {module: {exports: {}}, SpreadsheetApp: {getActiveSpreadsheet: () => libro, newDataValidation: cadena, newConditionalFormatRule: cadena},
+    Utilities: {formatDate: () => '2026-11-05 10:00', base64Decode: (b) => Buffer.from(b, 'base64'), newBlob: (datos, tipo, nombre) => ({datos, nombre})},
+    Session: {getScriptTimeZone: () => 'Europe/Madrid'},
+    DriveApp: {getFileById: () => ({getParents: () => ({hasNext: () => true, next: () => carpetaFalsa('Mi unidad')})}), getRootFolder: () => carpetaFalsa('Mi unidad')},
+    drive,
     LockService: {getScriptLock: () => ({waitLock() {}, releaseLock() {}})},
     ContentService: {MimeType: {JSON: 'json'}, createTextOutput: (t) => ({setMimeType: () => JSON.parse(t)})}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'hoja_inventario.gs'), 'utf8'), ctx2);
@@ -178,6 +189,42 @@ prueba('buzón entero: una hoja que viene justa de tamaño (la convertida de Exc
   assert.strictEqual(mx.getRange(4, 2).getValues()[0][0], 'C');
   assert.strictEqual(mx.getRange(2, 12).getValues()[0][0], 'yo');
   assert.strictEqual(mx.getRange(2, 5).getValues()[0][0], 'Exportado');
+});
+
+prueba('el programa en la nube: latido, órdenes y datos', () => {
+  const {libro, ctx: c} = libroFalso();
+  const post = (o) => JSON.parse(JSON.stringify(c.doPost({postData: {contents: JSON.stringify(o)}})));
+  let r = post({accion: 'latido', pc: 'PC-MONTAJE', disco: 'F: MEXICO', acepta: true, actividad: 'libre'});
+  assert.ok(r.ok, r.error);
+  assert.deepStrictEqual(r.ordenes, []);
+  post({accion: 'latido', pc: 'pc-montaje', actividad: 'exportando 2 de 5'});  // el mismo PC: la misma fila
+  const prog = libro.getSheetByName('Programa');
+  assert.strictEqual(prog.getLastRow(), 2);
+  assert.strictEqual(prog.getRange(2, 5).getValues()[0][0], 'exportando 2 de 5');
+  assert.ok(!post({accion: 'nueva_orden', orden: 'Borrar todo'}).ok);  // solo la lista cerrada
+  assert.strictEqual(post({accion: 'nueva_orden', orden: 'Exportar', proyectos: 'ABORTO; CHAVELA VARGAS', quien: 'Claude'}).n, 1);
+  // una orden escrita a mano en la hoja, sin número ni estado
+  const ord = libro.getSheetByName('Órdenes');
+  ord.getRange(3, 3, 1, 2).setValues([['Analizar', 'PANAMA 2019']]);
+  r = post({accion: 'latido', pc: 'PC-MONTAJE'});
+  assert.deepStrictEqual(r.ordenes.map((o) => [o.n, o.orden, o.proyectos]), [[1, 'Exportar', 'ABORTO; CHAVELA VARGAS'], [2, 'Analizar', 'PANAMA 2019']]);
+  assert.strictEqual(ord.getRange(3, 7).getValues()[0][0], 'Pendiente');
+  // la coge un PC; otro ya no puede
+  assert.ok(post({accion: 'orden', n: 1, estado: 'En marcha', pc: 'PC-MONTAJE', desde: 'Pendiente'}).ok);
+  assert.ok(!post({accion: 'orden', n: 1, estado: 'En marcha', pc: 'OTRO', desde: 'Pendiente'}).ok);
+  assert.ok(post({accion: 'orden', n: 1, estado: 'Hecha', detalle: '2 brutos, 2 OK'}).ok);
+  assert.strictEqual(ord.getRange(2, 8).getValues()[0][0], '2 brutos, 2 OK');
+  assert.deepStrictEqual(post({accion: 'latido', pc: 'PC-MONTAJE'}).ordenes.map((o) => o.n), [2]);
+  assert.deepStrictEqual(post({accion: 'probar'}).pestanas, []);  // Programa y Órdenes no son grandes proyectos
+  // datos: el zip a su carpeta; uno nuevo con el mismo nombre sustituye al anterior
+  for (const t of ['uno', 'dos']) {
+    r = post({accion: 'datos', gran_proyecto: 'México', disco: 'DISCO_F', nombre: 'analisis.zip', zip_base64: Buffer.from(t).toString('base64')});
+    assert.ok(r.ok, r.error);
+  }
+  const vivos = c.drive.ficheros.filter((f) => !f.papelera);
+  assert.strictEqual(vivos.length, 1);
+  assert.strictEqual(vivos[0].ruta, 'Mi unidad/DiagnosticoAvid datos/México/DISCO_F');
+  assert.strictEqual(String(vivos[0].datos), 'dos');
 });
 
 console.log(n + ' pruebas OK');

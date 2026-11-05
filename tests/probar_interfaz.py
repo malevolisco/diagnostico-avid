@@ -177,7 +177,8 @@ def hoja_de_inventario():
     nombres = [p["nombre"] for p in app.vista_disco["lista"]]
     descartado, bueno = nombres[0], nombres[1]
     enviado = r.setdefault("hoja_enviado", [])
-    orig = hi.probar, hi.leer, hi.actualizar
+    orig = hi.probar, hi.leer, hi.actualizar, hi.latido
+    hi.latido = lambda url, estado: []  # el latido de cada minuto, sin red
     hi.probar = lambda url: ["México"]
     hi.leer = lambda url, gran: {descartado: {"proyecto": descartado, "estado": "Analizado", "decision": "Descartar: entradilla", "quien": "A"},
                                  bueno: {"proyecto": bueno, "estado": "", "decision": "Merece la pena"}}
@@ -214,7 +215,7 @@ def hoja_leida(descartado, bueno):
     marcados, hoja = r.get("selector_hoja") or (None, None)
     comprobar(marcados is None and hoja and hi.descartado(hoja.get(descartado)), "el selector debe recibir lo de la hoja: %s" % (r.get("selector_hoja"),))
     # vuelta a como estaba: sin hoja (el resto de la prueba no la usa)
-    hi.probar, hi.leer, hi.actualizar = r.pop("hoja_orig")
+    hi.probar, hi.leer, hi.actualizar, hi.latido = r.pop("hoja_orig")
     (d.carpeta_base() / hi.FICHERO_CONFIG).unlink(missing_ok=True)
     app.hoja.update(cfg={}, decisiones={})
     app.estado.update(proyectos=None, auto=False)
@@ -522,6 +523,60 @@ def buscado_en_todo():
     comprobar(b.get("todo_el_disco") and b.get("cabeceras_cache", 0) > 0, "buscado en todo el disco, sin repetir lo ya mirado: %s" % b)
     comprobar("todo el disco" in app.lbl_falta.cget("text") and not app.bt_buscar_todo.winfo_ismapped(),
               "después de buscar en todo el disco, sin botón: %r" % app.lbl_falta.cget("text"))
+    ordenes_desde_la_hoja()
+
+
+@seguro
+def ordenes_desde_la_hoja():
+    """Órdenes desde la hoja con un buzón falso: lo que no está en el disco se rechaza; Analizar se hace sin abrir
+    ninguna ventana, la orden acaba en Hecha y se sube un zip solo de texto."""
+    hi = interfaz.hi
+    r["ordenes"], r["subido"] = [], []
+    r["hoja_orig2"] = (hi.marcar_orden, hi.latido, hi.subir_datos, hi.actualizar)
+    hi.marcar_orden = lambda url, n, estado, detalle="", pc="", desde=None: r["ordenes"].append((n, estado, detalle)) or {"ok": True}
+    hi.latido = lambda url, estado: r.setdefault("latidos", []).append(estado) or []
+    hi.subir_datos = lambda url, gran, disco, nombre, contenido: r["subido"].append((nombre, contenido)) or {"ok": True}
+    hi.actualizar = lambda *a, **k: {}
+    app.hoja["cfg"] = {"url": "https://script.google.com/macros/s/prueba/exec", "acepta_ordenes": True, "ultimo": "México"}
+    r["info_antes"] = len(r.get("info") or [])
+    app.al_recibir_ordenes([{"n": 1, "orden": "Analizar", "proyectos": "NO EXISTE"},
+                            {"n": 2, "orden": "Analizar", "proyectos": "ntsc", "pc": ""}])
+    esperar(lambda: any(o[:2] == (2, "Hecha") or o[:2] == (2, "Error") for o in r["ordenes"]), orden_analizada, limite=600)
+
+
+@seguro
+def orden_analizada():
+    hi = interfaz.hi
+    estados = [(n, e) for n, e, _ in r["ordenes"]]
+    comprobar((1, "Rechazada") in estados and (2, "En marcha") in estados and (2, "Hecha") in estados,
+              "la orden mal escrita se rechaza y la buena se hace: %s" % r["ordenes"])
+    comprobar(len(r.get("info") or []) == r["info_antes"], "una orden de la hoja no debe abrir ventanas: %s" % r.get("info"))
+    comprobar(app.estado["proyectos"] == ["NTSC"] and app.orden_actual is None, "se analiza lo pedido: %s" % app.estado["proyectos"])
+    esperar(lambda: r["subido"], lambda: datos_subidos(hi), limite=60)
+
+
+@seguro
+def datos_subidos(hi):
+    import io
+    import zipfile
+    nombre, contenido = r["subido"][-1]
+    nombres = zipfile.ZipFile(io.BytesIO(contenido)).namelist()
+    comprobar("analisis/resumen.json" in nombres and "brutos/brutos_resultado.json" in nombres, "el zip de datos: %s" % nombres)
+    comprobar(not [n for n in nombres if not n.lower().endswith(hi.EXTENSIONES_TEXTO)], "el zip solo lleva texto: %s" % nombres)
+    e = app.estado_nube()
+    comprobar(e["acepta"] and e["actividad"] == "libre" and e["pc"], "el estado de este PC para la hoja: %s" % e)
+    r["ordenes"].clear()
+    app.al_recibir_ordenes([{"n": 3, "orden": "Detener", "pc": hi.nombre_pc()}])
+    esperar(lambda: r["ordenes"], orden_rechazada, limite=30)
+
+
+@seguro
+def orden_rechazada():
+    hi = interfaz.hi
+    comprobar(r["ordenes"] == [(3, "Rechazada", "no estaba trabajando")], "Detener sin nada en marcha: %s" % r["ordenes"])
+    hi.marcar_orden, hi.latido, hi.subir_datos, hi.actualizar = r.pop("hoja_orig2")
+    app.hoja.update(cfg={}, decisiones={})
+    (d.carpeta_base() / hi.FICHERO_CONFIG).unlink(missing_ok=True)
     disco_prueba_falso()
 
 

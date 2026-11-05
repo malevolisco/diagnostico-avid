@@ -242,3 +242,94 @@ def texto_decision(d):
     else:
         return ""
     return texto + (" (%s)" % d["quien"] if d.get("quien") else "")
+
+
+# --- el programa en la nube: estado, órdenes y datos para revisar -------------------------------------------------
+#
+# Cada minuto, con la hoja conectada, el programa apunta en la pestaña "Programa" qué hace este PC (latido) y recoge las
+# órdenes pendientes de la pestaña "Órdenes". Solo ejecuta órdenes de la lista cerrada ORDENES, y solo si en este PC se
+# ha marcado "Aceptar órdenes desde la hoja". Al terminar un análisis o una exportación sube a Drive un zip SOLO DE
+# TEXTO (zip_texto): nunca vídeo, miniaturas, capturas ni páginas que las enseñen.
+
+ORDENES = ("Analizar", "Exportar", "Detener", "Marcar HECHO", "Sincronizar")
+EXTENSIONES_TEXTO = (".json", ".csv", ".log", ".txt", ".xlsx")
+MAX_FICHERO = 25 * 1024 * 1024  # un log enorme se recorta por el final
+MAX_ZIP = 30 * 1024 * 1024
+
+
+def nombre_pc():
+    import socket
+    return os.environ.get("COMPUTERNAME") or socket.gethostname() or "PC"
+
+
+def latido(url, estado):
+    """Apunta el estado de este PC en la pestaña Programa. Devuelve las órdenes pendientes."""
+    return enviar(url, dict(estado, accion="latido"), tiempo=30).get("ordenes") or []
+
+
+def marcar_orden(url, n, estado, detalle="", pc="", desde=None):
+    """Cambia el estado de la orden n. desde: solo si sigue en ese estado (si otro PC la ha cogido, ErrorHoja)."""
+    datos = {"accion": "orden", "n": n, "estado": estado, "detalle": detalle[:500], "pc": pc}
+    if desde:
+        datos["desde"] = desde
+    return enviar(url, datos, tiempo=30)
+
+
+def proyectos_de_orden(texto):
+    """'ABORTO; CHAVELA VARGAS' → ['ABORTO', 'CHAVELA VARGAS'] (también con comas o saltos de línea)."""
+    import re
+    return [p.strip() for p in re.split(r"[;\n]|,(?=\s*[^\s])", texto or "") if p.strip()]
+
+
+def casar_proyectos(pedidos, disponibles):
+    """Los nombres pedidos, con el nombre exacto del disco (sin distinguir mayúsculas). Devuelve (encontrados, faltan)."""
+    por_clave = {d.strip().lower(): d for d in disponibles}
+    encontrados, faltan = [], []
+    for p in pedidos:
+        d = por_clave.get(p.strip().lower())
+        (encontrados if d else faltan).append(d or p)
+    return encontrados, faltan
+
+
+def _final(ruta, maximo):
+    with open(ruta, "rb") as f:
+        f.seek(0, 2)
+        tam = f.tell()
+        f.seek(max(0, tam - maximo))
+        return f.read()
+
+
+def zip_texto(carpetas):
+    """Zip en memoria con los ficheros de texto (EXTENSIONES_TEXTO) de primer nivel de esas carpetas: el análisis y la
+    carpeta de brutos. Nada de subcarpetas (miniaturas, visor), ni vídeo, ni imágenes, ni .html (enseñan capturas).
+    Devuelve (bytes, [nombres])."""
+    import io
+    import zipfile
+    buf, nombres, total = io.BytesIO(), [], 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for etiqueta, carpeta in carpetas:
+            if not carpeta or not Path(carpeta).is_dir():
+                continue
+            for f in sorted(Path(carpeta).iterdir()):
+                if not f.is_file() or f.suffix.lower() not in EXTENSIONES_TEXTO:
+                    continue
+                try:
+                    datos = _final(f, MAX_FICHERO) if f.suffix.lower() in (".log", ".txt") else f.read_bytes()
+                except OSError:
+                    continue
+                if len(datos) > MAX_FICHERO or total + len(datos) > MAX_ZIP * 4:
+                    continue  # un JSON enorme no cabe: se queda fuera (el resto sigue sirviendo)
+                nombre = "%s/%s" % (etiqueta, f.name)
+                z.writestr(nombre, datos)
+                nombres.append(nombre)
+                total += len(datos)
+    return buf.getvalue(), nombres
+
+
+def subir_datos(url, gran, disco, nombre, contenido):
+    """Sube el zip de texto a la carpeta de datos de la hoja en Drive (DiagnosticoAvid datos/<gran>/<disco>/nombre)."""
+    import base64
+    if len(contenido) > MAX_ZIP:
+        raise ErrorHoja("Los datos ocupan %d MB: demasiado para subirlos." % (len(contenido) // 2 ** 20))
+    return enviar(url, {"accion": "datos", "gran_proyecto": gran, "disco": disco, "nombre": nombre,
+                        "zip_base64": base64.b64encode(contenido).decode("ascii")}, tiempo=120)

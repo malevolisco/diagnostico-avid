@@ -19,3 +19,4 @@ config_aprendizaje_origen.json
 config_ventana.json
 config_hoja.json
 config_hoja_pendiente.json
+config_hoja_datos_pendientes/

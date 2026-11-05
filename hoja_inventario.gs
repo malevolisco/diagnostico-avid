@@ -13,7 +13,7 @@
  *    desde el propio programa). Un análisis nuevo no baja un proyecto ya exportado a "Analizado".
  */
 
-var VERSION = 1;
+var VERSION = 2;
 var CABECERA = ['Disco', 'Proyecto', 'Bins', 'Último cambio', 'Estado', 'Clips de cámara', 'Duración',
   'Lo que propone el programa', '¿Merece la pena?', 'Motivo / notas', 'Brutos exportados', 'Quién', 'Actualizado'];
 var NUESTRAS = ['¿Merece la pena?', 'Motivo / notas', 'Quién'];
@@ -25,6 +25,14 @@ var ESTADOS = ['Sin analizar', 'Analizado', 'Exportar de nuevo', 'Exportado', 'H
 var DECISIONES = ['Merece la pena', 'Descartar: entradilla', 'Descartar: falso positivo', 'Descartar: solo agencias',
   'Descartar: duplicado de otro', 'Dudas'];
 var RESUMEN = 'Resumen';
+// El programa en la nube: qué hace cada PC, las órdenes y los datos (zip solo de texto) para revisar
+var PROGRAMA = 'Programa';
+var CAB_PROGRAMA = ['PC', 'Disco', 'Gran proyecto', 'Acepta órdenes', 'Actividad', 'Progreso', 'Último aviso', 'Versión', 'Visto'];
+var ORDENES_PESTANA = 'Órdenes';
+var CAB_ORDENES = ['Nº', 'Pedida', 'Orden', 'Proyectos', 'PC', 'Pedida por', 'Estado', 'Detalle', 'Actualizado'];
+var ORDENES = ['Analizar', 'Exportar', 'Detener', 'Marcar HECHO', 'Sincronizar'];
+var ESTADOS_ORDEN = ['Pendiente', 'En marcha', 'Hecha', 'Error', 'Rechazada', 'Cancelada'];
+var CARPETA_DATOS = 'DiagnosticoAvid datos';
 
 function doGet(e) {
   return responder({ok: true, version: VERSION, pestanas: pestanas(SpreadsheetApp.getActiveSpreadsheet())});
@@ -37,7 +45,8 @@ function doPost(e) {
     var p = JSON.parse(e.postData.contents);
     var libro = SpreadsheetApp.getActiveSpreadsheet();
     var gran = String(p.gran_proyecto || '').trim();
-    if (p.accion !== 'probar' && !gran) return responder({ok: false, error: 'Falta el gran proyecto (la pestaña).'});
+    var sinGran = ['probar', 'latido', 'orden', 'nueva_orden'];
+    if (sinGran.indexOf(p.accion) < 0 && !gran) return responder({ok: false, error: 'Falta el gran proyecto (la pestaña).'});
     var r = {ok: true, version: VERSION};
     if (p.accion === 'actualizar') {
       var hoja = libro.getSheetByName(gran);
@@ -48,6 +57,18 @@ function doPost(e) {
     } else if (p.accion === 'leer') {
       var h = libro.getSheetByName(gran);
       r.filas = h ? leerDecisiones(h.getDataRange().getValues()) : [];
+    } else if (p.accion === 'latido') {
+      latido(libro, p);
+      r.ordenes = ordenesPendientes(libro);
+    } else if (p.accion === 'orden') {
+      var res = cambiarOrden(libro, p);
+      if (!res.ok) return responder(res);
+    } else if (p.accion === 'nueva_orden') {
+      var nueva = nuevaOrden(libro, p);
+      if (!nueva.ok) return responder(nueva);
+      r.n = nueva.n;
+    } else if (p.accion === 'datos') {
+      r.fichero = guardarDatos(libro, gran, p);
     } else if (p.accion !== 'probar') {
       return responder({ok: false, error: 'Acción desconocida: ' + p.accion});
     }
@@ -65,7 +86,8 @@ function responder(o) {
 }
 
 function pestanas(libro) {
-  return libro.getSheets().map(function (h) { return h.getName(); }).filter(function (n) { return n !== RESUMEN; });
+  return libro.getSheets().map(function (h) { return h.getName(); })
+    .filter(function (n) { return [RESUMEN, PROGRAMA, ORDENES_PESTANA].indexOf(n) < 0; });
 }
 
 function clave(disco, proyecto) {
@@ -227,7 +249,122 @@ function anadirAlResumen(libro, gran, E, I) {
     cuenta(I, 'Dudas'), '=B' + fila + '-COUNTA(' + t + I + '2:' + I + '5000)']]);
 }
 
+// --- el programa en la nube --------------------------------------------------------------------------------------
+
+function pestanaFija(libro, nombre, cabecera, listas) {
+  var h = libro.getSheetByName(nombre);
+  if (h) return h;
+  h = libro.insertSheet(nombre);
+  h.getRange(1, 1, 1, cabecera.length).setValues([cabecera]).setFontColor('#FFFFFF').setFontWeight('bold')
+    .setBackground('#1F3A5F').setWrap(true);
+  h.setFrozenRows(1);
+  (listas || []).forEach(function (l) {
+    var regla = SpreadsheetApp.newDataValidation().requireValueInList(l[1], true).setAllowInvalid(false).build();
+    h.getRange(2, cabecera.indexOf(l[0]) + 1, Math.max(h.getMaxRows() - 1, 1), 1).setDataValidation(regla);
+  });
+  return h;
+}
+
+function ahora() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
+}
+
+/** Una fila por PC con lo que está haciendo ahora. */
+function latido(libro, p) {
+  var h = pestanaFija(libro, PROGRAMA, CAB_PROGRAMA);
+  var pc = String(p.pc || '').trim();
+  if (!pc) return;
+  var fila = [pc, p.disco || '', p.gran_proyecto || '', p.acepta ? 'sí' : 'no', p.actividad || '', p.progreso || '',
+    p.aviso || '', p.version || '', ahora()];
+  var valores = h.getDataRange().getValues();
+  for (var i = 1; i < valores.length; i++) {
+    if (String(valores[i][0]).trim().toLowerCase() === pc.toLowerCase()) {
+      h.getRange(i + 1, 1, 1, fila.length).setValues([fila]);
+      return;
+    }
+  }
+  if (h.getMaxRows() < valores.length + 1) h.insertRowsAfter(h.getMaxRows(), 1);
+  h.getRange(valores.length + 1, 1, 1, fila.length).setValues([fila]);
+}
+
+function pestanaOrdenes(libro) {
+  return pestanaFija(libro, ORDENES_PESTANA, CAB_ORDENES, [['Orden', ORDENES], ['Estado', ESTADOS_ORDEN]]);
+}
+
+/** Las órdenes pendientes: [{n, orden, proyectos, pc, quien}]. Una fila escrita a mano sin Nº ni Estado también
+ * cuenta (se le pone el número). */
+function ordenesPendientes(libro) {
+  var h = pestanaOrdenes(libro);
+  var v = h.getDataRange().getValues();
+  var c = function (n) { return CAB_ORDENES.indexOf(n); };
+  var siguiente = 1;
+  for (var i = 1; i < v.length; i++) siguiente = Math.max(siguiente, (parseInt(v[i][c('Nº')], 10) || 0) + 1);
+  var r = [];
+  for (var j = 1; j < v.length; j++) {
+    var f = v[j];
+    if (!String(f[c('Orden')]).trim()) continue;
+    var estado = String(f[c('Estado')]).trim();
+    if (estado && estado !== 'Pendiente') continue;
+    var n = parseInt(f[c('Nº')], 10);
+    if (!n) {  // escrita a mano en la hoja: se numera y queda pendiente
+      n = siguiente++;
+      h.getRange(j + 1, c('Nº') + 1).setValue(n);
+      if (!f[c('Pedida')]) h.getRange(j + 1, c('Pedida') + 1).setValue(ahora());
+    }
+    if (!estado) h.getRange(j + 1, c('Estado') + 1).setValue('Pendiente');
+    r.push({n: n, orden: String(f[c('Orden')]).trim(), proyectos: String(f[c('Proyectos')]).trim(),
+      pc: String(f[c('PC')]).trim(), quien: String(f[c('Pedida por')]).trim()});
+  }
+  return r;
+}
+
+function cambiarOrden(libro, p) {
+  var h = pestanaOrdenes(libro);
+  var v = h.getDataRange().getValues();
+  var c = function (n) { return CAB_ORDENES.indexOf(n); };
+  for (var i = 1; i < v.length; i++) {
+    if (parseInt(v[i][c('Nº')], 10) !== Number(p.n)) continue;
+    var actual = String(v[i][c('Estado')]).trim() || 'Pendiente';
+    if (p.desde && actual !== p.desde) return {ok: false, error: 'La orden ' + p.n + ' ya está ' + actual + '.'};
+    h.getRange(i + 1, c('Estado') + 1).setValue(p.estado);
+    if (p.detalle !== undefined) h.getRange(i + 1, c('Detalle') + 1).setValue(p.detalle);
+    if (p.pc) h.getRange(i + 1, c('PC') + 1).setValue(p.pc);
+    h.getRange(i + 1, c('Actualizado') + 1).setValue(ahora());
+    return {ok: true};
+  }
+  return {ok: false, error: 'No existe la orden ' + p.n + '.'};
+}
+
+function nuevaOrden(libro, p) {
+  if (ORDENES.indexOf(p.orden) < 0) return {ok: false, error: 'Orden no válida: ' + p.orden + '. Valen: ' + ORDENES.join(', ')};
+  var h = pestanaOrdenes(libro);
+  var v = h.getDataRange().getValues();
+  var n = 1;
+  for (var i = 1; i < v.length; i++) n = Math.max(n, (parseInt(v[i][0], 10) || 0) + 1);
+  var fila = v.length + 1;
+  if (h.getMaxRows() < fila) h.insertRowsAfter(h.getMaxRows(), fila - h.getMaxRows());
+  h.getRange(fila, 1, 1, CAB_ORDENES.length).setValues([[n, ahora(), p.orden, p.proyectos || '', p.pc || '',
+    p.quien || '', 'Pendiente', '', ahora()]]);
+  return {ok: true, n: n};
+}
+
+/** El zip de texto del programa, en la carpeta de datos junto a la hoja (DiagnosticoAvid datos/<gran>/<disco>/). */
+function guardarDatos(libro, gran, p) {
+  var raiz = DriveApp.getFileById(libro.getId()).getParents();
+  var carpeta = raiz.hasNext() ? raiz.next() : DriveApp.getRootFolder();
+  [CARPETA_DATOS, gran, String(p.disco || 'disco')].forEach(function (n) {
+    var it = carpeta.getFoldersByName(n);
+    carpeta = it.hasNext() ? it.next() : carpeta.createFolder(n);
+  });
+  var nombre = String(p.nombre || 'datos.zip').replace(/[\\/]/g, '_');
+  var viejos = carpeta.getFilesByName(nombre);
+  while (viejos.hasNext()) viejos.next().setTrashed(true);
+  var blob = Utilities.newBlob(Utilities.base64Decode(p.zip_base64), 'application/zip', nombre);
+  var f = carpeta.createFile(blob);
+  return {id: f.getId(), nombre: nombre};
+}
+
 if (typeof module !== 'undefined') {  // para las pruebas (node), no en Google
   module.exports = {nuevoEstado: nuevoEstado, fusionar: fusionar, leerDecisiones: leerDecisiones, letra: letra,
-    escribir: escribir, CABECERA: CABECERA};
+    escribir: escribir, CABECERA: CABECERA, CAB_ORDENES: CAB_ORDENES};
 }

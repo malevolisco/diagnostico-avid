@@ -159,10 +159,56 @@ class Buzon(unittest.TestCase):
         with self.assertRaisesRegex(hi.ErrorHoja, "Falta el gran proyecto"):
             hi.probar(self.url)
 
+    def test_latido_y_ordenes(self):
+        self.respuesta = {"ok": True, "ordenes": [{"n": 1, "orden": "Exportar", "proyectos": "ABORTO"}]}
+        self.assertEqual(hi.latido(self.url, {"pc": "PC1", "actividad": "libre"})[0]["n"], 1)
+        self.assertEqual(self.recibido[-1]["accion"], "latido")
+        hi.marcar_orden(self.url, 1, "En marcha", "x" * 900, "PC1", desde="Pendiente")
+        self.assertEqual((self.recibido[-1]["n"], self.recibido[-1]["desde"], len(self.recibido[-1]["detalle"])), (1, "Pendiente", 500))
+
+    def test_subir_datos(self):
+        import base64
+        hi.subir_datos(self.url, "México", "DISCO_F", "a.zip", b"PK\x03\x04")
+        self.assertEqual(base64.b64decode(self.recibido[-1]["zip_base64"]), b"PK\x03\x04")
+        with self.assertRaises(hi.ErrorHoja):
+            hi.subir_datos(self.url, "México", "D", "a.zip", b"0" * (hi.MAX_ZIP + 1))
+
     def test_direccion_que_no_es_el_buzon(self):
         self.respuesta = "<html>"  # contesta otra cosa (una página de Google, por ejemplo)
         with self.assertRaisesRegex(hi.ErrorHoja, "no es la del buzón"):
             hi.probar(self.url)
+
+class Nube(unittest.TestCase):
+    """El programa en la nube: órdenes y el zip de datos (solo texto)."""
+
+    def test_proyectos_de_una_orden(self):
+        self.assertEqual(hi.proyectos_de_orden("ABORTO; chavela vargas,PANAMA 2019\nX"), ["ABORTO", "chavela vargas", "PANAMA 2019", "X"])
+        self.assertEqual(hi.proyectos_de_orden(""), [])
+        self.assertEqual(hi.casar_proyectos(["chavela vargas", "NO"], ["CHAVELA VARGAS", "ABORTO"]), (["CHAVELA VARGAS"], ["NO"]))
+
+    def test_zip_solo_de_texto(self):
+        import io
+        import zipfile
+        d = Path(tempfile.mkdtemp())
+        try:
+            a, b = d / "Diagnostico_F", d / "brutos"
+            for c in (a / "miniaturas", a / "visor", b):
+                c.mkdir(parents=True)
+            for f in ("resumen.json", "inventario.csv", "diagnostico.log", "informe.html", "proyectos.html"):
+                (a / f).write_text("x", encoding="utf-8")
+            (a / "miniaturas" / "c.jpg").write_bytes(b"\xff\xd8")
+            (a / "visor" / "v.json").write_text("{}", encoding="utf-8")
+            for f in ("brutos_resultado.json", "exportacion.log", "A_shotlist.xlsx", "A_ficha.txt", "A_contactos.html"):
+                (b / f).write_text("x", encoding="utf-8")
+            (b / "A.mxf").write_bytes(b"\x06\x0e")
+            datos, nombres = hi.zip_texto([("analisis", a), ("brutos", b), ("nada", d / "no_existe")])
+            self.assertEqual(sorted(nombres), sorted(zipfile.ZipFile(io.BytesIO(datos)).namelist()))
+            self.assertEqual(sorted(nombres), ["analisis/diagnostico.log", "analisis/inventario.csv", "analisis/resumen.json",
+                                               "brutos/A_ficha.txt", "brutos/A_shotlist.xlsx", "brutos/brutos_resultado.json",
+                                               "brutos/exportacion.log"])
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

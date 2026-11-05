@@ -393,6 +393,46 @@ Todo seguido, sin pasar por Montaje ni Exportar: en la página Disco, abre
 "Analizar disco". Usa los ajustes guardados como predeterminados y no
 exporta los brutos de piezas.
 
+Hoja de inventario (Google): lo hecho, lo que falta y lo que merece la pena
+------------------------------------------------------------------------
+Una hoja de Google con una pestaña por gran proyecto (México, China...) y
+una fila por proyecto de Avid. El programa apunta solo lo que analiza y
+exporta (columnas de cabecera azul: estado, clips de cámara, duración,
+propuesta, brutos exportados; lo exportado sale en verde). Vosotros
+escribís en las de cabecera ocre (¿Merece la pena?, Motivo / notas, Quién)
+y podéis cambiar el Estado a mano (HECHO, Descartado): el programa no lo
+pisa nunca. A la hoja solo va texto: nombres, cifras y estados. Nunca
+imágenes ni vídeo.
+
+Lo decidido en la hoja vale en el programa: en "Elegir proyectos" los
+descartados y los HECHOS no entran solos (se pueden marcar a mano), los
+que merecen la pena salen con una estrella (y un botón para elegir solo
+esos), y en Exportar los brutos de un proyecto descartado salen sin marcar.
+
+Prepararla (una sola vez, unos 5 minutos):
+1. Abre la hoja en Google Drive. Menú Extensiones -> Apps Script.
+2. Borra lo que haya y pega todo el contenido del fichero
+   hoja_inventario.gs (está junto a DiagnosticoAvid.exe; ábrelo con el
+   Bloc de notas). Guarda (icono del disquete).
+3. Botón "Implementar" -> "Nueva implementación". En el engranaje elige
+   "Aplicación web". Ejecutar como: "Yo". Quién tiene acceso: "Cualquier
+   usuario". Pulsa "Implementar" y acepta los permisos que pide Google
+   (es tu propia hoja; si avisa de "aplicación no verificada", pulsa
+   "Configuración avanzada" -> "Ir a ...").
+4. Copia la "URL de la aplicación web" (empieza por
+   https://script.google.com/ y acaba en /exec).
+5. En el programa, página 1 · Disco, "Hoja de inventario" -> "Conectar...":
+   pega la dirección, pulsa "Probar la conexión", escribe o elige el gran
+   proyecto de ese disco (la pestaña: México, China...) y "Guardar".
+   Cada disco recuerda su gran proyecto; uno nuevo usa el último. Una
+   pestaña nueva se crea sola, con su fila en el Resumen.
+
+Esa dirección deja escribir en la hoja: no la compartas fuera del equipo.
+Si al actualizar el buzón (otra versión de hoja_inventario.gs) cambias el
+código, en "Implementar" -> "Gestionar implementaciones" edita la que hay
+y elige "Nueva versión": así la dirección no cambia.
+Sin conexión no pasa nada: el programa sigue y lo apunta la próxima vez.
+
 Si hay que pararlo (por ejemplo, se acaba la jornada)
 -----------------------------------------------------
 Pulsa "Detener" (en la página Disco si está analizando, en Exportar si está

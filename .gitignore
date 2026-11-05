@@ -17,3 +17,5 @@ config_brutos.json
 config_origen.json
 config_aprendizaje_origen.json
 config_ventana.json
+config_hoja.json
+config_hoja_pendiente.json

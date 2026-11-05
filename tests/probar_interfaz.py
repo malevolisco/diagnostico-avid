@@ -166,6 +166,65 @@ def selector_abierto(listar, dialogo):
     d.listar_proyectos, d.dialogo_proyectos = listar, dialogo
     comprobar(len(r["selector_luego"]) == 10 and not app.abrir_selector and app.raiz.cget("cursor") == "",
               "la lista debe abrirse sola al terminar de leer: %s" % r["selector_luego"])
+    hoja_de_inventario()
+
+
+@seguro
+def hoja_de_inventario():
+    """Hoja de inventario con un buzón falso: Conectar… guarda la dirección y el gran proyecto del disco; lo descartado y lo
+    HECHO en la hoja no entra solo en la selección; al terminar se apunta en la hoja."""
+    hi = interfaz.hi
+    nombres = [p["nombre"] for p in app.vista_disco["lista"]]
+    descartado, bueno = nombres[0], nombres[1]
+    enviado = r.setdefault("hoja_enviado", [])
+    orig = hi.probar, hi.leer, hi.actualizar
+    hi.probar = lambda url: ["México"]
+    hi.leer = lambda url, gran: {descartado: {"proyecto": descartado, "estado": "Analizado", "decision": "Descartar: entradilla", "quien": "A"},
+                                 bueno: {"proyecto": bueno, "estado": "", "decision": "Merece la pena"}}
+    hi.actualizar = lambda url, base, gran, filas: enviado.append((gran, filas)) or {"nuevas": len(filas)}
+    r["hoja_orig"] = orig
+    v = app.conectar_hoja()
+    v.url.set("https://script.google.com/macros/s/prueba/exec")
+    v.probar()
+    v.gran.set("México")
+    captura("1_hoja.png", v)
+    v.guardar()
+    comprobar(app.gran_actual() == "México" and "México" in app.lbl_hoja.cget("text"), "la hoja debe quedar conectada: %r" % app.lbl_hoja.cget("text"))
+    esperar(lambda: app.hoja["decisiones"] and enviado, lambda: hoja_leida(descartado, bueno), limite=60)
+
+
+@seguro
+def hoja_leida(descartado, bueno):
+    hi = interfaz.hi
+    p = app.estado["proyectos"] or []
+    comprobar(descartado not in p and bueno in p, "lo descartado en la hoja no debe entrar solo: %s" % p)
+    gran, filas = r["hoja_enviado"][-1]
+    comprobar(gran == "México" and {f["proyecto"] for f in filas} >= {descartado, bueno}, "se deben apuntar los proyectos en la hoja: %s" % filas[:2])
+    comprobar(all(set(f) <= {"disco", "proyecto", "bins", "ultimo_cambio", "estado", "actualizado", "clips", "duracion", "propuesta",
+                             "brutos", "forzar_estado"} for f in filas), "a la hoja solo va texto y cifras: %s" % filas[:1])
+    # el selector enseña lo de la hoja y deja el descartado sin marcar
+    dialogo = d.dialogo_proyectos
+
+    def selector(raiz, lista, marcados, *a, **k):
+        r["selector_hoja"] = (marcados, k.get("hoja") if "hoja" in k else a[-1])
+        return None
+    d.dialogo_proyectos = selector
+    app.elegir_proyectos()
+    d.dialogo_proyectos = dialogo
+    marcados, hoja = r.get("selector_hoja") or (None, None)
+    comprobar(marcados is None and hoja and hi.descartado(hoja.get(descartado)), "el selector debe recibir lo de la hoja: %s" % (r.get("selector_hoja"),))
+    # vuelta a como estaba: sin hoja (el resto de la prueba no la usa)
+    hi.probar, hi.leer, hi.actualizar = r.pop("hoja_orig")
+    (d.carpeta_base() / hi.FICHERO_CONFIG).unlink(missing_ok=True)
+    app.hoja.update(cfg={}, decisiones={})
+    app.estado.update(proyectos=None, auto=False)
+    app.pintar_hoja()
+    app.pintar_proyectos()
+    esperar(lambda: app.vista_disco["lista"] is not None and not app.vista_disco["leyendo"], informe_preliminar, limite=60)
+
+
+@seguro
+def informe_preliminar():
     # Informe preliminar: qué hay en cada carpeta del disco
     comprobar(app.bt_que_hay.cget("text").strip().endswith("Informe preliminar"), "el botón debe llamarse Informe preliminar")
     app.bt_que_hay.invoke()

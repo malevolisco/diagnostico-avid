@@ -23,6 +23,7 @@ import traceback
 import webbrowser
 from pathlib import Path
 
+import hoja_inventario as hi
 import tema
 import ventana_montaje as vm
 import ventana_origen as vo
@@ -127,6 +128,8 @@ class App:
         self.exp = None  # datos de la página Exportar: clave, resumen, cfg, marcados, estados, resultados
         # Proyectos del disco elegido, leídos solos al elegirlo (listar_proyectos): el botón "Elegir proyectos" los reutiliza
         self.vista_disco = {"origen": None, "lista": None, "turno": 0, "leyendo": False}
+        # Hoja de inventario (hoja_inventario.py): la dirección del buzón, el gran proyecto de cada disco y lo decidido en ella
+        self.hoja = {"cfg": hi.leer_config(self.da.carpeta_base()), "decisiones": {}}
         self.abrir_selector = False  # "Elegir proyectos" pulsado mientras se leían: la lista se abre sola al terminar
         self.espera_disco = None
         self.v_que_hay = None  # ventana del informe preliminar (qué hay en el disco)
@@ -261,8 +264,10 @@ class App:
 
     def cambio_carpetas(self, proyectos=False):
         self.guardar_carpetas()
+        self.pintar_hoja()  # el gran proyecto es de cada disco
         if proyectos:
             self.estado["proyectos"] = None
+            self.estado["auto"] = False
             self.pintar_proyectos()
             self.programar_vista_disco()
         if self.pagina == "disco":
@@ -300,6 +305,11 @@ class App:
         self.bt_quitar_extra = ttk.Button(caja, text="Quitar", style="Fantasma.TButton", command=self.quitar_media)
         self.bt_quitar_extra.pack(side="left", padx=(6, 0))
         self.pintar_media_extra()
+        ttk.Label(t, text="Hoja de inventario", style="Tarjeta.TLabel", width=16 if self.compacto else 18).grid(row=fila_extra + 1, column=0, sticky="w", pady=4)
+        self.lbl_hoja = ttk.Label(t, text="", style="Tarjeta.Suave.TLabel")
+        self.lbl_hoja.grid(row=fila_extra + 1, column=1, sticky="w", pady=4)
+        ttk.Button(t, text="Conectar…", command=self.conectar_hoja).grid(row=fila_extra + 1, column=2, sticky="w", padx=(8, 0))
+        self.pintar_hoja()
         t.columnconfigure(1, weight=1)
 
         # Lo que hay en el disco, y al lado el informe preliminar (qué hay en cada carpeta), antes de elegir y analizar
@@ -600,11 +610,19 @@ class App:
 
         extras = list(self.estado["media_extra"])
 
+        url, gran = self.hoja["cfg"].get("url"), self.gran_actual()
+        self.hoja["decisiones"] = {}
+
         def leer():
             try:
                 self.cola.put(("vista_disco", (turno, origen, listar_todos(da, origen, extras), None)))
             except Exception as e:
                 self.cola.put(("vista_disco", (turno, origen, None, str(e))))
+            if url and gran:  # lo decidido en la hoja (descartados, HECHOS, merece la pena), si hay conexión
+                try:
+                    self.cola.put(("hoja_leida", (turno, hi.leer(url, gran), None)))
+                except Exception as e:
+                    self.cola.put(("hoja_leida", (turno, None, str(e))))
         threading.Thread(target=leer, daemon=True).start()
 
     def al_leer_disco(self, turno, origen, lista, error):
@@ -617,16 +635,184 @@ class App:
             return
         self.vista_disco.update(origen=origen, lista=lista)
         self.lbl_disco.configure(text=resumen_disco(lista), style="TLabel" if lista else "Aviso.TLabel")
-        # los proyectos marcados como HECHOS no entran salvo que se elijan a mano
-        terminados = self.da.leer_hechos(self.brutos.get()) if self.brutos.get() else {}
-        if terminados and self.estado["proyectos"] is None and lista:
-            todos = [p["nombre"] for p in lista] + ["SIN_PROYECTO"]
-            self.estado["total_proyectos"] = len(todos)
-            self.estado["proyectos"] = [n for n in todos if n not in terminados]
-            self.pintar_proyectos()
+        self.seleccion_automatica()
         if self.abrir_selector:
             self.esperar_selector(False)
             self.elegir_proyectos()
+
+    def fuera_de_entrada(self):
+        """Proyectos que no entran salvo que se elijan a mano: los HECHOS (del programa o de la hoja) y los descartados en la hoja."""
+        fuera = set(self.da.leer_hechos(self.brutos.get()) if self.brutos.get() else {})
+        for n, d in self.hoja["decisiones"].items():
+            if d.get("estado") == "HECHO" or hi.descartado(d):
+                fuera.add(n)
+        return fuera
+
+    def seleccion_automatica(self):
+        """Sin haber elegido aún a mano: todos los proyectos del disco menos los HECHOS y los descartados."""
+        lista = self.vista_disco["lista"] if self.vista_disco["origen"] == self.origen.get() else None
+        if not lista or not (self.estado["proyectos"] is None or self.estado.get("auto")):
+            return
+        fuera = self.fuera_de_entrada()
+        if not fuera and self.estado["proyectos"] is None:
+            return
+        todos = [p["nombre"] for p in lista] + ["SIN_PROYECTO"]
+        self.estado["total_proyectos"] = len(todos)
+        self.estado["proyectos"] = [n for n in todos if n not in fuera]
+        self.estado["auto"] = True
+        self.pintar_proyectos()
+
+    def al_leer_hoja(self, turno, decisiones, error):
+        if turno != self.vista_disco["turno"]:
+            return
+        if error is not None:
+            self.escribe("Hoja de inventario: no se ha podido leer (%s). Se sigue sin ella." % error)
+            return
+        self.hoja["decisiones"] = decisiones
+        n_fuera = sum(1 for d in decisiones.values() if hi.descartado(d))
+        self.escribe("Hoja de inventario (%s): %d proyectos%s." % (self.gran_actual(), len(decisiones),
+                                                                   ", %d descartados (no se proponen)" % n_fuera if n_fuera else ""))
+        self.seleccion_automatica()
+
+    # --- hoja de inventario ----------------------------------------------------------------------------------------
+
+    def disco_id(self):
+        o = self.origen.get()
+        return self.da.nombre_cache(o, Path(o).name or o) if o else ""
+
+    def gran_actual(self):
+        cfg = self.hoja["cfg"]
+        return hi.gran_proyecto(cfg, self.disco_id()) if cfg.get("url") and self.origen.get() else ""
+
+    def pintar_hoja(self):
+        if not hasattr(self, "lbl_hoja"):
+            return
+        if not self.hoja["cfg"].get("url"):
+            texto = "sin conectar" if self.compacto else "sin conectar (opcional: lleva el inventario en una hoja de Google)"
+        elif not self.origen.get():
+            texto = "conectada"
+        else:
+            gran = self.gran_actual()
+            texto = ("pestaña %s" % gran) if gran else "conectada: falta elegir el gran proyecto (Conectar…)"
+        self.lbl_hoja.configure(text=texto)
+
+    def conectar_hoja(self):
+        """La dirección del buzón de la hoja y el gran proyecto (pestaña) de este disco."""
+        import tkinter as tk
+        from tkinter import messagebox
+        ttk = self.ttk
+        cfg = self.hoja["cfg"]
+        v = tk.Toplevel(self.raiz)
+        v.title("Hoja de inventario")
+        v.configure(bg=tema.FONDO)
+        v.transient(self.raiz)
+        caja = ttk.Frame(v, padding=18)
+        caja.pack(fill="both", expand=True)
+        ttk.Label(caja, text="Hoja de inventario", font=(tema.LETRA, 14, "bold")).grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(caja, text="El programa apunta en la hoja lo que analiza y exporta (solo texto: nombres, cifras y estados; nunca "
+                             "imágenes ni vídeo) y lee lo que decidís en ella: los descartados no se proponen y los HECHOS salen en "
+                             "verde. Cómo preparar la hoja: INSTRUCCIONES.txt, \"Hoja de inventario\".", style="Suave.TLabel",
+                  wraplength=560, justify="left").grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 12))
+        url = tk.StringVar(value=cfg.get("url", ""))
+        gran = tk.StringVar(value=self.gran_actual() or cfg.get("ultimo", ""))
+        ttk.Label(caja, text="Dirección del buzón").grid(row=2, column=0, sticky="w", pady=4, padx=(0, 12))
+        ttk.Entry(caja, textvariable=url, width=60).grid(row=2, column=1, sticky="ew", pady=4)
+        ttk.Label(caja, text="Gran proyecto de este disco").grid(row=3, column=0, sticky="w", pady=4, padx=(0, 12))
+        combo = ttk.Combobox(caja, textvariable=gran, width=30, values=[g for g in (cfg.get("pestanas") or [])])
+        combo.grid(row=3, column=1, sticky="w", pady=4)
+        ttk.Label(caja, text="la pestaña: México, China… (una nueva se crea sola)" if self.origen.get() else
+                  "elige antes el disco en 1 · Disco", style="Suave.TLabel").grid(row=4, column=1, sticky="w")
+        lbl = ttk.Label(caja, text="", style="Suave.TLabel", wraplength=560, justify="left")
+        lbl.grid(row=5, column=0, columnspan=3, sticky="w", pady=(10, 0))
+
+        def probar():
+            lbl.configure(text="Probando la conexión…", style="Suave.TLabel")
+            v.configure(cursor="watch")
+            v.update()
+            try:
+                pestanas = hi.probar(url.get())
+                combo.configure(values=pestanas)
+                cfg["pestanas"] = pestanas
+                lbl.configure(text="Conectada. Pestañas: %s." % (", ".join(pestanas) or "ninguna aún"), style="Bien.TLabel")
+                return True
+            except hi.ErrorHoja as e:
+                lbl.configure(text=str(e), style="Aviso.TLabel")
+                return False
+            finally:
+                v.configure(cursor="")
+
+        def guardar():
+            nuevo = dict(cfg, url=url.get().strip())
+            if nuevo["url"]:
+                try:
+                    hi.comprobar_url(nuevo["url"])
+                except hi.ErrorHoja as e:
+                    return lbl.configure(text=str(e), style="Aviso.TLabel")
+            g = gran.get().strip()
+            if g and self.origen.get():
+                if g.lower() == "resumen":
+                    return lbl.configure(text="«Resumen» es la pestaña del resumen: el gran proyecto necesita otro nombre.", style="Aviso.TLabel")
+                nuevo = hi.poner_gran_proyecto(nuevo, self.disco_id(), g)
+            try:
+                hi.guardar_config(self.da.carpeta_base(), nuevo)
+            except OSError as e:
+                return messagebox.showerror("Hoja de inventario", "No se ha podido guardar: %s" % e, parent=v)
+            self.hoja["cfg"] = nuevo
+            v.destroy()
+            self.pintar_hoja()
+            if nuevo.get("url") and self.gran_actual():
+                self.programar_vista_disco()  # se lee lo decidido en la hoja
+                self.sincronizar_hoja()  # y se apunta lo que ya hay
+
+        def desconectar():
+            nuevo = {k: x for k, x in cfg.items() if k != "url"}
+            hi.guardar_config(self.da.carpeta_base(), nuevo)
+            self.hoja.update(cfg=nuevo, decisiones={})
+            v.destroy()
+            self.pintar_hoja()
+        pie = ttk.Frame(caja)
+        pie.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(16, 0))
+        ttk.Button(pie, text="Probar la conexión", command=probar).pack(side="left")
+        if cfg.get("url"):
+            ttk.Button(pie, text="Desconectar", style="Fantasma.TButton", command=desconectar).pack(side="left", padx=6)
+        ttk.Button(pie, text="Guardar", style="Elegido.TButton", command=guardar).pack(side="right")
+        ttk.Button(pie, text="Cancelar", style="Fantasma.TButton", command=v.destroy).pack(side="right", padx=6)
+        caja.columnconfigure(1, weight=1)
+        v.probar, v.guardar, v.url, v.gran = probar, guardar, url, gran  # para las pruebas
+        v.grab_set()
+        return v
+
+    def sincronizar_hoja(self, quitados_hecho=()):
+        """Apunta en la hoja el estado de los proyectos del disco (por detrás; un fallo no para nada: se manda la próxima vez)."""
+        url, gran, origen = self.hoja["cfg"].get("url"), self.gran_actual(), self.origen.get()
+        if not url or not gran or not origen:
+            return
+        da = self.da
+        lista = self.vista_disco["lista"] if self.vista_disco["origen"] == origen else None
+        extras = list(self.estado["media_extra"])
+        carpeta = self.analisis_actual()
+        triaje = list(self.triaje_actual(carpeta).values())
+        brutos = self.brutos.get()
+        resultados, hechos = None, {}
+        if brutos and Path(brutos).is_dir():
+            try:
+                resultados = json.loads((Path(brutos) / "brutos_resultado.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                resultados = []
+            hechos = da.leer_hechos(brutos)
+        base = da.carpeta_base()
+
+        def hilo():
+            try:
+                todos = lista if lista is not None else listar_todos(da, origen, extras)
+                filas = hi.filas_inventario(todos, [origen] + extras, triaje, resultados, hechos, quitados_hecho)
+                r = hi.actualizar(url, base, gran, filas)
+                self.cola.put(("log", "Hoja de inventario: %d proyectos al día en la pestaña %s%s."
+                               % (len(filas), gran, " (%d nuevos)" % r["nuevas"] if r.get("nuevas") else "")))
+            except Exception as e:
+                da.LOG.warning("Hoja de inventario: %s", e)
+                self.cola.put(("log", "Hoja de inventario: no se ha podido actualizar (%s). Se manda la próxima vez." % e))
+        threading.Thread(target=hilo, daemon=True).start()
 
     def esperar_selector(self, si):
         """Mientras se leen los proyectos del disco, "Elegir proyectos" no bloquea la ventana: espera a que acabe."""
@@ -641,9 +827,8 @@ class App:
             self.bt_analizar.configure(text="Analizar todo el disco")
         else:
             self.bt_proy.configure(text="☰  Elegir proyectos: %d de %d" % (len(p), self.estado.get("total_proyectos", len(p))))
-            terminados = self.da.leer_hechos(self.brutos.get()) if self.brutos.get() else {}
-            fuera = len([n for n in terminados if n not in p])
-            texto = ("%d HECHO%s, fuera. " % (fuera, "" if fuera == 1 else "S") if fuera else "") + "Solo " + ", ".join(p)
+            fuera = len([n for n in self.fuera_de_entrada() if n not in p])
+            texto = ("%d HECHOS o descartados, fuera. " % fuera if fuera > 1 else "1 HECHO o descartado, fuera. " if fuera else "") + "Solo " + ", ".join(p)
             self.lbl_proy.configure(text=texto[:90] + ("…" if len(texto) > 90 else ""))
             self.bt_analizar.configure(text="Analizar %d proyecto%s" % (len(p), "" if len(p) == 1 else "s"))
 
@@ -767,11 +952,21 @@ class App:
         hechos = da.brutos_hechos(self.brutos.get()) if self.brutos.get() else set()
         carpeta_brutos = self.brutos.get()
         terminados = da.leer_hechos(carpeta_brutos) if carpeta_brutos else {}  # marcados a mano como HECHOS
-        al_marcar = (lambda nombres, hecho: da.marcar_hechos(carpeta_brutos, nombres, hecho)) if carpeta_brutos else None
-        elegidos = da.dialogo_proyectos(self.raiz, lista, self.estado["proyectos"], hechos, self.triaje_actual(carpeta),
-                                        self.analizados([p["nombre"] for p in lista] + ["SIN_PROYECTO"], carpeta), terminados, al_marcar)
+        cambiados = {"hechos": set(), "quitados": set()}
+
+        def al_marcar(nombres, hecho):
+            cambiados["hechos" if hecho else "quitados"].update(nombres)
+            cambiados["quitados" if hecho else "hechos"].difference_update(nombres)
+            return da.marcar_hechos(carpeta_brutos, nombres, hecho)
+        marcados = self.estado["proyectos"] if not self.estado.get("auto") else None
+        elegidos = da.dialogo_proyectos(self.raiz, lista, marcados, hechos, self.triaje_actual(carpeta),
+                                        self.analizados([p["nombre"] for p in lista] + ["SIN_PROYECTO"], carpeta), terminados,
+                                        al_marcar if carpeta_brutos else None, self.hoja["decisiones"])
+        if cambiados["hechos"] or cambiados["quitados"]:  # HECHO marcado o quitado: a la hoja también
+            self.sincronizar_hoja(sorted(cambiados["quitados"]))
         if elegidos is None:
             return
+        self.estado["auto"] = False
         todos = [p["nombre"] for p in lista] + ["SIN_PROYECTO"]
         self.estado["total_proyectos"] = len(todos)
         self.estado["proyectos"] = None if set(elegidos) >= set(todos) else elegidos
@@ -1158,7 +1353,8 @@ class App:
             self.raiz.configure(cursor="")
         anterior = self.exp or {}
         piezas = bool(cfg.get("exportar_piezas", False))
-        marcados = {f["nombre"] for f in resumen["filas"] if piezas or f["tipo"] != "piezas"}
+        decisiones = self.hoja["decisiones"]  # los descartados en la hoja salen sin marcar
+        marcados = {f["nombre"] for f in resumen["filas"] if (piezas or f["tipo"] != "piezas") and not hi.descartado(decisiones.get(f["proyecto"]))}
         if anterior.get("carpeta") == str(carpeta):  # mismo análisis: se respetan las casillas tocadas a mano
             marcados = {n for n in marcados if n not in anterior["desmarcados"]} | (anterior["marcados"] & {f["nombre"] for f in resumen["filas"]})
         self.exp = {"clave": clave, "carpeta": str(carpeta), "resumen": resumen, "cfg": anterior.get("cfg") or cfg, "marcados": marcados,
@@ -1415,6 +1611,9 @@ class App:
                 if tipo == "vista_disco":
                     self.al_leer_disco(*msg)
                     continue
+                if tipo == "hoja_leida":
+                    self.al_leer_hoja(*msg)
+                    continue
                 if tipo == "que_hay":
                     self.pintar_que_hay(*msg)
                     continue
@@ -1438,6 +1637,8 @@ class App:
                 if self.estado["cerrar"]:  # se pidió cerrar la ventana mientras trabajaba
                     self.raiz.destroy()
                     return
+                if tipo in ("fin", "detenido_brutos", "exportado"):
+                    self.sincronizar_hoja()  # lo analizado y exportado, a la hoja de inventario
                 if tipo in ("fin", "detenido_brutos"):
                     self.pintar_ultimo()
                     if self.exp:

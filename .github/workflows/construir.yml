@@ -54,6 +54,7 @@ jobs:
         run: |
           $env:PATH = "$PWD\bin;" + $env:PATH
           python -m unittest discover -s tests -v
+          node tests/test_hoja_inventario.js
 
       - name: Número de build
         shell: pwsh
@@ -64,7 +65,7 @@ jobs:
           Get-Content build.txt
 
       - name: Construir ejecutable
-        run: pyinstaller --noconfirm --clean --noconsole --onedir --name DiagnosticoAvid --add-data "bin;bin" --add-data "build.txt;." --hidden-import interfaz --hidden-import tema --hidden-import ventana_montaje --hidden-import ventana_origen --hidden-import aprendizaje --hidden-import montaje --hidden-import mxf_util --hidden-import lecturas --hidden-import procesos --paths tests --hidden-import crear_disco_prueba --hidden-import dv_prueba diagnostico_avid.py
+        run: pyinstaller --noconfirm --clean --noconsole --onedir --name DiagnosticoAvid --add-data "bin;bin" --add-data "build.txt;." --hidden-import interfaz --hidden-import tema --hidden-import ventana_montaje --hidden-import ventana_origen --hidden-import aprendizaje --hidden-import montaje --hidden-import mxf_util --hidden-import lecturas --hidden-import procesos --hidden-import hoja_inventario --paths tests --hidden-import crear_disco_prueba --hidden-import dv_prueba diagnostico_avid.py
 
       - name: Disco de prueba simulado
         shell: pwsh
@@ -226,6 +227,7 @@ jobs:
         run: |
           Remove-Item dist/DiagnosticoAvid/config_*.json -ErrorAction SilentlyContinue  # los crea la prueba; no van en el portable
           Copy-Item INSTRUCCIONES.txt dist/DiagnosticoAvid/
+          Copy-Item hoja_inventario.gs dist/DiagnosticoAvid/  # el buzón que se pega en la hoja de inventario
           Copy-Item licencias dist/DiagnosticoAvid/ -Recurse
           Compress-Archive -Path dist/DiagnosticoAvid -DestinationPath DiagnosticoAvid_portable.zip -CompressionLevel Optimal
           Compress-Archive -Path salida/* -DestinationPath informe_prueba.zip -CompressionLevel Optimal

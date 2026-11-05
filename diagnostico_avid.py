@@ -3231,20 +3231,24 @@ def texto_triaje(t):
                                              fmt_duracion(t.get("segundos")), ", %d SIN AUDIO" % t["sin_audio"] if t.get("sin_audio") else "")
 
 
-def dialogo_proyectos(raiz, lista, marcados, hechos=(), triaje=None, analizados=None, terminados=None, al_marcar=None):
+def dialogo_proyectos(raiz, lista, marcados, hechos=(), triaje=None, analizados=None, terminados=None, al_marcar=None, hoja=None):
     """Ventana con la tabla de proyectos para marcar los que se quieren hacer. Devuelve los nombres elegidos (en el orden
     de la lista) o None si se cancela. marcados: los elegidos antes (None = todos menos los HECHOS). triaje: {proyecto:
     fila de triaje.json} del último análisis (qué proyectos restaurar): sale en la columna Propuesta y da el botón "Solo
     los de material". analizados: {proyecto: fecha} de los que ya están en el análisis guardado ("analizado": no hace
     falta repetirlo). terminados: {proyecto: fecha} de los marcados a mano como HECHOS: en verde y sin marcar (se pueden
     marcar para hacerlos otra vez). al_marcar(nombres, hecho) guarda la marca y devuelve los terminados nuevos (None: sin
-    carpeta de brutos, no se puede marcar).
+    carpeta de brutos, no se puede marcar). hoja: {proyecto: lo decidido en la hoja de inventario}: los descartados salen
+    sin marcar, los HECHOS de la hoja en verde y los que merecen la pena con una estrella.
     Tabla con casilla, proyecto, bins, último cambio, propuesta y estado; clic (o Espacio) marca o desmarca; buscador;
     clic en el título de una columna ordena por ella."""
     import tkinter as tk
     from tkinter import ttk
     import tema
-    triaje, analizados, terminados = triaje or {}, analizados or {}, dict(terminados or {})
+    import hoja_inventario
+    triaje, analizados, terminados, hoja = triaje or {}, analizados or {}, dict(terminados or {}), hoja or {}
+    hecho_hoja = lambda n: (hoja.get(n) or {}).get("estado") == "HECHO"
+    fuera = lambda n: n in terminados or hecho_hoja(n) or hoja_inventario.descartado(hoja.get(n))  # no entran solos
     fecha = lambda f: "%s/%s/%s" % (f[8:10], f[5:7], f[:4]) if f and len(f) >= 10 else ""
     filas = [(p["nombre"], {"bins": "carpeta" if p.get("sin_avid") else str(p["bins"]), "cambio": (p.get("modificado") or "")[:10],
                             "propuesta": texto_triaje(triaje.get(p["nombre"])).strip(" ·")}) for p in lista]
@@ -3252,10 +3256,11 @@ def dialogo_proyectos(raiz, lista, marcados, hechos=(), triaje=None, analizados=
                                    "clips que no están en ningún bin"}))
 
     def estado(n):
+        de_hoja = hoja_inventario.texto_decision(hoja.get(n))
         if n in terminados:
             return "✔ HECHO el %s" % fecha(terminados[n])
         partes = (["analizado el %s" % fecha(str(analizados[n]))] if n in analizados else []) + (["con brutos"] if n in hechos else [])
-        return " · ".join(partes)
+        return " · ".join(([de_hoja] if de_hoja else []) + partes)
 
     v = tk.Toplevel(raiz)
     v.title("Elegir proyectos")
@@ -3273,7 +3278,8 @@ def dialogo_proyectos(raiz, lista, marcados, hechos=(), triaje=None, analizados=
     ttk.Label(cab, text="Buscar", style="Suave.TLabel").pack(side="right", padx=6)
     ttk.Label(v, text="Se analizan y exportan solo los marcados; los demás se pueden hacer otro día con la misma carpeta de brutos."
                       + (" La propuesta es la del último análisis (Qué proyectos restaurar)." if triaje else "")
-                      + (" Los analizados están guardados: no hace falta repetirlos." if analizados else ""),
+                      + (" Los analizados están guardados: no hace falta repetirlos." if analizados else "")
+                      + (" Lo de la hoja de inventario (descartados, HECHOS, merece la pena) sale en Estado." if hoja else ""),
               style="Suave.TLabel", wraplength=ancho_v - 40, padding=(16, 0, 16, 8)).pack(anchor="w")
 
     caja = ttk.Frame(v, padding=(16, 0))
@@ -3295,7 +3301,7 @@ def dialogo_proyectos(raiz, lista, marcados, hechos=(), triaje=None, analizados=
     tv.configure(yscrollcommand=sb.set)
     tv.pack(side="left", fill="both", expand=True)
     sb.pack(side="right", fill="y")
-    elegidos = {n for n, _ in filas if (marcados is None and n not in terminados) or (marcados is not None and n in marcados)}
+    elegidos = {n for n, _ in filas if (marcados is None and not fuera(n)) or (marcados is not None and n in marcados)}
     orden = {"col": None, "inverso": False}
 
     def valores(i):
@@ -3304,7 +3310,7 @@ def dialogo_proyectos(raiz, lista, marcados, hechos=(), triaje=None, analizados=
 
     def pintar(i):
         n = filas[i][0]
-        tv.item(str(i), values=valores(i), tags=("hecho",) if n in terminados else ("marcado",) if n in elegidos else ("libre",))
+        tv.item(str(i), values=valores(i), tags=("hecho",) if n in terminados or hecho_hoja(n) else ("marcado",) if n in elegidos else ("libre",))
 
     def pintar_todo():
         texto = busca.get().strip().lower()
@@ -3370,9 +3376,12 @@ def dialogo_proyectos(raiz, lista, marcados, hechos=(), triaje=None, analizados=
 
     pie = ttk.Frame(v, padding=(16, 10, 16, 6))
     pie.pack(fill="x")
-    ttk.Button(pie, text="Todos", command=lambda: poner(n for n, _ in filas if n not in terminados)).pack(side="left")  # los HECHOS no
+    ttk.Button(pie, text="Todos", command=lambda: poner(n for n, _ in filas if not fuera(n))).pack(side="left")  # los HECHOS y descartados no
     ttk.Button(pie, text="Ninguno", command=lambda: poner(())).pack(side="left", padx=6)
-    ttk.Button(pie, text="Solo los que faltan", command=lambda: poner(n for n, _ in filas if n not in hechos and n not in terminados)).pack(side="left")
+    ttk.Button(pie, text="Solo los que faltan", command=lambda: poner(n for n, _ in filas if n not in hechos and not fuera(n))).pack(side="left")
+    if any((d or {}).get("decision") == "Merece la pena" for d in hoja.values()):
+        ttk.Button(pie, text="★ Los que merecen la pena", command=lambda: poner(
+            n for n, _ in filas if (hoja.get(n) or {}).get("decision") == "Merece la pena" and not fuera(n))).pack(side="left", padx=6)
     if triaje:  # qué proyectos restaurar, según el último análisis
         ttk.Button(pie, text="Solo los de material", command=lambda: poner(
             n for n, _ in filas if (triaje.get(n) or {}).get("veredicto") == "restaurar")).pack(side="left", padx=6)

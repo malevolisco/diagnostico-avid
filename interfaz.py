@@ -792,7 +792,7 @@ class App:
         v.grab_set()
         return v
 
-    def sincronizar_hoja(self, quitados_hecho=(), datos=False):
+    def sincronizar_hoja(self, quitados_hecho=(), datos=False, carpeta_datos=None, solo_datos_brutos=False):
         """Apunta en la hoja el estado de los proyectos del disco (por detrás; un fallo no para nada: se manda la próxima vez)."""
         url, gran, origen = self.hoja["cfg"].get("url"), self.gran_actual(), self.origen.get()
         if not url or not gran or not origen:
@@ -802,6 +802,7 @@ class App:
         extras = list(self.estado["media_extra"])
         carpeta = self.analisis_actual()
         triaje = list(self.triaje_actual(carpeta).values())
+        carpeta_zip = carpeta_datos or carpeta  # un análisis que ha fallado: su carpeta, con el log del fallo
         brutos = self.brutos.get()
         resultados, hechos = None, {}
         if brutos and Path(brutos).is_dir():
@@ -816,13 +817,18 @@ class App:
         def hilo():
             if datos:  # el zip SOLO DE TEXTO del análisis y de los brutos, para revisarlo desde la nube
                 try:
-                    contenido, nombres = hi.zip_texto([("analisis", carpeta), ("brutos", brutos)])
+                    partes = [("brutos", brutos)] if solo_datos_brutos else [("analisis", carpeta_zip), ("brutos", brutos)]
+                    contenido, nombres = hi.zip_texto(partes)
                     if nombres:
-                        hi.subir_datos(url, gran, disco, (Path(carpeta).name if carpeta else "brutos") + ".zip", contenido)
+                        nombre = ((Path(carpeta_zip).name if carpeta_zip else "brutos") + ("_FALLO" if carpeta_datos else "")
+                                  + ("_exportando" if solo_datos_brutos else "") + ".zip")
+                        hi.subir_o_guardar(url, base, gran, disco, nombre, contenido)
                         self.cola.put(("log", "Hoja de inventario: datos del análisis subidos (%d ficheros de texto, sin imágenes)." % len(nombres)))
                 except Exception as e:
                     da.LOG.warning("Hoja de inventario, datos: %s", e)
                     self.cola.put(("log", "Hoja de inventario: no se han podido subir los datos (%s)." % e))
+            if solo_datos_brutos:
+                return
             try:
                 todos = lista if lista is not None else listar_todos(da, origen, extras)
                 filas = hi.filas_inventario(todos, [origen] + extras, triaje, resultados, hechos, quitados_hecho)
@@ -861,12 +867,16 @@ class App:
             return
         self.nube_en_vuelo = True
         estado = self.estado_nube()
+        base = self.da.carpeta_base()
 
         def hilo():
             try:
                 ordenes = hi.latido(url, estado)
                 if ordenes and estado["acepta"]:
                     self.cola.put(("hoja_ordenes", ordenes))
+                subidos = hi.subir_pendientes(url, base)  # lo que no se pudo subir sin red
+                if subidos:
+                    self.cola.put(("log", "Hoja de inventario: subidos %d datos que estaban pendientes." % subidos))
             except Exception as e:
                 self.da.LOG.info("Hoja de inventario, latido: %s", e)
                 if "desconocida" in str(e) and not getattr(self, "aviso_buzon", False):
@@ -1270,6 +1280,7 @@ class App:
         except Exception as e:
             da.LOG.error("Fallo: %s\n%s", e, traceback.format_exc())
             log = getattr(e, "log", None)
+            self.carpeta_fallo = Path(log).parent if log else None  # su diagnostico.log también va a los datos de la nube
             self.cola.put(("error", "El análisis se ha parado en: %s.\n\nError: %s\n\nNo se ha tocado nada del disco. Para arreglarlo "
                                     "hace falta este fichero (solo texto, sin vídeo):\n%s"
                                     % (getattr(e, "fase", "el inicio"), e, log if log else "diagnostico.log, en la carpeta del informe")))
@@ -1781,6 +1792,10 @@ class App:
         if ev["estado"] in ("terminado", "reanudado"):
             res = ev.get("resultado") or {}
             e["resultados"][n] = res
+            # exportaciones largas: lo hecho va a la nube cada 15 min (el PC se apaga al acabar la jornada)
+            if ev["estado"] == "terminado" and time.monotonic() - getattr(self, "subida_parcial", -1e9) > 900:
+                self.subida_parcial = time.monotonic()
+                self.sincronizar_hoja(datos=True, solo_datos_brutos=True)
             e["estados"][n] = texto_estado(ev)
             c = self.cronometro
             if c is not None:
@@ -1847,6 +1862,9 @@ class App:
                     return
                 if tipo in ("fin", "detenido_brutos", "exportado"):
                     self.sincronizar_hoja(datos=True)  # lo analizado y exportado, a la hoja de inventario
+                elif tipo == "error":  # el fallo también: sus logs son lo que más sirve para arreglarlo
+                    fallo, self.carpeta_fallo = getattr(self, "carpeta_fallo", None), None
+                    self.sincronizar_hoja(datos=True, carpeta_datos=fallo if fallo and Path(fallo).is_dir() else None)
                 # Lo mandado desde la hoja: el resultado se apunta en la orden y no se abre ninguna ventana (nadie la cerraría)
                 remota = self.orden_actual if tipo in ("fin", "detenido_brutos", "detenido", "exportado", "error") else None
                 if remota is not None:

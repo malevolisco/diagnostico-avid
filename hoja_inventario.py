@@ -333,3 +333,45 @@ def subir_datos(url, gran, disco, nombre, contenido):
         raise ErrorHoja("Los datos ocupan %d MB: demasiado para subirlos." % (len(contenido) // 2 ** 20))
     return enviar(url, {"accion": "datos", "gran_proyecto": gran, "disco": disco, "nombre": nombre,
                         "zip_base64": base64.b64encode(contenido).decode("ascii")}, tiempo=120)
+
+
+# Datos que no se han podido subir (sin red, Google caído): se guardan junto al programa y se suben solos al volver la
+# conexión, con el latido. El PC solo está encendido en horario de trabajo: lo de hoy no se puede perder.
+CARPETA_PENDIENTES = "config_hoja_datos_pendientes"
+
+
+def subir_o_guardar(url, base, gran, disco, nombre, contenido):
+    """Sube los datos; si no se puede, los deja en la cola de pendientes (el mismo nombre sustituye al anterior)."""
+    try:
+        return subir_datos(url, gran, disco, nombre, contenido)
+    except ErrorHoja as e:
+        if len(contenido) > MAX_ZIP:
+            raise
+        carpeta = Path(base) / CARPETA_PENDIENTES
+        carpeta.mkdir(exist_ok=True)
+        clave = "".join(c if c.isalnum() else "_" for c in "%s_%s_%s" % (gran, disco, nombre))[:150]
+        (carpeta / (clave + ".zip")).write_bytes(contenido)
+        (carpeta / (clave + ".json")).write_text(json.dumps({"gran": gran, "disco": disco, "nombre": nombre}, ensure_ascii=False),
+                                                 encoding="utf-8")
+        raise ErrorHoja("%s (se sube solo cuando vuelva la conexión)" % e)
+
+
+def subir_pendientes(url, base, maximo=2):
+    """Sube los datos que quedaron pendientes (los más antiguos primero). Devuelve cuántos ha subido."""
+    carpeta = Path(base) / CARPETA_PENDIENTES
+    if not carpeta.is_dir():
+        return 0
+    hechos = 0
+    for meta in sorted(carpeta.glob("*.json"), key=lambda f: f.stat().st_mtime)[:maximo]:
+        z = meta.with_suffix(".zip")
+        try:
+            m = json.loads(meta.read_text(encoding="utf-8"))
+            subir_datos(url, m["gran"], m["disco"], m["nombre"], z.read_bytes())
+        except (OSError, ValueError, KeyError):
+            meta.unlink(missing_ok=True)  # roto: no se puede subir nunca
+            z.unlink(missing_ok=True)
+            continue
+        z.unlink(missing_ok=True)
+        meta.unlink(missing_ok=True)
+        hechos += 1
+    return hechos

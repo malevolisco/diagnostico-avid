@@ -437,10 +437,13 @@ Desde la nube: qué hace cada PC y órdenes
 -----------------------------------------
 Con la hoja conectada, el programa apunta cada minuto en la pestaña
 "Programa" qué hace ese PC (libre, analizando, exportando y por dónde va,
-el último error). Al terminar un análisis o una exportación sube a Drive,
+el último error). Al terminar un análisis o una exportación, o si falla,
+sube a Drive,
 en la carpeta "DiagnosticoAvid datos" junto a la hoja, un zip SOLO DE TEXTO
 (los .json, .csv, .log, shotlists y fichas): nunca vídeo, miniaturas ni
 capturas. Sirve para revisar el trabajo desde fuera; se puede borrar.
+Durante una exportación larga sube lo hecho cada 15 minutos. Sin red no se
+pierde: se guarda y se sube solo cuando vuelve la conexión.
 
 Órdenes: en la pestaña "Órdenes" se escribe una fila con la Orden
 (Analizar, Exportar, Detener, Marcar HECHO, Sincronizar) y los Proyectos

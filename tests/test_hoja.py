@@ -173,6 +173,21 @@ class Buzon(unittest.TestCase):
         with self.assertRaises(hi.ErrorHoja):
             hi.subir_datos(self.url, "México", "D", "a.zip", b"0" * (hi.MAX_ZIP + 1))
 
+    def test_datos_sin_red_se_suben_al_volver(self):
+        self.caido = True
+        with self.assertRaisesRegex(hi.ErrorHoja, "cuando vuelva la conexión"):
+            hi.subir_o_guardar(self.url, self.base, "México", "DISCO_F", "a.zip", b"PK1")
+        with self.assertRaises(hi.ErrorHoja):  # el mismo zip otra vez: sustituye al pendiente
+            hi.subir_o_guardar(self.url, self.base, "México", "DISCO_F", "a.zip", b"PK2")
+        self.assertEqual(len(list((self.base / hi.CARPETA_PENDIENTES).glob("*.zip"))), 1)
+        self.caido = False
+        self.assertEqual(hi.subir_pendientes(self.url, self.base), 1)
+        import base64
+        self.assertEqual(base64.b64decode(self.recibido[-1]["zip_base64"]), b"PK2")
+        self.assertEqual((self.recibido[-1]["gran_proyecto"], self.recibido[-1]["disco"], self.recibido[-1]["nombre"]), ("México", "DISCO_F", "a.zip"))
+        self.assertEqual(list((self.base / hi.CARPETA_PENDIENTES).iterdir()), [])
+        self.assertEqual(hi.subir_pendientes(self.url, self.base), 0)
+
     def test_direccion_que_no_es_el_buzon(self):
         self.respuesta = "<html>"  # contesta otra cosa (una página de Google, por ejemplo)
         with self.assertRaisesRegex(hi.ErrorHoja, "no es la del buzón"):

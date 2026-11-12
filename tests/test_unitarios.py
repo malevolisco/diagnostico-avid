@@ -2450,6 +2450,26 @@ class TextosDeLaCola(unittest.TestCase):
         self.assertFalse(interfaz.existe("\0"))
         self.assertTrue(interfaz.existe(Path(__file__).parent, carpeta=True))
 
+    def test_carpeta_del_informe_de_otro_pc(self):
+        """12/11/2026: la carpeta del informe recordada era C:\\Users\\admin\\Desktop de otro PC y el análisis se paraba al
+        crear su carpeta (WinError 5). Al abrir se cambia por el Escritorio; antes de analizar se comprueba."""
+        import interfaz
+        from unittest import mock
+        d = Path(tempfile.mkdtemp())
+        try:
+            self.assertTrue(interfaz.escribible(d / "informes"))
+            self.assertTrue((d / "informes").is_dir() and not list((d / "informes").iterdir()))  # la prueba no deja nada
+            self.assertFalse(interfaz.escribible(""))
+            self.assertEqual(interfaz.carpeta_usable(str(d)), str(d))
+            self.assertEqual(interfaz.carpeta_usable(str(d / "disco_sin_conectar")), str(d / "disco_sin_conectar"))
+            with mock.patch.object(interfaz.Path, "exists", side_effect=PermissionError(13, "Acceso denegado")):
+                self.assertEqual(interfaz.carpeta_usable("C:\\Users\\admin\\Desktop"), "")
+            with mock.patch.object(interfaz.Path, "write_bytes", side_effect=PermissionError(13, "Acceso denegado")):
+                self.assertFalse(interfaz.escribible(d))
+                self.assertEqual(interfaz.carpeta_usable(str(d)), "")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
     def test_estados(self):
         import interfaz
         self.assertEqual(interfaz.texto_estado({"estado": "convirtiendo", "clip": 18, "total": 40}), "Convirtiendo · clip 18 de 40 (45 %)")

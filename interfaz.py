@@ -17,6 +17,7 @@ por una cola que lee la ventana cada 200 ms. Nada toca tkinter fuera del hilo pr
 
 import contextlib
 import json
+import os
 import queue
 import threading
 import time
@@ -112,8 +113,8 @@ class App:
         # Las carpetas de la última vez (config_ventana.json): así se encuentran los análisis guardados sin elegirlas otra vez
         guardadas = self.carpetas_guardadas()
         self.origen = tk.StringVar(value=guardadas.get("origen") if existe(guardadas.get("origen") or "\0") else "")
-        self.destino = tk.StringVar(value=guardadas.get("destino") or str(Path.home() / "Desktop"))
-        self.brutos = tk.StringVar(value=guardadas.get("brutos") or "")
+        self.destino = tk.StringVar(value=carpeta_usable(guardadas.get("destino")) or str(Path.home() / "Desktop"))
+        self.brutos = tk.StringVar(value=carpeta_usable(guardadas.get("brutos")) or "")
         self.minis = tk.BooleanVar(value=True)
         self.zip_minis = tk.BooleanVar(value=True)
         self.capturas = tk.BooleanVar(value=True)
@@ -932,8 +933,10 @@ class App:
             return None, "no están en el disco de este PC: %s" % "; ".join(faltan)
         if orden in ("Exportar", "Marcar HECHO") and not self.brutos.get():
             return None, "falta la carpeta de brutos en este PC"
-        if orden == "Analizar" and not self.destino.get():
-            return None, "falta la carpeta del informe en este PC"
+        if orden == "Analizar" and not escribible(self.destino.get()):
+            return None, "no se puede escribir en la carpeta del informe de este PC: %s" % (self.destino.get() or "sin elegir")
+        if orden == "Exportar" and not escribible(self.brutos.get()):
+            return None, "no se puede escribir en la carpeta de brutos de este PC: %s" % self.brutos.get()
         if orden in ("Analizar", "Exportar") and not self.da.localizar_ffmpeg()[0]:
             return None, "falta ffmpeg en este PC"
         if orden == "Exportar":
@@ -1194,7 +1197,14 @@ class App:
             return messagebox.showwarning("Falta el disco", "Elige el disco o la carpeta de Avid que quieres analizar.", parent=self.raiz)
         if not self.destino.get():
             return messagebox.showwarning("Falta el informe", "Elige dónde guardar el informe.", parent=self.raiz)
+        if not escribible(self.destino.get()):
+            return messagebox.showwarning("Carpeta del informe", "No se puede escribir en la carpeta del informe:\n%s\n\nNo hay permiso o "
+                                          "no está (por ejemplo, la carpeta de otro usuario o de otro PC). Elige otra con \"Elegir…\" "
+                                          "junto a Informe, por ejemplo tu Escritorio." % self.destino.get(), parent=self.raiz)
         seguido = self.seguido.get()
+        if seguido and self.brutos.get() and not escribible(self.brutos.get()):
+            return messagebox.showwarning("Carpeta de brutos", "No se puede escribir en la carpeta de brutos:\n%s\n\nElige otra con "
+                                          "\"Elegir…\" junto a Carpeta de brutos." % self.brutos.get(), parent=self.raiz)
         if self.estado["proyectos"] == []:
             return messagebox.showwarning("Ningún proyecto", "No has elegido ningún proyecto. Pulsa \"Elegir proyectos\" y marca al menos uno.",
                                           parent=self.raiz)
@@ -1753,6 +1763,11 @@ class App:
         self.revisar_exportar()
         if "disabled" in self.bt_exportar.state():
             return
+        if not escribible(self.brutos.get()):
+            self.escribe("No se puede escribir en la carpeta de brutos: %s" % self.brutos.get())
+            return messagebox.showwarning("Carpeta de brutos", "No se puede escribir en la carpeta de brutos:\n%s\n\nNo hay permiso o no "
+                                          "está (por ejemplo, la carpeta de otro usuario o de otro PC, o un disco desconectado). Elige "
+                                          "otra en 1 · Disco con \"Elegir…\" junto a Carpeta de brutos." % self.brutos.get(), parent=self.raiz)
         e = self.exp
         filas = [f for f in e["resumen"]["filas"] if f["nombre"] in e["marcados"]]
         if preguntar and not messagebox.askyesno("Exportar brutos", "Se exportan %d brutos con el análisis %s (no se repite) y el montaje guardado.\n\n"
@@ -1984,6 +1999,35 @@ def existe(ruta, carpeta=False):
         return r.is_dir() if carpeta else r.exists()
     except (OSError, ValueError):
         return False
+
+
+def escribible(carpeta):
+    """¿Se puede escribir en esa carpeta (la del informe o la de brutos)? La crea si hace falta y prueba con un fichero vacío
+    que se borra al momento. Nunca se usa con el disco de origen, que solo se lee."""
+    if not carpeta:
+        return False
+    try:
+        p = Path(carpeta)
+        p.mkdir(parents=True, exist_ok=True)
+        prueba = p / (".escribible_%d.tmp" % os.getpid())
+        prueba.write_bytes(b"")
+        prueba.unlink()
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def carpeta_usable(carpeta):
+    """La carpeta recordada, si se puede usar; "" si es de otro usuario o de otro PC (sin permiso para mirarla o escribir en
+    ella: C:\\Users\\admin\\Desktop copiado en config_ventana.json). Un disco que ahora no está conectado se recuerda igual."""
+    if not carpeta:
+        return ""
+    try:
+        if not Path(carpeta).exists():
+            return carpeta  # quizá un disco externo sin conectar: se recuerda
+    except (OSError, ValueError):
+        return ""  # sin permiso para mirarla
+    return carpeta if escribible(carpeta) else ""
 
 
 def listar_todos(da, origen, extras=()):

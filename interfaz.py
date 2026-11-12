@@ -111,7 +111,7 @@ class App:
 
         # Las carpetas de la última vez (config_ventana.json): así se encuentran los análisis guardados sin elegirlas otra vez
         guardadas = self.carpetas_guardadas()
-        self.origen = tk.StringVar(value=guardadas.get("origen") if Path(guardadas.get("origen") or "\0").exists() else "")
+        self.origen = tk.StringVar(value=guardadas.get("origen") if existe(guardadas.get("origen") or "\0") else "")
         self.destino = tk.StringVar(value=guardadas.get("destino") or str(Path.home() / "Desktop"))
         self.brutos = tk.StringVar(value=guardadas.get("brutos") or "")
         self.minis = tk.BooleanVar(value=True)
@@ -120,7 +120,7 @@ class App:
         self.seguido = tk.BooleanVar(value=False)
         self.cola = queue.Queue()
         self.estado = {"ocupado": None, "cerrar": False, "proyectos": None,
-                       "media_extra": [x for x in guardadas.get("otros_origenes") or [] if Path(x).exists()]}  # ocupado: None | "analisis" | "exportacion" | "actualizacion"
+                       "media_extra": [x for x in guardadas.get("otros_origenes") or [] if existe(x)]}  # ocupado: None | "analisis" | "exportacion" | "actualizacion"
         self.pagina = None
         self.montaje = None  # PantallaMontaje
         self.pantalla_origen = None  # PantallaOrigen (pestaña "Origen del material" del montaje)
@@ -504,11 +504,11 @@ class App:
         """Informe preliminar: recorre las carpetas del disco y de los otros orígenes y dice qué hay en cada una (proyecto de Avid,
         MOV, MP4, tarjetas, vacía, mezclado), sin abrir ningún fichero. Se lee por detrás; la ventana se rellena al acabar."""
         from tkinter import messagebox
-        if not self.origen.get() or not Path(self.origen.get()).is_dir():
+        if not self.origen.get() or not existe(self.origen.get(), carpeta=True):
             return messagebox.showwarning("Falta el disco", "Elige primero el disco o la carpeta de Avid.", parent=self.raiz)
         if self.v_que_hay is not None and self.v_que_hay.winfo_exists():
             self.v_que_hay.destroy()
-        origenes = [self.origen.get()] + [x for x in self.estado["media_extra"] if Path(x).is_dir()]
+        origenes = [self.origen.get()] + [x for x in self.estado["media_extra"] if existe(x, carpeta=True)]
         self.v_que_hay = self.ventana_que_hay(origenes)
         da = self.da
 
@@ -603,7 +603,7 @@ class App:
             self.raiz.after_cancel(self.espera_disco)
             self.espera_disco = None
         self.vista_disco.update(origen=None, lista=None, turno=self.vista_disco["turno"] + 1, leyendo=True)
-        if not origen or not Path(origen).is_dir():
+        if not origen or not existe(origen, carpeta=True):
             self.vista_disco["leyendo"] = False
             self.esperar_selector(False)
             self.lbl_disco.configure(text="" if not origen else "Esa carpeta no existe o no se puede abrir.",
@@ -805,7 +805,7 @@ class App:
         carpeta_zip = carpeta_datos or carpeta  # un análisis que ha fallado: su carpeta, con el log del fallo
         brutos = self.brutos.get()
         resultados, hechos = None, {}
-        if brutos and Path(brutos).is_dir():
+        if brutos and existe(brutos, carpeta=True):
             try:
                 resultados = json.loads((Path(brutos) / "brutos_resultado.json").read_text(encoding="utf-8"))
             except (OSError, ValueError):
@@ -1047,7 +1047,7 @@ class App:
     def analisis_actual(self):
         """Carpeta del último análisis del disco elegido en la carpeta del informe, o None."""
         o, d = self.origen.get(), self.destino.get()
-        if not o or not d or not Path(d).exists():
+        if not o or not d or not existe(d):
             return None
         try:
             return self.da.buscar_analisis(d, o)
@@ -1083,13 +1083,13 @@ class App:
                                      r.get("gb_media", "?"), r.get("bins", "?"), r.get("bins_ilegibles", 0), tri, carpeta.name))
         self.pintar_falta((parcial or {}).get("busqueda") or {})
         self.bt_informe.state(["!disabled"])
-        self.bt_triaje.state(["!disabled"] if (carpeta / "proyectos.html").exists() else ["disabled"])
+        self.bt_triaje.state(["!disabled"] if existe(carpeta / "proyectos.html") else ["disabled"])
         if self.brutos.get():
             self.lbl_siguiente.configure(text=("Todo el disco está analizado y enlazado: en Montaje eliges cada proyecto, sin volver a "
                                                "analizar. " if not parcial else "")
                                          + ("Mira \"Qué proyectos restaurar\" y marca en \"Elegir proyectos\" los que sí. Luego, "
                                             "revisa los brutos en Montaje (opcional) y expórtalos en Exportar."
-                                            if (carpeta / "proyectos.html").exists() else
+                                            if existe(carpeta / "proyectos.html") else
                                             "Revisa los brutos en Montaje (opcional) y expórtalos en Exportar."))
             self.bt_siguiente.state(["!disabled"])
         else:
@@ -1110,11 +1110,11 @@ class App:
             self.bt_buscar_todo.pack_forget()
 
     def abrir_informe(self):
-        if self.ultimo and (self.ultimo / "informe.html").exists():
+        if self.ultimo and existe(self.ultimo / "informe.html"):
             webbrowser.open((self.ultimo / "informe.html").resolve().as_uri())
 
     def abrir_triaje(self):
-        if self.ultimo and (self.ultimo / "proyectos.html").exists():
+        if self.ultimo and existe(self.ultimo / "proyectos.html"):
             webbrowser.open((self.ultimo / "proyectos.html").resolve().as_uri())
 
     def triaje_actual(self, carpeta=None):
@@ -1145,7 +1145,7 @@ class App:
         da = self.da
         if self.estado["ocupado"]:
             return
-        if not self.origen.get() or not Path(self.origen.get()).exists():
+        if not self.origen.get() or not existe(self.origen.get()):
             return messagebox.showwarning("Falta el disco", "Elige primero el disco o la carpeta de Avid.", parent=self.raiz)
         lista = self.vista_disco["lista"] if self.vista_disco["origen"] == self.origen.get() else None
         if lista is None:  # aún no se ha leído (o se está leyendo): se lee por detrás y la lista se abre sola al terminar
@@ -1190,7 +1190,7 @@ class App:
         da = self.da
         if self.estado["ocupado"]:
             return
-        if not self.origen.get() or not Path(self.origen.get()).exists():
+        if not self.origen.get() or not existe(self.origen.get()):
             return messagebox.showwarning("Falta el disco", "Elige el disco o la carpeta de Avid que quieres analizar.", parent=self.raiz)
         if not self.destino.get():
             return messagebox.showwarning("Falta el informe", "Elige dónde guardar el informe.", parent=self.raiz)
@@ -1251,7 +1251,7 @@ class App:
         if self.estado["ocupado"] or not self.falta:
             return
         b = self.falta
-        if not self.origen.get() or not Path(self.origen.get()).exists():
+        if not self.origen.get() or not existe(self.origen.get()):
             return messagebox.showwarning("Falta el disco", "Conecta el disco del análisis para buscar en él.", parent=self.raiz)
         ejemplos = "; ".join("%s: %s" % (p, ", ".join(e[:4]) + (" …" if len(e) > 4 else "")) for p, e in sorted((b.get("ejemplos") or {}).items())[:3])
         vols = b.get("volumenes") or []
@@ -1864,7 +1864,7 @@ class App:
                     self.sincronizar_hoja(datos=True)  # lo analizado y exportado, a la hoja de inventario
                 elif tipo == "error":  # el fallo también: sus logs son lo que más sirve para arreglarlo
                     fallo, self.carpeta_fallo = getattr(self, "carpeta_fallo", None), None
-                    self.sincronizar_hoja(datos=True, carpeta_datos=fallo if fallo and Path(fallo).is_dir() else None)
+                    self.sincronizar_hoja(datos=True, carpeta_datos=fallo if fallo and existe(fallo, carpeta=True) else None)
                 # Lo mandado desde la hoja: el resultado se apunta en la orden y no se abre ninguna ventana (nadie la cerraría)
                 remota = self.orden_actual if tipo in ("fin", "detenido_brutos", "detenido", "exportado", "error") else None
                 if remota is not None:
@@ -1975,11 +1975,22 @@ def sin_ventanas():
             setattr(mb, k, f)
 
 
+def existe(ruta, carpeta=False):
+    """¿Existe esa ruta (y es una carpeta, si se pide)? Una ruta sin permiso (la carpeta de otro usuario de Windows,
+    recordada de otro PC en config_ventana.json), un disco que ya no está o un nombre imposible cuentan como que no:
+    nunca un fallo al abrir el programa."""
+    try:
+        r = Path(ruta)
+        return r.is_dir() if carpeta else r.exists()
+    except (OSError, ValueError):
+        return False
+
+
 def listar_todos(da, origen, extras=()):
     """Proyectos del disco y de los otros orígenes (los que se añaden con "＋ Añadir origen"), sin repetir nombres."""
     lista = list(da.listar_proyectos(origen))
     for extra in extras:
-        if Path(extra).is_dir():
+        if existe(extra, carpeta=True):
             vistos = {p["nombre"] for p in lista}
             lista += [p for p in da.listar_proyectos(extra) if p["nombre"] not in vistos]
     return sorted(lista, key=lambda x: x["nombre"].lower())

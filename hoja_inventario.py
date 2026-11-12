@@ -115,7 +115,12 @@ def disco_de(carpeta, origenes, etiqueta=""):
     if not origenes:
         return etiqueta
     rutas = [Path(os.path.abspath(str(o))) / carpeta for o in origenes]
-    ruta = next((r for r in rutas if r.exists()), rutas[0])
+    def existe(r):
+        try:
+            return r.exists()
+        except OSError:  # sin permiso: como si no estuviera
+            return False
+    ruta = next((r for r in rutas if existe(r)), rutas[0])
     arriba = ruta.parent
     rel = str(arriba)[len(arriba.anchor):].strip("\\/")
     return rel.replace("/", "\\") if rel else (etiqueta or arriba.anchor.strip("\\/:") or "raíz")

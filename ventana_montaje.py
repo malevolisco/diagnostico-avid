@@ -1579,10 +1579,10 @@ def dialogo_opciones(raiz, cfg, resumen, guardar_predeterminados=None):
 
 def espacio_libre(carpeta):
     """Bytes libres en la carpeta (o en la primera carpeta existente hacia arriba), o None."""
-    p = Path(carpeta)
-    while not p.exists() and p.parent != p:
-        p = p.parent
-    try:
+    try:  # una carpeta sin permiso (de otro usuario de Windows) o un disco que ya no está: None, nunca un fallo
+        p = Path(carpeta)
+        while not p.exists() and p.parent != p:
+            p = p.parent
         return shutil.disk_usage(p).free
-    except OSError:
+    except (OSError, ValueError):
         return None

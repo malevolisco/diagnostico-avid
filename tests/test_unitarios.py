@@ -2436,6 +2436,20 @@ class TextosDeLaCola(unittest.TestCase):
         self.assertEqual(interfaz.texto_calidad({"estado": estado, "conforme": True}), "INCOMPLETO")
         self.assertTrue(interfaz.texto_estado({"estado": "terminado", "resultado": {"estado": estado}}).startswith("INCOMPLETO"))
 
+    def test_carpeta_recordada_sin_permiso_no_tumba_el_programa(self):
+        """12/11/2026: config_ventana.json copiado de otro PC con C:\\Users\\admin\\Desktop; sin permiso para mirarla,
+        Path.exists() lanza PermissionError (WinError 5) y el programa no llegaba a abrirse."""
+        import interfaz
+        import ventana_montaje as vm
+        from unittest import mock
+        with mock.patch.object(interfaz.Path, "exists", side_effect=PermissionError(13, "Acceso denegado")), \
+                mock.patch.object(interfaz.Path, "is_dir", side_effect=PermissionError(13, "Acceso denegado")):
+            self.assertFalse(interfaz.existe("C:\\Users\\admin\\Desktop"))
+            self.assertFalse(interfaz.existe("C:\\Users\\admin\\Desktop", carpeta=True))
+            self.assertIsNone(vm.espacio_libre("C:\\Users\\admin\\Desktop\\brutos"))
+        self.assertFalse(interfaz.existe("\0"))
+        self.assertTrue(interfaz.existe(Path(__file__).parent, carpeta=True))
+
     def test_estados(self):
         import interfaz
         self.assertEqual(interfaz.texto_estado({"estado": "convirtiendo", "clip": 18, "total": 40}), "Convirtiendo · clip 18 de 40 (45 %)")

@@ -429,7 +429,9 @@ def _fecha_dmy(f):
     return f.strftime("%d/%m/%Y")
 
 
-MISMA_CAMARA_DIAS = 180  # corregir_relojes: dos proyectos cuyo atraso difiere menos que esto, la misma cámara
+CLIPS_CAMARA = 3  # corregir_relojes: clips de tarjeta que tiene que tener un proyecto para dar el atraso de una cámara
+MISMA_CAMARA_DIAS = 30  # corregir_relojes: dos atrasos que difieren menos que esto son de la misma cámara (14/11/2026: en el
+# disco de México, dos cámaras atrasadas 5932 y 5998 días; con 180 se tomaban por una y las fechas salían dos meses antes)
 
 
 def corregir_relojes(clips, mxf_por_ruta, cfg):
@@ -479,14 +481,23 @@ def corregir_relojes(clips, mxf_por_ruta, cfg):
             if e - g > limite:
                 c["aviso_fecha"] = ("la cámara dice %s y el clip entró en Avid el %s: material antiguo traído en otra "
                                     "tarjeta, o un reloj mal puesto" % (_fecha_dmy(g), _fecha_dmy(e)))
-    # Una cámara con el reloj mal puesto se atrasa siempre lo mismo (disco real: 5931-5932 días en 7 de 8 proyectos). El
-    # menor retraso de todo el disco es el más fino: en un proyecto de 1 o 2 clips que se volcaron semanas después, el suyo
-    # se pasa. Se usa el menor de los proyectos cuyo retraso es hasta MISMA_CAMARA_DIAS menor que el suyo (la misma cámara);
-    # uno que se aleja más es de otra cámara y no cuenta.
-    misma = dt.timedelta(days=MISMA_CAMARA_DIAS)
-    for p, retraso in mal:
-        retraso = min(r for _, r in mal if retraso - misma <= r <= retraso)
+    # Una cámara con el reloj mal puesto se atrasa siempre lo mismo (disco real: 5931-5932 días en 7 de 8 proyectos). Cada
+    # proyecto con al menos CLIPS_CAMARA clips de tarjeta da el atraso de su cámara (su menor retraso); dos que no se separan
+    # más de MISMA_CAMARA_DIAS son la misma cámara y vale el menor (14/11/2026: el disco de México tiene dos, a 5932 y 5998
+    # días). A cada clip se le suma el de su cámara: el mayor que no pasa de su propio retraso (en un proyecto pueden ir
+    # clips de las dos). Un proyecto de 1 o 2 clips no da cámara: si se volcó tarde, el suyo se pasa (03/11/2026: 2 clips
+    # con 66 días de más salían en octubre en vez de agosto), así que usa la cámara de debajo hasta 180 días; si no hay, el suyo.
+    misma, tarde = dt.timedelta(days=MISMA_CAMARA_DIAS), dt.timedelta(days=180)
+    atrasos = []
+    for r in sorted(r for p, r in mal if len(por_proyecto[p]) >= CLIPS_CAMARA):
+        if not atrasos or r - ultimo > misma:
+            atrasos.append(r)
+        ultimo = r
+    for p, propio in mal:
+        pocos = len(por_proyecto[p]) < CLIPS_CAMARA
         for c, g, e in por_proyecto[p]:
+            debajo = [a for a in atrasos if a <= e - g]
+            retraso = max(debajo) if debajo and (not pocos or propio - max(debajo) <= tarde) else propio
             c["fecha_camara"] = c["fecha_grabacion"]
             c["fecha_grabacion"] = (g + retraso).strftime("%Y-%m-%d %H:%M:%S")
             c["fecha_grabacion_fuente"] = "cámara, corregida"

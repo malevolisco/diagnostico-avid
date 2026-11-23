@@ -2452,6 +2452,36 @@ except ImportError:  # algunos Python de Linux vienen sin tkinter
 
 
 @unittest.skipUnless(TK_OK, "sin tkinter")
+class LecturasDeAnalisisAnteriores(unittest.TestCase):
+    """23/11/2026: con 41 proyectos sumados de análisis anteriores, el paso 4 rehacía miles de comparaciones de sonido ya
+    hechas. Lo leído en un análisis anterior del mismo disco no se vuelve a leer; lo que falló se vuelve a intentar."""
+
+    def test_reutiliza_lo_leido_y_reintenta_los_fallos(self):
+        import json
+        import lecturas
+        d = Path(tempfile.mkdtemp())
+        try:
+            viejo, nuevo = d / "Diagnostico_1", d / "Diagnostico_2"
+            for carpeta, datos in ((viejo, {'["contenido", "A", "B"]': {"valor": 1.5}, '["huella", "x.mxf", 0]': {"valor": "aa"}}),
+                                   (nuevo, {'["contenido", "A", "B"]': {"valor": 2.5}, '["huella", "y.mxf", 0]': {"error": "no se lee"}})):
+                carpeta.mkdir()
+                (carpeta / lecturas.FICHERO).write_text(json.dumps({"lecturas": datos}), encoding="utf-8")
+            previas = lecturas.de_analisis_anteriores([nuevo, viejo])  # del más reciente al más antiguo
+            self.assertEqual(previas['["contenido", "A", "B"]'], {"valor": 2.5})  # manda el más reciente
+            self.assertNotIn('["huella", "y.mxf", 0]', previas)  # el fallo no se guarda: se reintenta
+            leidas = []
+            act = lecturas.empezar(previas)
+            self.assertEqual(act.leer("contenido", ["A", "B"], lambda: leidas.append("AB") or 9), 2.5)
+            self.assertEqual(act.leer("huella", ["y.mxf", 0], lambda: leidas.append("y") or "bb"), "bb")
+            self.assertEqual(leidas, ["y"])  # solo se lee lo que no estaba
+            self.assertEqual((act.reutilizadas, act.leidas), (1, 1))
+            act.guardar(d)
+            self.assertEqual(len(json.loads((d / lecturas.FICHERO).read_text(encoding="utf-8"))["lecturas"]), 2)
+            self.assertEqual(lecturas.empezar().previas, {})  # sin previas, como siempre
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 class TextosDeLaCola(unittest.TestCase):
     """Lo que dice cada fila de la cola de la página Exportar según el avance que llega de la exportación."""
 

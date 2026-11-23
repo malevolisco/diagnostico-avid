@@ -1420,7 +1420,7 @@ def resolucion_vista(pv):
     return "%sx%s" % (ancho, alto)
 
 
-def marcar_duplicados(clips, origen, ffmpeg=None, mxf=()):
+def marcar_duplicados(clips, origen, ffmpeg=None, mxf=(), progreso=None):
     """Trozos repetidos (29/10/2026: una entrevista con un trozo de 13 s copiado en otro fichero por Avid, con otra
     identidad, que salía dos veces en el bruto). En DV, los candidatos salen del subcódigo de la cámara
     (exportar_brutos.duplicados_dv) y se confirman con los fotogramas: el primero y el último del trozo tienen que ser
@@ -1494,7 +1494,7 @@ def marcar_duplicados(clips, origen, ffmpeg=None, mxf=()):
         marcados += repetidos_por_sonido(clips, origen, ffmpeg, mxf)
     marcados += repetidos_por_nombre(clips, origen)
     if ffmpeg:
-        marcados += repetidos_por_contenido(clips, origen, ffmpeg, mxf)
+        marcados += repetidos_por_contenido(clips, origen, ffmpeg, mxf, progreso)
     return marcados
 
 
@@ -1567,7 +1567,7 @@ LARGO_MIN = 60.0  # s: el sonido de cada trozo se busca entero dentro de los cli
 SONIDO_LARGOS_MAX = 7200.0  # s de sonido de esos largos por proyecto, como mucho (lo que se lee del disco)
 
 
-def repetidos_por_contenido(clips, origen, ffmpeg, mxf):
+def repetidos_por_contenido(clips, origen, ffmpeg, mxf, progreso=None):
     """Lo que queda, por el contenido y no por los datos (3/11/2026: 00059S.new.07 y .04, de la misma grabación que un
     00059S.new.01 de casi 10 minutos, seguían en el bruto porque su timecode y su hora de grabación decían que eran de
     después de su final; el material sí estaba dentro). El sonido de cada clip (los 3 primeros y los 3 últimos segundos,
@@ -1584,6 +1584,12 @@ def repetidos_por_contenido(clips, origen, ffmpeg, mxf):
         for p in c.get("proyectos") or []:
             por_proyecto[p].append(c)
     leido, sin_forma, marcados, pares, t0 = {}, set(), [], 0, time.monotonic()
+    aviso = {"t": time.monotonic()}
+
+    def avance(p, i, n):  # cada 20 s, por dónde va: es el paso más largo y antes no decía nada
+        if progreso and time.monotonic() - aviso["t"] > 20:
+            aviso["t"] = time.monotonic()
+            progreso("4/6 Trozos repetidos: proyecto %d de %d (%s), %d comparaciones" % (i, n, p, pares))
 
     def sonido(c, inicio, dur):
         canales = exportar_brutos.canales_clip(c, mxf_por_ruta)
@@ -1662,7 +1668,8 @@ def repetidos_por_contenido(clips, origen, ffmpeg, mxf):
         if corto.get("num_audio") and largo.get("num_audio") and corto.get("duracion") and largo.get("duracion"):
             comparar(corto, largo)
 
-    for p, cs in sorted(por_proyecto.items()):
+    for i, (p, cs) in enumerate(sorted(por_proyecto.items()), 1):
+        avance(p, i, len(por_proyecto))
         largos, total = [], 0.0
         for c in sorted((c for c in cs if c["duracion"] >= LARGO_MIN), key=lambda c: -c["duracion"]):
             if total + c["duracion"] > SONIDO_LARGOS_MAX:
@@ -1684,6 +1691,7 @@ def repetidos_por_contenido(clips, origen, ffmpeg, mxf):
                     continue
                 if (corto.get("mismo_nombre") or {}).get("clave") == largo.get("clave"):
                     continue  # ya comparado arriba
+                avance(p, i, len(por_proyecto))
                 comparar(corto, largo)
     quedan = [c for c in clips if c.get("mismo_nombre") and not c.get("contenido_en")]
     for c in quedan:
@@ -2804,8 +2812,16 @@ def ejecutar(origen, destino_base, progreso=print, hacer_miniaturas=True, max_mi
                     progreso("4/6 Han cambiado en el disco desde su análisis (hay que volver a analizarlos): %s" % "; ".join(cambiados))
 
         import lecturas
-        lecturas.empezar()
-        repetidos = marcar_duplicados(clips, origen, ffmpeg, mxf) if EXPORT_OK and ffmpeg_ok else []
+        # lo leído para los trozos repetidos en análisis anteriores de este disco no se vuelve a leer
+        previas = lecturas.de_analisis_anteriores(d for d, _ in analisis_del_disco(destino_base, origen) if d != destino) if acumular else {}
+        lecturas.empezar(previas)
+        if EXPORT_OK and ffmpeg_ok:
+            progreso("4/6 Buscando trozos repetidos (mismo material copiado en otro clip)%s..."
+                     % (": lo ya comparado en análisis anteriores no se repite" if previas else ""))
+        repetidos = marcar_duplicados(clips, origen, ffmpeg, mxf, progreso) if EXPORT_OK and ffmpeg_ok else []
+        if previas:
+            LOG.info("Trozos repetidos: %d lecturas reutilizadas de análisis anteriores, %d nuevas",
+                     lecturas.ACTIVAS.reutilizadas, lecturas.ACTIVAS.leidas)
         lecturas.ACTIVAS.guardar(destino)  # para repetir estas decisiones sin el disco (tests/casos_reales.py)
         cfg_origen = exportar_brutos.cargar_config(carpeta_base() / "config_brutos.json") if EXPORT_OK else None
         if hacer_miniaturas and ffmpeg_ok:

@@ -15,8 +15,11 @@ FICHERO = "lecturas.json"
 
 
 class Lecturas:
-    def __init__(self):
+    def __init__(self, previas=None):
         self.datos = {}
+        self.previas = previas or {}  # lo leído en análisis anteriores del mismo disco: no se vuelve a leer
+        self.reutilizadas = 0
+        self.leidas = 0
         self.repitiendo = False
         self.no_grabadas = 0
         self.cerrojo = threading.Lock()
@@ -34,6 +37,14 @@ class Lecturas:
             if isinstance(v, dict) and "error" in v:
                 raise OSError(v["error"])
             return v["valor"]
+        previa = self.previas.get(k)
+        if isinstance(previa, dict) and "valor" in previa:  # un error de antes se vuelve a intentar
+            with self.cerrojo:
+                self.datos[k] = previa
+                self.reutilizadas += 1
+            return previa["valor"]
+        with self.cerrojo:
+            self.leidas += 1
         try:
             valor = calcular()
         except OSError as e:
@@ -45,8 +56,9 @@ class Lecturas:
         return valor
 
     def guardar(self, carpeta):
-        with self.cerrojo:
-            datos = dict(sorted(self.datos.items()))
+        with self.cerrojo:  # con lo de los análisis anteriores que no hizo falta: así cada lecturas.json va completo
+            datos = dict(sorted({**{k: v for k, v in self.previas.items() if isinstance(v, dict) and "valor" in v},
+                                 **self.datos}.items()))
         (Path(carpeta) / FICHERO).write_text(json.dumps({"_comentario": "Posiciones y huellas leídas del vídeo y del sonido "
                                                          "para decidir (trozos repetidos); sin imagen ni sonido.",
                                                          "lecturas": datos}, ensure_ascii=False, indent=0), encoding="utf-8")
@@ -55,11 +67,25 @@ class Lecturas:
 ACTIVAS = Lecturas()
 
 
-def empezar():
-    """Un análisis nuevo: se olvida lo leído antes."""
+def empezar(previas=None):
+    """Un análisis nuevo. previas: lo leído en análisis anteriores del mismo disco ({clave: {"valor"}}, de sus
+    lecturas.json): no se vuelve a leer del disco (23/11/2026: con 41 proyectos sumados, el paso 4 rehacía miles de
+    comparaciones de sonido ya hechas). Las lecturas que fallaron se vuelven a intentar."""
     global ACTIVAS
-    ACTIVAS = Lecturas()
+    ACTIVAS = Lecturas(previas)
     return ACTIVAS
+
+
+def de_analisis_anteriores(carpetas):
+    """Lo leído en esas carpetas de análisis (sus lecturas.json), sin los errores. La más reciente manda."""
+    previas = {}
+    for carpeta in reversed(list(carpetas)):  # de la más antigua a la más reciente: la reciente pisa
+        try:
+            datos = json.loads((Path(carpeta) / FICHERO).read_text(encoding="utf-8")).get("lecturas") or {}
+        except (OSError, ValueError, AttributeError):
+            continue
+        previas.update({k: v for k, v in datos.items() if isinstance(v, dict) and "valor" in v})
+    return previas
 
 
 @contextmanager

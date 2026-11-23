@@ -56,8 +56,9 @@ class Lecturas:
         return valor
 
     def guardar(self, carpeta):
-        with self.cerrojo:
-            datos = dict(sorted(self.datos.items()))
+        with self.cerrojo:  # con lo de los análisis anteriores que no hizo falta: así cada lecturas.json va completo
+            datos = dict(sorted({**{k: v for k, v in self.previas.items() if isinstance(v, dict) and "valor" in v},
+                                 **self.datos}.items()))
         (Path(carpeta) / FICHERO).write_text(json.dumps({"_comentario": "Posiciones y huellas leídas del vídeo y del sonido "
                                                          "para decidir (trozos repetidos); sin imagen ni sonido.",
                                                          "lecturas": datos}, ensure_ascii=False, indent=0), encoding="utf-8")

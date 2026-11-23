@@ -2475,11 +2475,31 @@ class LecturasDeAnalisisAnteriores(unittest.TestCase):
             self.assertEqual(act.leer("huella", ["y.mxf", 0], lambda: leidas.append("y") or "bb"), "bb")
             self.assertEqual(leidas, ["y"])  # solo se lee lo que no estaba
             self.assertEqual((act.reutilizadas, act.leidas), (1, 1))
-            act.guardar(d)
-            self.assertEqual(len(json.loads((d / lecturas.FICHERO).read_text(encoding="utf-8"))["lecturas"]), 2)
+            act.guardar(d)  # con lo de antes que no hizo falta: cada lecturas.json va completo
+            self.assertEqual(len(json.loads((d / lecturas.FICHERO).read_text(encoding="utf-8"))["lecturas"]), 3)
             self.assertEqual(lecturas.empezar().previas, {})  # sin previas, como siempre
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+
+class RepetidosSoloDeLosProyectosDeAhora(unittest.TestCase):
+    """23/11/2026: con 41 proyectos sumados de análisis anteriores, el paso 4 volvía a buscar trozos repetidos en los 44. Los
+    sumados traen lo suyo de su análisis y no se tocan; solo se mira lo de los proyectos analizados ahora."""
+
+    def test_los_sumados_se_quedan_como_estaban(self):
+        viejo = {"clave": "V", "nombre": "V", "proyectos": ["VIEJO"], "contenido_en": {"clave": "L", "nombre": "L"},
+                 "fichero_video": "v.mxf", "ficheros": ["v.mxf"]}
+        aviso = {"clave": "W", "nombre": "W", "proyectos": ["VIEJO"], "mismo_nombre": {"clave": "L", "nombre": "L"},
+                 "fichero_video": "w.mxf", "ficheros": ["w.mxf"]}
+        nuevo = {"clave": "N", "nombre": "N", "proyectos": ["NUEVO"], "contenido_en": {"clave": "X", "nombre": "X"},
+                 "fichero_video": "n.mxf", "ficheros": ["n.mxf"]}
+        marcados = da.marcar_duplicados([viejo, aviso, nuevo], "/no/existe", None, (), solo={"NUEVO"})
+        self.assertEqual(viejo["contenido_en"]["clave"], "L")  # el de su análisis
+        self.assertIn("mismo_nombre", aviso)
+        self.assertNotIn("contenido_en", nuevo)  # el de ahora se vuelve a mirar (y aquí no hay nada)
+        self.assertEqual([c["clave"] for c in marcados], ["V"])
+        da.marcar_duplicados([viejo, nuevo], "/no/existe", None, ())  # sin solo: todo, como antes
+        self.assertNotIn("contenido_en", viejo)
 
 
 class TextosDeLaCola(unittest.TestCase):
